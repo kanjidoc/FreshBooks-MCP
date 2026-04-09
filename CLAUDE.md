@@ -43,8 +43,11 @@ FreshBooks-MCP/
 ├── tsconfig.json
 ├── .gitignore
 ├── .env.example                # Template for required environment variables
+├── scripts/
+│   └── setup.ts                # Interactive setup wizard (OAuth, ID discovery, config)
 ├── README.md
 ├── CLAUDE.md                   # This file
+├── CLAUDE_PROJECT_INSTRUCTIONS.md  # System prompt + install guide for Claude projects
 └── LICENSE
 ```
 
@@ -54,6 +57,8 @@ FreshBooks-MCP/
 
 ```bash
 npm install
+npm run setup          # Interactive: OAuth flow, ID discovery, config generation
+# OR manually:
 cp .env.example .env   # Fill in your FreshBooks credentials
 ```
 
@@ -63,6 +68,7 @@ cp .env.example .env   # Fill in your FreshBooks credentials
 npm run build          # Compile TypeScript to dist/
 npm start              # Run the compiled MCP server
 npm run dev            # Run with ts-node for development
+npm run setup          # Interactive setup wizard (OAuth + config for all Claude platforms)
 ```
 
 ### Linting and Formatting
