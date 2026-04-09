@@ -129,3 +129,76 @@ export const createTimeEntry = tool(
     }
   }
 );
+
+export const updateTimeEntry = tool(
+  "freshbooks_update_time_entry",
+  "Update an existing time entry. Only provide the fields you want to change. Duration is in seconds.",
+  {
+    time_entry_id: z.number().int().describe("The time entry ID to update"),
+    duration: z.number().int().min(0).optional().describe("Updated duration in seconds"),
+    note: z.string().optional().describe("Updated note about what was done"),
+    billable: z.boolean().optional().describe("Updated billable status"),
+  },
+  async (args) => {
+    try {
+      const client = getFreshBooksClient();
+      const businessId = getBusinessId();
+
+      const updateData: Record<string, unknown> = {};
+      if (args.duration !== undefined) updateData.duration = args.duration;
+      if (args.note !== undefined) updateData.note = args.note;
+      if (args.billable !== undefined) updateData.billable = args.billable;
+
+      const response = await client.timeEntries.update(updateData as any, businessId, args.time_entry_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to update time entry: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { idempotentHint: true } }
+);
+
+export const deleteTimeEntry = tool(
+  "freshbooks_delete_time_entry",
+  "Delete a time entry by ID. This action is permanent and cannot be undone.",
+  {
+    time_entry_id: z.number().int().describe("The time entry ID to delete"),
+  },
+  async (args) => {
+    try {
+      const client = getFreshBooksClient();
+      const businessId = getBusinessId();
+      const response = await client.timeEntries.delete(businessId, args.time_entry_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to delete time entry: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { destructiveHint: true } }
+);

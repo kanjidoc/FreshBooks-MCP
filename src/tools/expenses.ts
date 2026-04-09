@@ -147,3 +147,81 @@ export const createExpense = tool(
     }
   }
 );
+
+export const updateExpense = tool(
+  "freshbooks_update_expense",
+  "Update an existing expense. Only provide the fields you want to change. Amounts are strings to preserve decimal precision.",
+  {
+    expense_id: z.string().describe("The expense ID to update"),
+    vendor: z.string().optional().describe("Updated vendor name"),
+    notes: z.string().optional().describe("Updated notes about the expense"),
+    category_id: z.number().int().optional().describe("Updated expense category ID"),
+    amount: z.object({
+      amount: z.string().describe("Expense amount as a string, e.g. '50.00'"),
+      code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+    }).optional().describe("Updated expense amount as a Money object"),
+  },
+  async (args) => {
+    try {
+      const client = getFreshBooksClient();
+      const accountId = getAccountId();
+
+      const updateData: Record<string, unknown> = {};
+      if (args.vendor !== undefined) updateData.vendor = args.vendor;
+      if (args.notes !== undefined) updateData.notes = args.notes;
+      if (args.category_id !== undefined) updateData.categoryId = args.category_id;
+      if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
+
+      const response = await client.expenses.update(updateData as any, accountId, args.expense_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to update expense: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { idempotentHint: true } }
+);
+
+export const deleteExpense = tool(
+  "freshbooks_delete_expense",
+  "Delete an expense by ID. This action is permanent and cannot be undone.",
+  {
+    expense_id: z.string().describe("The expense ID to delete"),
+  },
+  async (args) => {
+    try {
+      const client = getFreshBooksClient();
+      const accountId = getAccountId();
+      const response = await client.expenses.delete(accountId, args.expense_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to delete expense: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { destructiveHint: true } }
+);

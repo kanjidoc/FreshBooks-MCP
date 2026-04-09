@@ -196,3 +196,35 @@ export const updateClient = tool(
   },
   { annotations: { idempotentHint: true } }
 );
+
+export const deleteClient = tool(
+  "freshbooks_delete_client",
+  "Delete a client by ID. This action is permanent and cannot be undone.",
+  {
+    client_id: z.string().describe("The client ID to delete"),
+  },
+  async (args) => {
+    try {
+      const fbClient = getFreshBooksClient();
+      const accountId = getAccountId();
+      const response = await fbClient.clients.delete(accountId, args.client_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to delete client: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { destructiveHint: true } }
+);

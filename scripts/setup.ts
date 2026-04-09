@@ -3,7 +3,7 @@
  *
  * Walks you through:
  * 1. Entering your FreshBooks Developer App credentials
- * 2. Completing the OAuth2 flow (opens browser, captures callback)
+ * 2. Completing the OAuth2 flow (browser-based, paste-the-URL)
  * 3. Fetching your Account ID and Business ID
  * 4. Writing everything to .env
  * 5. Printing MCP config for Claude Desktop, Claude Code, and claude.ai/code
@@ -12,15 +12,13 @@
  *   npx ts-node scripts/setup.ts
  */
 
-import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import { Client } from "@freshbooks/api";
 
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
-const REDIRECT_PORT = 3456;
-const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
+const REDIRECT_URI = "https://localhost/callback";
 
 function ask(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -40,42 +38,17 @@ function openBrowser(url: string) {
   else exec(`xdg-open "${url}"`);
 }
 
-async function waitForOAuthCallback(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url!, `http://localhost:${REDIRECT_PORT}`);
-      if (url.pathname === "/callback") {
-        const code = url.searchParams.get("code");
-        if (code) {
-          res.writeHead(200, { "Content-Type": "text/html" });
-          res.end(`
-            <html><body style="font-family: system-ui; text-align: center; padding: 60px;">
-              <h1>&#10004; Authorization successful!</h1>
-              <p>You can close this tab and return to the terminal.</p>
-            </body></html>
-          `);
-          server.close();
-          resolve(code);
-        } else {
-          const error = url.searchParams.get("error") || "No code received";
-          res.writeHead(400, { "Content-Type": "text/html" });
-          res.end(`<html><body><h1>Error: ${error}</h1></body></html>`);
-          server.close();
-          reject(new Error(error));
-        }
-      }
-    });
-
-    server.listen(REDIRECT_PORT, () => {
-      console.log(`\n   Waiting for OAuth callback on http://localhost:${REDIRECT_PORT}/callback ...\n`);
-    });
-
-    // Timeout after 5 minutes
-    setTimeout(() => {
-      server.close();
-      reject(new Error("OAuth callback timed out after 5 minutes"));
-    }, 5 * 60 * 1000);
-  });
+function extractCodeFromUrl(urlString: string): string | null {
+  try {
+    // Handle both full URLs and just the code value
+    if (!urlString.startsWith("http")) {
+      return urlString; // User pasted just the code
+    }
+    const url = new URL(urlString);
+    return url.searchParams.get("code");
+  } catch {
+    return null;
+  }
 }
 
 function writeEnvFile(vars: Record<string, string>) {
@@ -157,8 +130,9 @@ STEP 1: Create a FreshBooks Developer App
   2. Go to: Settings > Developer Portal
      URL: https://my.freshbooks.com/#/developer
   3. Click "Create an App"
-  4. Set the Redirect URI to: ${REDIRECT_URI}
-  5. Save and copy the Client ID and Client Secret
+  4. Set Application Type to "Private App"
+  5. Set the Redirect URI to: ${REDIRECT_URI}
+  6. Save and copy the Client ID and Client Secret
 
 `);
 
@@ -191,15 +165,23 @@ STEP 2: Authorize with FreshBooks
     console.log("   Could not open browser automatically. Please visit the URL above.\n");
   }
 
-  let code: string;
-  try {
-    code = await waitForOAuthCallback();
-  } catch (err: any) {
-    console.error(`\n   Error: ${err.message}\n`);
-    process.exit(1);
+  console.log(`   After you authorize, your browser will redirect to a page that
+   won't load (this is expected). Copy the FULL URL from your
+   browser's address bar and paste it below.
+
+   It will look like: ${REDIRECT_URI}?code=abc123...
+`);
+
+  let code: string | null = null;
+  while (!code) {
+    const input = await ask("   Paste the redirect URL (or just the code): ");
+    code = extractCodeFromUrl(input);
+    if (!code) {
+      console.log("   Could not extract authorization code. Please try again.\n");
+    }
   }
 
-  console.log("   Authorization code received. Exchanging for tokens...\n");
+  console.log("\n   Authorization code received. Exchanging for tokens...\n");
 
   const tokens = await fbClient.getAccessToken(code);
   if (!tokens) {

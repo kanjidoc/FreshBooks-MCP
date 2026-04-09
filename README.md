@@ -6,13 +6,20 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that g
 
 This server exposes FreshBooks accounting operations as MCP tools that any compatible AI assistant can call. Instead of manually navigating the FreshBooks UI, you can ask your AI assistant to:
 
-- List, view, create, and update **invoices**
+- List, view, create, update, and delete **invoices**
 - Manage **clients** and their contact details
-- Track and record **expenses**
+- Track and record **expenses** with category lookups
 - Record **payments** against invoices
 - Log **time entries** for projects
+- Manage **bills**, **bill payments**, and **bill vendors** (accounts payable)
+- Create and manage **credit notes**
+- Track **items** (products/services you sell)
+- Manage **projects**, **services**, and **tasks**
+- Record **other incomes** outside of invoicing
+- Create **journal entries** for manual accounting adjustments
+- Run **reports**: Profit & Loss, Payments Collected, Tax Summary
 
-All tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes.
+All 73 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes.
 
 ## How It Works
 
@@ -22,7 +29,7 @@ This MCP server runs **locally on your computer** as a Node.js process. When you
 GitHub repo
     ↓ git clone
 Your computer: ~/FreshBooks-MCP/
-    ↓ npm install + npm run setup
+    ↓ npm install + npm run build + configure .env
 dist/index.js (compiled MCP server, ready to run)
     ↓ Claude reads your config file
 Claude launches "node dist/index.js" as a background process
@@ -38,58 +45,67 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 
 - **[Node.js](https://nodejs.org/) 18+** — if you don't have it, download it from nodejs.org
 - A **FreshBooks account** — any plan that has API access
-- A **terminal** — Terminal (Mac), Command Prompt or PowerShell (Windows)
 
-### Step 1: Get the code onto your computer
-
-Open your terminal and run:
+### Step 1: Clone, install, and build
 
 ```bash
 git clone https://github.com/kanjidoc/FreshBooks-MCP.git
 cd FreshBooks-MCP
 npm install
+npm run build
 ```
 
-This downloads the project from GitHub and installs its dependencies (the FreshBooks SDK, etc.) into a local folder.
+### Step 2: Get your FreshBooks credentials
 
-### Step 2: Create a FreshBooks Developer App
-
-Before running setup, you need API credentials from FreshBooks:
+You need 7 values from FreshBooks. Here's how to get them:
 
 1. Log in to [FreshBooks](https://www.freshbooks.com/)
 2. Go to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
-3. Click **"Create an App"**
-4. Set the **Redirect URI** to exactly: `http://localhost:3456/callback`
+3. Click **"Create an App"** (set Application Type to "Private App")
+4. Set the **Redirect URI** to: `https://localhost/callback`
 5. Save and copy your **Client ID** and **Client Secret**
+6. Complete the OAuth flow to get your **Access Token** and **Refresh Token** (see [OAuth Flow](#completing-the-oauth-flow) below)
+7. Find your **Account ID** and **Business ID** by calling the FreshBooks API's `/users/me` endpoint after you have tokens
 
-### Step 3: Run the setup wizard
+### Step 3: Configure your `.env` file
 
 ```bash
-npm run setup
+cp .env.example .env
 ```
 
-This runs an interactive script that will:
-1. Ask you to paste your Client ID and Client Secret
-2. Open your browser — click "Allow" to authorize the app with your FreshBooks account
-3. Automatically capture the OAuth tokens (no manual copying needed)
-4. Call the FreshBooks API to find your Account ID and Business ID
-5. Save everything to a `.env` file in the project folder
-6. Compile the TypeScript code into `dist/index.js`
-7. Print ready-to-paste config for Claude Desktop, Claude Code, and claude.ai/code
+Open `.env` in any editor and paste in all 7 values:
+
+```env
+FRESHBOOKS_CLIENT_ID=your_client_id
+FRESHBOOKS_CLIENT_SECRET=your_client_secret
+FRESHBOOKS_REDIRECT_URI=https://localhost/callback
+FRESHBOOKS_ACCESS_TOKEN=your_access_token
+FRESHBOOKS_REFRESH_TOKEN=your_refresh_token
+FRESHBOOKS_ACCOUNT_ID=your_account_id
+FRESHBOOKS_BUSINESS_ID=your_business_id
+```
 
 ### Step 4: Tell Claude about the server
 
-Copy the config block the setup script printed and paste it into Claude's settings file. See [Installing on Claude](#installing-on-claude) below for where each platform keeps its config.
+Add the MCP server to your Claude config file. See [Installing on Claude](#installing-on-claude) below.
 
 ### Step 5: Test it
 
 Start a new Claude conversation and try: *"List my recent invoices"*
 
-If you prefer to set things up manually, see [Manual Setup](#manual-setup) below.
+### Interactive setup script (optional)
+
+If you prefer a guided walkthrough that handles the OAuth flow and auto-detects your IDs:
+
+```bash
+npm run setup
+```
+
+> **Note:** This script requires an interactive terminal. It will not work inside Claude Code sessions or non-interactive environments. Run it in a regular Terminal/shell.
 
 ## Installing on Claude
 
-After running `npm run setup`, the script prints config blocks for each platform. Here's what to do with them:
+Add the MCP server config to your Claude platform. Replace the placeholder values with your actual credentials from `.env`.
 
 ### Claude Desktop
 
@@ -97,7 +113,7 @@ After running `npm run setup`, the script prints config blocks for each platform
    - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 2. If the file doesn't exist, create it
-3. Paste the config block from the setup script. It looks like this:
+3. Add the following (replace values with your own):
 
 ```json
 {
@@ -108,7 +124,7 @@ After running `npm run setup`, the script prints config blocks for each platform
       "env": {
         "FRESHBOOKS_CLIENT_ID": "your_client_id",
         "FRESHBOOKS_CLIENT_SECRET": "your_client_secret",
-        "FRESHBOOKS_REDIRECT_URI": "http://localhost:3456/callback",
+        "FRESHBOOKS_REDIRECT_URI": "https://localhost/callback",
         "FRESHBOOKS_ACCESS_TOKEN": "your_access_token",
         "FRESHBOOKS_REFRESH_TOKEN": "your_refresh_token",
         "FRESHBOOKS_ACCOUNT_ID": "your_account_id",
@@ -119,9 +135,10 @@ After running `npm run setup`, the script prints config blocks for each platform
 }
 ```
 
-4. **Restart Claude Desktop** for the changes to take effect
-5. You should see a hammer icon indicating MCP tools are available
-6. Try: *"List my recent invoices"*
+4. **Important:** The path in `"args"` must be the **absolute path** to `dist/index.js`
+5. **Restart Claude Desktop** for the changes to take effect
+6. You should see a hammer icon indicating MCP tools are available
+7. Try: *"List my recent invoices"*
 
 ### Claude Code (CLI / IDE Extensions)
 
@@ -158,88 +175,41 @@ for await (const message of query({
 }
 ```
 
-## Manual Setup
+## Completing the OAuth Flow
 
-If you prefer not to use the setup script, follow these steps:
+FreshBooks uses OAuth2, so you need to exchange a one-time authorization code for access/refresh tokens. Here's how:
 
-### 1. Create a FreshBooks Developer App
+1. **Build the authorization URL** — visit this in your browser (replace your client ID):
+   ```
+   https://auth.freshbooks.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=https://localhost/callback
+   ```
 
-1. Log in to [FreshBooks](https://www.freshbooks.com/)
-2. Navigate to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
-3. Click **"Create an App"**
-4. Fill in your app details:
-   - **App Name:** Whatever you like (e.g., "Claude MCP")
-   - **Redirect URI:** `http://localhost:3456/callback`
-5. Save the app and copy your **Client ID** and **Client Secret**
+2. **Click "Allow"** — FreshBooks will redirect your browser to `https://localhost/callback?code=SOME_CODE`. The page won't load (that's expected). Copy the `code` value from the URL bar.
 
-### 2. Complete the OAuth2 flow
+3. **Exchange the code for tokens** — make a POST request (e.g., with `curl`):
+   ```bash
+   curl -X POST https://api.freshbooks.com/auth/oauth/token \
+     -H "Content-Type: application/json" \
+     -d '{
+       "grant_type": "authorization_code",
+       "client_id": "YOUR_CLIENT_ID",
+       "client_secret": "YOUR_CLIENT_SECRET",
+       "code": "THE_CODE_FROM_STEP_2",
+       "redirect_uri": "https://localhost/callback"
+     }'
+   ```
+   The response contains your `access_token` and `refresh_token`.
 
-You need an access token and refresh token. The FreshBooks SDK handles the OAuth2 flow:
-
-```typescript
-import { Client } from "@freshbooks/api";
-
-const client = new Client("YOUR_CLIENT_ID", {
-  clientSecret: "YOUR_CLIENT_SECRET",
-  redirectUri: "http://localhost:3456/callback",
-});
-
-// Step 1: Get the authorization URL
-const authUrl = client.getAuthRequestUrl();
-console.log("Visit this URL in your browser:", authUrl);
-
-// Step 2: After you authorize, FreshBooks redirects to your redirect URI
-// with a ?code= parameter. Capture that code.
-
-// Step 3: Exchange the code for tokens
-const tokens = await client.getAccessToken(code);
-console.log("Access Token:", tokens.accessToken);
-console.log("Refresh Token:", tokens.refreshToken);
-```
-
-### 3. Find your Account ID and Business ID
-
-After getting your tokens, call `users.me()`:
-
-```typescript
-const authedClient = new Client("YOUR_CLIENT_ID", {
-  accessToken: tokens.accessToken,
-});
-
-const { data } = await authedClient.users.me();
-// data.businessMemberships[0].business.accountId → your Account ID
-// data.businessMemberships[0].business.id → your Business ID
-```
+4. **Get your Account ID and Business ID** — call the identity endpoint:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+     https://api.freshbooks.com/auth/api/v1/users/me
+   ```
+   Look for `business_memberships[0].business.account_id` (Account ID) and `business_memberships[0].business.id` (Business ID).
 
 **Why two IDs?**
-- **Account ID** (string) — Used for accounting endpoints: invoices, clients, expenses, payments, items, taxes
+- **Account ID** (string) — Used for accounting endpoints: invoices, clients, expenses, payments, items, bills, etc.
 - **Business ID** (number) — Used for project endpoints: time entries, projects, services
-
-### 4. Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Fill in your `.env`:
-
-```env
-FRESHBOOKS_CLIENT_ID=your_client_id
-FRESHBOOKS_CLIENT_SECRET=your_client_secret
-FRESHBOOKS_REDIRECT_URI=http://localhost:3456/callback
-FRESHBOOKS_ACCESS_TOKEN=your_access_token
-FRESHBOOKS_REFRESH_TOKEN=your_refresh_token
-FRESHBOOKS_ACCOUNT_ID=your_account_id
-FRESHBOOKS_BUSINESS_ID=your_business_id
-```
-
-### 5. Build
-
-```bash
-npm run build
-```
-
-Then follow the [Installing on Claude](#installing-on-claude) instructions above.
 
 ## Architecture
 
@@ -272,11 +242,23 @@ Then follow the [Installing on Claude](#installing-on-claude) instructions above
 | `src/server.ts` | Bundles all tools into a single MCP server via `createSdkMcpServer` |
 | `src/freshbooks-client.ts` | Singleton FreshBooks `Client` initialized from environment variables |
 | `src/query-helpers.ts` | Converts tool arguments into FreshBooks SDK query builders (pagination, search, sort, includes) |
-| `src/tools/invoices.ts` | Invoice tools: list, get, create, update |
-| `src/tools/clients.ts` | Client tools: list, get, create, update |
-| `src/tools/expenses.ts` | Expense tools: list, get, create |
-| `src/tools/payments.ts` | Payment tools: list, get, create |
-| `src/tools/time-entries.ts` | Time entry tools: list, get, create |
+| `src/tools/invoices.ts` | Invoice tools: list, get, create, update, delete |
+| `src/tools/clients.ts` | Client tools: list, get, create, update, delete |
+| `src/tools/expenses.ts` | Expense tools: list, get, create, update, delete |
+| `src/tools/payments.ts` | Payment tools: list, get, create, update, delete |
+| `src/tools/time-entries.ts` | Time entry tools: list, get, create, update, delete |
+| `src/tools/items.ts` | Item tools: list, get, create, update |
+| `src/tools/bills.ts` | Bill tools: list, get, create, delete |
+| `src/tools/bill-payments.ts` | Bill payment tools: list, get, create, update, delete |
+| `src/tools/bill-vendors.ts` | Bill vendor tools: list, get, create, update, delete |
+| `src/tools/credit-notes.ts` | Credit note tools: list, get, create, update, delete |
+| `src/tools/other-incomes.ts` | Other income tools: list, get, create, update, delete |
+| `src/tools/projects.ts` | Project tools: list, get, create, update, delete |
+| `src/tools/services.ts` | Service tools: list, get, create |
+| `src/tools/tasks.ts` | Task tools: list, get, create, update, delete |
+| `src/tools/expense-categories.ts` | Expense category tools: list, get (read-only) |
+| `src/tools/journal-entries.ts` | Journal entry tools: create, list accounts, list details |
+| `src/tools/reports.ts` | Reports: Profit & Loss, Payments Collected, Tax Summary |
 | `scripts/setup.ts` | Interactive setup script — OAuth flow, ID discovery, config generation |
 
 ### Technology stack
@@ -287,27 +269,149 @@ Then follow the [Installing on Claude](#installing-on-claude) instructions above
 - **[big.js](https://github.com/MikeMcl/big.js/)** — Decimal arithmetic for monetary values (FreshBooks returns amounts as strings to avoid floating-point precision issues)
 - **TypeScript** — Strict mode, compiled to ES2022
 
-## Available Tools
+## Available Tools (73 total)
 
+### Invoices
 | Tool | Description |
 |---|---|
 | `freshbooks_list_invoices` | List invoices with pagination, status filters, date range, sorting, and includes |
 | `freshbooks_get_invoice` | Get a single invoice by ID with full details |
 | `freshbooks_create_invoice` | Create a new invoice with line items |
 | `freshbooks_update_invoice` | Update invoice fields (notes, PO number, due date) |
+| `freshbooks_delete_invoice` | Delete an invoice |
+
+### Clients
+| Tool | Description |
+|---|---|
 | `freshbooks_list_clients` | List clients with pagination, email/organization search, sorting |
 | `freshbooks_get_client` | Get a single client by ID |
 | `freshbooks_create_client` | Create a new client with contact and billing info |
 | `freshbooks_update_client` | Update client fields |
+| `freshbooks_delete_client` | Delete a client |
+
+### Expenses
+| Tool | Description |
+|---|---|
 | `freshbooks_list_expenses` | List expenses with date range, vendor, and category filters |
 | `freshbooks_get_expense` | Get a single expense by ID |
 | `freshbooks_create_expense` | Record a new expense |
+| `freshbooks_update_expense` | Update an existing expense |
+| `freshbooks_delete_expense` | Delete an expense |
+
+### Expense Categories
+| Tool | Description |
+|---|---|
+| `freshbooks_list_expense_categories` | List all expense categories |
+| `freshbooks_get_expense_category` | Get a single expense category by ID |
+
+### Payments
+| Tool | Description |
+|---|---|
 | `freshbooks_list_payments` | List payments with invoice filter |
 | `freshbooks_get_payment` | Get a single payment by ID |
 | `freshbooks_create_payment` | Record a payment against an invoice |
+| `freshbooks_update_payment` | Update a payment |
+| `freshbooks_delete_payment` | Delete a payment |
+
+### Time Entries
+| Tool | Description |
+|---|---|
 | `freshbooks_list_time_entries` | List time entries with sorting |
 | `freshbooks_get_time_entry` | Get a single time entry by ID |
 | `freshbooks_create_time_entry` | Log a new time entry |
+| `freshbooks_update_time_entry` | Update a time entry |
+| `freshbooks_delete_time_entry` | Delete a time entry |
+
+### Items
+| Tool | Description |
+|---|---|
+| `freshbooks_list_items` | List items (products/services you sell) |
+| `freshbooks_get_item` | Get a single item by ID |
+| `freshbooks_create_item` | Create a new item |
+| `freshbooks_update_item` | Update an item |
+
+### Bills (Accounts Payable)
+| Tool | Description |
+|---|---|
+| `freshbooks_list_bills` | List bills with filters |
+| `freshbooks_get_bill` | Get a single bill by ID |
+| `freshbooks_create_bill` | Create a new bill |
+| `freshbooks_delete_bill` | Delete a bill |
+
+### Bill Payments
+| Tool | Description |
+|---|---|
+| `freshbooks_list_bill_payments` | List bill payments |
+| `freshbooks_get_bill_payment` | Get a single bill payment by ID |
+| `freshbooks_create_bill_payment` | Record a payment against a bill |
+| `freshbooks_update_bill_payment` | Update a bill payment |
+| `freshbooks_delete_bill_payment` | Delete a bill payment |
+
+### Bill Vendors
+| Tool | Description |
+|---|---|
+| `freshbooks_list_bill_vendors` | List bill vendors |
+| `freshbooks_get_bill_vendor` | Get a single bill vendor by ID |
+| `freshbooks_create_bill_vendor` | Create a new bill vendor |
+| `freshbooks_update_bill_vendor` | Update a bill vendor |
+| `freshbooks_delete_bill_vendor` | Delete a bill vendor |
+
+### Credit Notes
+| Tool | Description |
+|---|---|
+| `freshbooks_list_credit_notes` | List credit notes |
+| `freshbooks_get_credit_note` | Get a single credit note by ID |
+| `freshbooks_create_credit_note` | Create a new credit note |
+| `freshbooks_update_credit_note` | Update a credit note |
+| `freshbooks_delete_credit_note` | Delete a credit note |
+
+### Other Incomes
+| Tool | Description |
+|---|---|
+| `freshbooks_list_other_incomes` | List other income entries |
+| `freshbooks_get_other_income` | Get a single other income by ID |
+| `freshbooks_create_other_income` | Record a non-invoice income |
+| `freshbooks_update_other_income` | Update an other income entry |
+| `freshbooks_delete_other_income` | Delete an other income entry |
+
+### Projects
+| Tool | Description |
+|---|---|
+| `freshbooks_list_projects` | List projects |
+| `freshbooks_get_project` | Get a single project by ID |
+| `freshbooks_create_project` | Create a new project |
+| `freshbooks_update_project` | Update a project |
+| `freshbooks_delete_project` | Delete a project |
+
+### Services
+| Tool | Description |
+|---|---|
+| `freshbooks_list_services` | List services |
+| `freshbooks_get_service` | Get a single service by ID |
+| `freshbooks_create_service` | Create a new service |
+
+### Tasks
+| Tool | Description |
+|---|---|
+| `freshbooks_list_tasks` | List tasks |
+| `freshbooks_get_task` | Get a single task by ID |
+| `freshbooks_create_task` | Create a new task |
+| `freshbooks_update_task` | Update a task |
+| `freshbooks_delete_task` | Delete a task |
+
+### Journal Entries
+| Tool | Description |
+|---|---|
+| `freshbooks_create_journal_entry` | Create a manual journal entry |
+| `freshbooks_list_journal_entry_accounts` | List accounts available for journal entries |
+| `freshbooks_list_journal_entry_details` | List journal entry line details |
+
+### Reports
+| Tool | Description |
+|---|---|
+| `freshbooks_report_profit_loss` | Generate a Profit & Loss report |
+| `freshbooks_report_payments_collected` | Generate a Payments Collected report |
+| `freshbooks_report_tax_summary` | Generate a Tax Summary report |
 
 ## Monetary Values
 

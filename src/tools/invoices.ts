@@ -190,3 +190,35 @@ export const updateInvoice = tool(
   },
   { annotations: { idempotentHint: true } }
 );
+
+export const deleteInvoice = tool(
+  "freshbooks_delete_invoice",
+  "Delete an invoice by ID. This action is permanent and cannot be undone.",
+  {
+    invoice_id: z.string().describe("The invoice ID to delete"),
+  },
+  async (args) => {
+    try {
+      const client = getFreshBooksClient();
+      const accountId = getAccountId();
+      const response = await client.invoices.delete(accountId, args.invoice_id);
+
+      if (!response.ok) {
+        return {
+          content: [{ type: "text" as const, text: `FreshBooks error: ${response.error?.message ?? "Unknown error"}` }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+      };
+    } catch (error) {
+      return {
+        content: [{ type: "text" as const, text: `Failed to delete invoice: ${error instanceof Error ? error.message : String(error)}` }],
+        isError: true,
+      };
+    }
+  },
+  { annotations: { destructiveHint: true } }
+);

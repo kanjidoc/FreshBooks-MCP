@@ -1,7 +1,13 @@
 import "dotenv/config";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { freshbooksServer } from "./server";
 
-// The server is passed to query() via mcpServers.
-// This entry point can be used to test the server or integrate with a host.
-export { freshbooksServer };
+async function main() {
+  const transport = new StdioServerTransport();
+  await freshbooksServer.instance.connect(transport);
+}
+
+main().catch((err) => {
+  console.error("Failed to start FreshBooks MCP server:", err);
+  process.exit(1);
+});

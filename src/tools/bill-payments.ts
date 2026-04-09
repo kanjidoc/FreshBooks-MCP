@@ -3,15 +3,12 @@ import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
-export const listPayments = tool(
-  "freshbooks_list_payments",
-  "List payments for the FreshBooks account. Supports pagination, search filters, and sorting. Returns payment summaries including amount, date, type, and associated invoice.",
+export const listBillPayments = tool(
+  "freshbooks_list_bill_payments",
+  "List bill payments for the FreshBooks account. Supports pagination. Returns bill payment summaries including id, bill, amount, and paid date.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
-    search_invoice_id: z.string().optional().describe("Filter by invoice ID"),
-    sort_by: z.string().optional().describe("Sort field (e.g. 'date', 'amount')"),
-    sort_order: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
   },
   async (args) => {
     try {
@@ -21,14 +18,9 @@ export const listPayments = tool(
       const queryBuilders = buildQueryBuilders({
         page: args.page,
         perPage: args.per_page,
-        search: {
-          ...(args.search_invoice_id && { invoiceid: args.search_invoice_id }),
-        },
-        sortBy: args.sort_by,
-        sortOrder: args.sort_order,
       });
 
-      const response = await client.payments.list(accountId, queryBuilders);
+      const response = await client.billPayments.list(accountId, queryBuilders);
 
       if (!response.ok) {
         return {
@@ -42,7 +34,7 @@ export const listPayments = tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text" as const, text: `Failed to list payments: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: "text" as const, text: `Failed to list bill payments: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
       };
     }
@@ -50,17 +42,17 @@ export const listPayments = tool(
   { annotations: { readOnlyHint: true } }
 );
 
-export const getPayment = tool(
-  "freshbooks_get_payment",
-  "Get a single payment by ID. Returns full payment details including amount, type, date, and linked invoice.",
+export const getBillPayment = tool(
+  "freshbooks_get_bill_payment",
+  "Get a single bill payment by ID. Returns full bill payment details including amount, paid date, and associated bill.",
   {
-    payment_id: z.string().describe("The payment ID"),
+    bill_payment_id: z.string().describe("The bill payment ID"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
-      const response = await client.payments.single(accountId, args.payment_id);
+      const response = await client.billPayments.single(accountId, Number(args.bill_payment_id));
 
       if (!response.ok) {
         return {
@@ -74,7 +66,7 @@ export const getPayment = tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text" as const, text: `Failed to get payment: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: "text" as const, text: `Failed to get bill payment: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
       };
     }
@@ -82,22 +74,17 @@ export const getPayment = tool(
   { annotations: { readOnlyHint: true } }
 );
 
-export const createPayment = tool(
-  "freshbooks_create_payment",
-  "Record a payment against an invoice. Amounts are strings to preserve decimal precision.",
+export const createBillPayment = tool(
+  "freshbooks_create_bill_payment",
+  "Create a new bill payment. Requires a bill ID, amount, and paid date. Amounts are strings to preserve decimal precision.",
   {
-    invoice_id: z.string().describe("The invoice ID this payment is for"),
+    bill_id: z.number().int().describe("The bill ID this payment applies to"),
     amount: z.object({
-      amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
+      amount: z.string().describe("Payment amount as a string, e.g. '250.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Payment amount as a Money object"),
-    date: z.string().describe("Payment date in YYYY-MM-DD format"),
-    type: z.enum([
-      "Check", "Credit", "Cash", "Bank Transfer", "Credit Card",
-      "Debit", "PayPal", "2Checkout", "VISA", "MASTERCARD",
-      "DISCOVER", "AMEX", "DINERS", "JCB", "ACH", "Other",
-    ]).default("Other").describe("Payment method type"),
-    note: z.string().optional().describe("Note about the payment"),
+    paid_date: z.string().describe("Date the payment was made in YYYY-MM-DD format"),
+    type: z.string().optional().describe("Payment type (e.g. 'Check', 'Credit Card', 'Bank Transfer')"),
   },
   async (args) => {
     try {
@@ -105,14 +92,13 @@ export const createPayment = tool(
       const accountId = getAccountId();
 
       const paymentData: Record<string, unknown> = {
-        invoiceId: args.invoice_id,
+        billId: args.bill_id,
         amount: { amount: args.amount.amount, code: args.amount.code },
-        date: new Date(args.date),
-        type: args.type,
+        paidDate: new Date(args.paid_date),
       };
-      if (args.note) paymentData.note = args.note;
+      if (args.type !== undefined) paymentData.type = args.type;
 
-      const response = await client.payments.create(accountId, paymentData);
+      const response = await client.billPayments.create(paymentData as any, accountId);
 
       if (!response.ok) {
         return {
@@ -126,24 +112,24 @@ export const createPayment = tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text" as const, text: `Failed to create payment: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: "text" as const, text: `Failed to create bill payment: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
       };
     }
   }
 );
 
-export const updatePayment = tool(
-  "freshbooks_update_payment",
-  "Update an existing payment. Only provide the fields you want to change.",
+export const updateBillPayment = tool(
+  "freshbooks_update_bill_payment",
+  "Update an existing bill payment. Only provide the fields you want to change.",
   {
-    payment_id: z.string().describe("The payment ID to update"),
-    note: z.string().optional().describe("Updated note about the payment"),
-    type: z.enum([
-      "Check", "Credit", "Cash", "Bank Transfer", "Credit Card",
-      "Debit", "PayPal", "2Checkout", "VISA", "MASTERCARD",
-      "DISCOVER", "AMEX", "DINERS", "JCB", "ACH", "Other",
-    ]).optional().describe("Updated payment method type"),
+    bill_payment_id: z.string().describe("The bill payment ID to update"),
+    amount: z.object({
+      amount: z.string().describe("Updated payment amount as a string, e.g. '250.00'"),
+      code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+    }).optional().describe("Updated payment amount as a Money object"),
+    paid_date: z.string().optional().describe("Updated date the payment was made in YYYY-MM-DD format"),
+    type: z.string().optional().describe("Updated payment type (e.g. 'Check', 'Credit Card', 'Bank Transfer')"),
   },
   async (args) => {
     try {
@@ -151,10 +137,11 @@ export const updatePayment = tool(
       const accountId = getAccountId();
 
       const updateData: Record<string, unknown> = {};
-      if (args.note !== undefined) updateData.note = args.note;
+      if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
+      if (args.paid_date !== undefined) updateData.paidDate = new Date(args.paid_date);
       if (args.type !== undefined) updateData.type = args.type;
 
-      const response = await client.payments.update(accountId, args.payment_id, updateData);
+      const response = await client.billPayments.update(updateData as any, accountId, Number(args.bill_payment_id));
 
       if (!response.ok) {
         return {
@@ -168,7 +155,7 @@ export const updatePayment = tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text" as const, text: `Failed to update payment: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: "text" as const, text: `Failed to update bill payment: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
       };
     }
@@ -176,17 +163,17 @@ export const updatePayment = tool(
   { annotations: { idempotentHint: true } }
 );
 
-export const deletePayment = tool(
-  "freshbooks_delete_payment",
-  "Delete a payment by ID. This action is permanent and cannot be undone.",
+export const deleteBillPayment = tool(
+  "freshbooks_delete_bill_payment",
+  "Delete a bill payment by ID. This action is permanent and cannot be undone.",
   {
-    payment_id: z.string().describe("The payment ID to delete"),
+    bill_payment_id: z.string().describe("The bill payment ID to delete"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
-      const response = await client.payments.delete(accountId, args.payment_id);
+      const response = await client.billPayments.delete(accountId, Number(args.bill_payment_id));
 
       if (!response.ok) {
         return {
@@ -200,7 +187,7 @@ export const deletePayment = tool(
       };
     } catch (error) {
       return {
-        content: [{ type: "text" as const, text: `Failed to delete payment: ${error instanceof Error ? error.message : String(error)}` }],
+        content: [{ type: "text" as const, text: `Failed to delete bill payment: ${error instanceof Error ? error.message : String(error)}` }],
         isError: true,
       };
     }

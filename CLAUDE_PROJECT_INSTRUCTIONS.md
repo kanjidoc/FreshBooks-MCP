@@ -15,46 +15,32 @@ This file contains everything needed to set up and use the FreshBooks MCP server
 - **Node.js** 18+
 - A **FreshBooks account** (any plan with API access)
 
-### Step 1: Clone and install
+### Step 1: Clone, install, and build
 
 ```bash
 git clone https://github.com/kanjidoc/FreshBooks-MCP.git
 cd FreshBooks-MCP
 npm install
+npm run build
 ```
 
-### Step 2: Create a FreshBooks Developer App
+### Step 2: Get your FreshBooks credentials
 
 1. Log in to [FreshBooks](https://www.freshbooks.com/)
 2. Go to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
-3. Click **"Create an App"**
-4. Fill in:
-   - **App Name:** Whatever you like (e.g., "Claude MCP")
-   - **Description:** Optional
-   - **Redirect URI:** `http://localhost:3456/callback` (must match exactly)
-5. Click **Save**
-6. Copy your **Client ID** and **Client Secret** — you'll need them next
+3. Click **"Create an App"** (Application Type: "Private App")
+4. Set the **Redirect URI** to: `https://localhost/callback`
+5. Save and copy your **Client ID** and **Client Secret**
+6. Complete the OAuth flow to get tokens (see [README.md](README.md#completing-the-oauth-flow))
+7. Find your Account ID and Business ID from the `/users/me` endpoint
 
-### Step 3: Run the setup script
+### Step 3: Configure `.env`
 
 ```bash
-npm run setup
+cp .env.example .env
 ```
 
-The script will:
-1. Ask for your Client ID and Client Secret
-2. Open your browser to authorize the FreshBooks app
-3. You click "Allow" in the browser — the script captures the OAuth token automatically
-4. Fetch your Account ID and Business ID via the FreshBooks API
-5. Write everything to a `.env` file
-6. Build the project
-7. Print ready-to-paste MCP config for all Claude platforms
-
-**That's it.** Copy the config the script prints and follow the platform instructions below.
-
-### Step 4 (alternative): Manual setup
-
-If the setup script doesn't work for your environment, see the [Manual Setup section in README.md](README.md#manual-setup).
+Paste all 7 values into `.env`. Then follow the platform instructions below to tell Claude about the server.
 
 ---
 
@@ -77,7 +63,7 @@ If the setup script doesn't work for your environment, see the [Manual Setup sec
       "env": {
         "FRESHBOOKS_CLIENT_ID": "your_client_id",
         "FRESHBOOKS_CLIENT_SECRET": "your_client_secret",
-        "FRESHBOOKS_REDIRECT_URI": "http://localhost:3456/callback",
+        "FRESHBOOKS_REDIRECT_URI": "https://localhost/callback",
         "FRESHBOOKS_ACCESS_TOKEN": "your_access_token",
         "FRESHBOOKS_REFRESH_TOKEN": "your_refresh_token",
         "FRESHBOOKS_ACCOUNT_ID": "your_account_id",
@@ -137,36 +123,43 @@ Copy the text below into your Claude project's **custom instructions** (or syste
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with a FreshBooks accounting account. The server exposes tools prefixed with `freshbooks_` for managing invoices, clients, expenses, payments, and time entries.
+You have access to a FreshBooks MCP server that lets you interact with a FreshBooks accounting account. The server exposes 73 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
-**Invoices:**
-- `freshbooks_list_invoices` — List invoices with filters (status, customer, date range), pagination, sorting, and includes
-- `freshbooks_get_invoice` — Get full invoice details by ID (line items, amounts, status)
-- `freshbooks_create_invoice` — Create a new invoice with line items (amounts are strings, e.g. "100.00")
-- `freshbooks_update_invoice` — Update invoice fields (notes, PO number, due date)
+**Invoices:** `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
 
-**Clients:**
-- `freshbooks_list_clients` — List clients with search (email, organization), pagination, sorting
-- `freshbooks_get_client` — Get full client details by ID
-- `freshbooks_create_client` — Create a new client (name, email, organization, address)
-- `freshbooks_update_client` — Update client fields
+**Clients:** `freshbooks_list_clients`, `freshbooks_get_client`, `freshbooks_create_client`, `freshbooks_update_client`, `freshbooks_delete_client`
 
-**Expenses:**
-- `freshbooks_list_expenses` — List expenses with filters (vendor, category, date range), pagination, sorting
-- `freshbooks_get_expense` — Get full expense details by ID
-- `freshbooks_create_expense` — Record a new expense (category, staff, amount, vendor)
+**Expenses:** `freshbooks_list_expenses`, `freshbooks_get_expense`, `freshbooks_create_expense`, `freshbooks_update_expense`, `freshbooks_delete_expense`
 
-**Payments:**
-- `freshbooks_list_payments` — List payments with invoice filter, pagination
-- `freshbooks_get_payment` — Get full payment details by ID
-- `freshbooks_create_payment` — Record a payment against an invoice
+**Expense Categories (read-only):** `freshbooks_list_expense_categories`, `freshbooks_get_expense_category`
 
-**Time entries:**
-- `freshbooks_list_time_entries` — List time entries with sorting
-- `freshbooks_get_time_entry` — Get full time entry details by ID
-- `freshbooks_create_time_entry` — Log a time entry (duration in seconds)
+**Payments:** `freshbooks_list_payments`, `freshbooks_get_payment`, `freshbooks_create_payment`, `freshbooks_update_payment`, `freshbooks_delete_payment`
+
+**Time Entries:** `freshbooks_list_time_entries`, `freshbooks_get_time_entry`, `freshbooks_create_time_entry`, `freshbooks_update_time_entry`, `freshbooks_delete_time_entry`
+
+**Items:** `freshbooks_list_items`, `freshbooks_get_item`, `freshbooks_create_item`, `freshbooks_update_item`
+
+**Bills (Accounts Payable):** `freshbooks_list_bills`, `freshbooks_get_bill`, `freshbooks_create_bill`, `freshbooks_delete_bill`
+
+**Bill Payments:** `freshbooks_list_bill_payments`, `freshbooks_get_bill_payment`, `freshbooks_create_bill_payment`, `freshbooks_update_bill_payment`, `freshbooks_delete_bill_payment`
+
+**Bill Vendors:** `freshbooks_list_bill_vendors`, `freshbooks_get_bill_vendor`, `freshbooks_create_bill_vendor`, `freshbooks_update_bill_vendor`, `freshbooks_delete_bill_vendor`
+
+**Credit Notes:** `freshbooks_list_credit_notes`, `freshbooks_get_credit_note`, `freshbooks_create_credit_note`, `freshbooks_update_credit_note`, `freshbooks_delete_credit_note`
+
+**Other Incomes:** `freshbooks_list_other_incomes`, `freshbooks_get_other_income`, `freshbooks_create_other_income`, `freshbooks_update_other_income`, `freshbooks_delete_other_income`
+
+**Projects:** `freshbooks_list_projects`, `freshbooks_get_project`, `freshbooks_create_project`, `freshbooks_update_project`, `freshbooks_delete_project`
+
+**Services:** `freshbooks_list_services`, `freshbooks_get_service`, `freshbooks_create_service`
+
+**Tasks:** `freshbooks_list_tasks`, `freshbooks_get_task`, `freshbooks_create_task`, `freshbooks_update_task`, `freshbooks_delete_task`
+
+**Journal Entries:** `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
+
+**Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
 
 ### Important conventions
 
@@ -174,11 +167,7 @@ You have access to a FreshBooks MCP server that lets you interact with a FreshBo
 
 2. **Pagination:** All list tools accept `page` (default: 1) and `per_page` (default: 25, max: 100). When the user asks for "all" records, paginate through results.
 
-3. **Search filters:** List tools accept optional search parameters for filtering. Use these to narrow results rather than fetching everything:
-   - Invoices: `search_status`, `search_customer_id`, `search_date_min`, `search_date_max`
-   - Clients: `search_email`, `search_organization`
-   - Expenses: `search_vendor`, `search_category_id`, `search_date_min`, `search_date_max`
-   - Payments: `search_invoice_id`
+3. **Search filters:** List tools accept optional search parameters for filtering. Use these to narrow results rather than fetching everything. Each tool's parameters are self-documented via Zod `.describe()` — inspect the tool schema for available filters.
 
 4. **Sorting:** List tools support `sort_by` and `sort_order` (asc/desc).
 
@@ -211,4 +200,4 @@ You have access to a FreshBooks MCP server that lets you interact with a FreshBo
 | Tools not showing in Claude Desktop | Check that `"args"` has the absolute path to `dist/index.js`. Restart Claude completely. |
 | "Cannot find module dist/index.js" | Run `npm run build` |
 | Multiple FreshBooks businesses | The setup script uses the first business. Edit `.env` to use a different Account/Business ID |
-| OAuth callback timeout | Make sure port 3456 isn't blocked by a firewall, and that the redirect URI in your FreshBooks app matches exactly: `http://localhost:3456/callback` |
+| OAuth callback timeout | Make sure the redirect URI in your FreshBooks app matches exactly: `https://localhost/callback` |
