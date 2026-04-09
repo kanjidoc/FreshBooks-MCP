@@ -1,0 +1,35 @@
+{
+  "name": "freshbooks-mcp",
+  "version": "1.0.0",
+  "description": "MCP server exposing FreshBooks accounting tools for AI assistants",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "lint": "eslint src/",
+    "format": "prettier --write src/",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "freshbooks",
+    "mcp",
+    "ai",
+    "tools"
+  ],
+  "author": "kanjidoc",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.97",
+    "@freshbooks/api": "^4.1.0",
+    "big.js": "^7.0.1",
+    "dotenv": "^17.4.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/big.js": "^6.2.2",
+    "@types/node": "^25.5.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.2"
+  }
+}
