@@ -27,17 +27,28 @@ FreshBooks-MCP is a Model Context Protocol (MCP) server that exposes FreshBooks 
 ```
 FreshBooks-MCP/
 ├── src/
-│   ├── index.ts                # Entry point — starts the MCP server
-│   ├── server.ts               # createSdkMcpServer setup, bundles all tools
+│   ├── index.ts                # Entry point — starts the MCP server via stdio transport
+│   ├── server.ts               # createSdkMcpServer setup, bundles all 74 tools
 │   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars
 │   ├── query-helpers.ts        # Shared utility to build query builders from tool args
-│   ├── tools/                  # One file per FreshBooks resource domain
-│   │   ├── invoices.ts         # Invoice CRUD tools
-│   │   ├── clients.ts          # Client CRUD tools
-│   │   ├── expenses.ts         # Expense tools
-│   │   ├── payments.ts         # Payment tools
-│   │   ├── time-entries.ts     # Time tracking tools (uses businessId)
-│   │   └── ...
+│   ├── tools/                  # One file per FreshBooks resource domain (17 files)
+│   │   ├── invoices.ts         # Invoice CRUD + delete (5 tools)
+│   │   ├── clients.ts          # Client CRUD + delete (5 tools)
+│   │   ├── expenses.ts         # Expense CRUD + delete (5 tools)
+│   │   ├── payments.ts         # Payment CRUD + delete (5 tools)
+│   │   ├── time-entries.ts     # Time entry CRUD + delete (5 tools, uses businessId)
+│   │   ├── bills.ts            # Bill list/get/create/delete (4 tools)
+│   │   ├── bill-payments.ts    # Bill payment CRUD + delete (5 tools)
+│   │   ├── bill-vendors.ts     # Bill vendor CRUD + delete (5 tools)
+│   │   ├── credit-notes.ts     # Credit note CRUD + delete (5 tools)
+│   │   ├── items.ts            # Item CRUD (4 tools)
+│   │   ├── tasks.ts            # Task CRUD + delete (5 tools)
+│   │   ├── projects.ts         # Project CRUD + delete (5 tools, uses businessId)
+│   │   ├── services.ts         # Service list/get/create (3 tools, uses businessId)
+│   │   ├── other-incomes.ts    # Other income CRUD + delete (5 tools)
+│   │   ├── expense-categories.ts # Expense category list/get (2 read-only tools)
+│   │   ├── journal-entries.ts  # Journal entry create + account/detail listings (3 tools)
+│   │   └── reports.ts          # Profit & Loss, Payments Collected, Tax Summary (3 tools)
 │   └── types.ts                # Shared TypeScript types and interfaces
 ├── package.json
 ├── tsconfig.json
@@ -307,24 +318,32 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-```typescript
-// src/server.ts
-import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
-import { listInvoices, getInvoice, createInvoice } from "./tools/invoices";
-import { listClients, getClient, createClient } from "./tools/clients";
-
-export const freshbooksServer = createSdkMcpServer({
-  name: "freshbooks",
-  version: "1.0.0",
-  tools: [listInvoices, getInvoice, createInvoice, listClients, getClient, createClient],
-});
-```
+All 74 tools are imported in `src/server.ts` and passed to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/server.ts`.
 
 ### Tool naming convention
 
-All tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
-- `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`
-- `freshbooks_list_clients`, `freshbooks_get_client`, `freshbooks_create_client`, `freshbooks_update_client`
+All 74 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+
+**Accounting resources (accountId):**
+- Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
+- Clients: `freshbooks_list_clients`, `freshbooks_get_client`, `freshbooks_create_client`, `freshbooks_update_client`, `freshbooks_delete_client`
+- Expenses: `freshbooks_list_expenses`, `freshbooks_get_expense`, `freshbooks_create_expense`, `freshbooks_update_expense`, `freshbooks_delete_expense`
+- Payments: `freshbooks_list_payments`, `freshbooks_get_payment`, `freshbooks_create_payment`, `freshbooks_update_payment`, `freshbooks_delete_payment`
+- Bills: `freshbooks_list_bills`, `freshbooks_get_bill`, `freshbooks_create_bill`, `freshbooks_delete_bill`
+- Bill Payments: `freshbooks_list_bill_payments`, `freshbooks_get_bill_payment`, `freshbooks_create_bill_payment`, `freshbooks_update_bill_payment`, `freshbooks_delete_bill_payment`
+- Bill Vendors: `freshbooks_list_bill_vendors`, `freshbooks_get_bill_vendor`, `freshbooks_create_bill_vendor`, `freshbooks_update_bill_vendor`, `freshbooks_delete_bill_vendor`
+- Credit Notes: `freshbooks_list_credit_notes`, `freshbooks_get_credit_note`, `freshbooks_create_credit_note`, `freshbooks_update_credit_note`, `freshbooks_delete_credit_note`
+- Items: `freshbooks_list_items`, `freshbooks_get_item`, `freshbooks_create_item`, `freshbooks_update_item`
+- Tasks: `freshbooks_list_tasks`, `freshbooks_get_task`, `freshbooks_create_task`, `freshbooks_update_task`, `freshbooks_delete_task`
+- Other Incomes: `freshbooks_list_other_incomes`, `freshbooks_get_other_income`, `freshbooks_create_other_income`, `freshbooks_update_other_income`, `freshbooks_delete_other_income`
+- Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
+- Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
+- Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+
+**Project resources (businessId):**
+- Time Entries: `freshbooks_list_time_entries`, `freshbooks_get_time_entry`, `freshbooks_create_time_entry`, `freshbooks_update_time_entry`, `freshbooks_delete_time_entry`
+- Projects: `freshbooks_list_projects`, `freshbooks_get_project`, `freshbooks_create_project`, `freshbooks_update_project`, `freshbooks_delete_project`
+- Services: `freshbooks_list_services`, `freshbooks_get_service`, `freshbooks_create_service`
 
 Use `allowedTools: ["mcp__freshbooks__*"]` to allow all tools on the server.
 
