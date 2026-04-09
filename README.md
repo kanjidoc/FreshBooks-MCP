@@ -14,25 +14,76 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 
 All tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes.
 
+## How It Works
+
+This MCP server runs **locally on your computer** as a Node.js process. When you configure Claude to use it, Claude launches the server automatically whenever you start a conversation. The server talks to the FreshBooks API using your OAuth credentials.
+
+```
+GitHub repo
+    ↓ git clone
+Your computer: ~/FreshBooks-MCP/
+    ↓ npm install + npm run setup
+dist/index.js (compiled MCP server, ready to run)
+    ↓ Claude reads your config file
+Claude launches "node dist/index.js" as a background process
+    ↓ You say "list my invoices"
+Claude sends a tool call → MCP server → FreshBooks API → results back to Claude
+```
+
+Nothing runs "in the cloud" — the server is a local program on your machine that Claude knows how to start and talk to.
+
 ## Quick Start
 
-The interactive setup script handles everything — creating the OAuth connection, fetching your IDs, and generating config for all Claude platforms:
+### Prerequisites
+
+- **[Node.js](https://nodejs.org/) 18+** — if you don't have it, download it from nodejs.org
+- A **FreshBooks account** — any plan that has API access
+- A **terminal** — Terminal (Mac), Command Prompt or PowerShell (Windows)
+
+### Step 1: Get the code onto your computer
+
+Open your terminal and run:
 
 ```bash
 git clone https://github.com/kanjidoc/FreshBooks-MCP.git
 cd FreshBooks-MCP
 npm install
+```
+
+This downloads the project from GitHub and installs its dependencies (the FreshBooks SDK, etc.) into a local folder.
+
+### Step 2: Create a FreshBooks Developer App
+
+Before running setup, you need API credentials from FreshBooks:
+
+1. Log in to [FreshBooks](https://www.freshbooks.com/)
+2. Go to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
+3. Click **"Create an App"**
+4. Set the **Redirect URI** to exactly: `http://localhost:3456/callback`
+5. Save and copy your **Client ID** and **Client Secret**
+
+### Step 3: Run the setup wizard
+
+```bash
 npm run setup
 ```
 
-The setup script will:
-1. Prompt you for your FreshBooks Developer App credentials
-2. Open your browser to authorize the app
-3. Capture the OAuth tokens automatically
-4. Fetch your Account ID and Business ID
-5. Write your `.env` file
-6. Build the project
-7. Print ready-to-paste MCP config for Claude Desktop, Claude Code, and claude.ai/code
+This runs an interactive script that will:
+1. Ask you to paste your Client ID and Client Secret
+2. Open your browser — click "Allow" to authorize the app with your FreshBooks account
+3. Automatically capture the OAuth tokens (no manual copying needed)
+4. Call the FreshBooks API to find your Account ID and Business ID
+5. Save everything to a `.env` file in the project folder
+6. Compile the TypeScript code into `dist/index.js`
+7. Print ready-to-paste config for Claude Desktop, Claude Code, and claude.ai/code
+
+### Step 4: Tell Claude about the server
+
+Copy the config block the setup script printed and paste it into Claude's settings file. See [Installing on Claude](#installing-on-claude) below for where each platform keeps its config.
+
+### Step 5: Test it
+
+Start a new Claude conversation and try: *"List my recent invoices"*
 
 If you prefer to set things up manually, see [Manual Setup](#manual-setup) below.
 
