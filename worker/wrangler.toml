@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=node_modules/wrangler/config-schema.json
+name = "freshbooks-mcp"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Secrets (set via wrangler secret put):
+# npx wrangler secret put FRESHBOOKS_CLIENT_ID
+# npx wrangler secret put FRESHBOOKS_CLIENT_SECRET
+# npx wrangler secret put COOKIE_ENCRYPTION_KEY
+
+[durable_objects]
+bindings = [
+  { name = "MCP_OBJECT", class_name = "FreshBooksMcpAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["FreshBooksMcpAgent"]
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "<run: wrangler kv namespace create OAUTH_KV>"
+
+[observability]
+enabled = true
+
+[dev]
+port = 8788

@@ -1,0 +1,6 @@
+# FreshBooks OAuth credentials — create an app at https://my.freshbooks.com/#/developer
+FRESHBOOKS_CLIENT_ID=your_client_id
+FRESHBOOKS_CLIENT_SECRET=your_client_secret
+
+# Encryption key for cookies — generate with: openssl rand -hex 32
+COOKIE_ENCRYPTION_KEY=your_encryption_key
