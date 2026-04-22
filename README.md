@@ -45,63 +45,51 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 
 - **[Node.js](https://nodejs.org/) 18+** — if you don't have it, download it from nodejs.org
 - A **FreshBooks account** — any plan that has API access
+- **Claude Desktop** installed (for most users) — the setup script can auto-install the MCP server into it
 
-### Step 1: Clone, install, and build
+### Recommended: interactive setup script
+
+One command that handles everything — OAuth, ID discovery, `.env`, `.mcp.json`, the build, and auto-installing into Claude Desktop:
 
 ```bash
 git clone https://github.com/kanjidoc/FreshBooks-MCP.git
 cd FreshBooks-MCP
 npm install
-npm run build
+npm run setup
 ```
 
-### Step 2: Get your FreshBooks credentials
+Then quit and reopen Claude Desktop and try: *"List my recent invoices"*
 
-You need 7 values from FreshBooks. Here's how to get them:
+Before you start, create your FreshBooks Developer app (needed once per FreshBooks account):
 
 1. Log in to [FreshBooks](https://www.freshbooks.com/)
 2. Go to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
 3. Click **"Create an App"** (set Application Type to "Private App")
 4. Set the **Redirect URI** to: `https://localhost/callback`
-5. Save and copy your **Client ID** and **Client Secret**
-6. Complete the OAuth flow to get your **Access Token** and **Refresh Token** (see [OAuth Flow](#completing-the-oauth-flow) below)
-7. Find your **Account ID** and **Business ID** by calling the FreshBooks API's `/users/me` endpoint after you have tokens
+5. Save — you'll need the **Client ID** and **Client Secret** in a moment
 
-### Step 3: Configure your `.env` file
+> **Note:** `npm run setup` needs an interactive terminal (regular Terminal, iTerm, etc). It won't work inside a Claude Code session.
 
-```bash
-cp .env.example .env
-```
+### Token auto-refresh
 
-Open `.env` in any editor and paste in all 7 values:
+The server automatically refreshes your FreshBooks access token at startup if it's expired or within 10 minutes of expiring, and persists the rotated tokens back to `.env`, `.mcp.json`, and your Claude Desktop config. You should not need to touch your tokens again — if the refresh token ever gets revoked (e.g. you delete the FreshBooks Developer app, or don't use it for ~30 days), just re-run `npm run setup`.
 
-```env
-FRESHBOOKS_CLIENT_ID=your_client_id
-FRESHBOOKS_CLIENT_SECRET=your_client_secret
-FRESHBOOKS_REDIRECT_URI=https://localhost/callback
-FRESHBOOKS_ACCESS_TOKEN=your_access_token
-FRESHBOOKS_REFRESH_TOKEN=your_refresh_token
-FRESHBOOKS_ACCOUNT_ID=your_account_id
-FRESHBOOKS_BUSINESS_ID=your_business_id
-```
+### Manual setup (advanced / fallback)
 
-### Step 4: Tell Claude about the server
+Prefer to wire everything up yourself? You need 7 values from FreshBooks:
 
-Add the MCP server to your Claude config file. See [Installing on Claude](#installing-on-claude) below.
+1. **Client ID** and **Client Secret** — from the Developer Portal app above
+2. **Access Token** and **Refresh Token** — complete the OAuth flow (see [Completing the OAuth Flow](#completing-the-oauth-flow))
+3. **Account ID** and **Business ID** — call `/users/me` with your access token
 
-### Step 5: Test it
-
-Start a new Claude conversation and try: *"List my recent invoices"*
-
-### Interactive setup script (optional)
-
-If you prefer a guided walkthrough that handles the OAuth flow and auto-detects your IDs:
+Then:
 
 ```bash
-npm run setup
+cp .env.example .env   # fill in all 7 values
+npm run build
 ```
 
-> **Note:** This script requires an interactive terminal. It will not work inside Claude Code sessions or non-interactive environments. Run it in a regular Terminal/shell.
+And add the MCP server to your Claude config manually — see [Installing on Claude](#installing-on-claude).
 
 ## Installing on Claude
 
@@ -439,7 +427,8 @@ npm test               # Run tests
 | Problem | Solution |
 |---|---|
 | "FRESHBOOKS_CLIENT_ID is not set" | Your `.env` file is missing or incomplete. Run `npm run setup` or check `.env.example`. |
-| "401 Unauthorized" from FreshBooks | Your access token has expired. Get a new one via the OAuth flow or use the refresh token. |
+| "401 Unauthorized" from FreshBooks | Restart the MCP server — startup auto-refresh will rotate the access token. If you keep seeing 401s, the refresh token was likely revoked; re-run `npm run setup`. |
+| `invalid_grant` when refreshing | The refresh token has been revoked or expired. Re-run `npm run setup` to do a fresh OAuth flow. |
 | MCP tools not showing in Claude | Make sure the config path in `"args"` is an absolute path to `dist/index.js`. Restart Claude. |
 | "Cannot find module dist/index.js" | Run `npm run build` first. |
 | Multiple FreshBooks businesses | The setup script uses the first business. Edit `.env` to change the Account ID / Business ID. |
