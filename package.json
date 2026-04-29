@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
     "setup": "ts-node scripts/setup.ts",
+    "check-tokens": "node scripts/check-token-health.js",
     "lint": "eslint src/",
     "format": "prettier --write src/",
     "test": "echo \"Error: no test specified\" && exit 1"

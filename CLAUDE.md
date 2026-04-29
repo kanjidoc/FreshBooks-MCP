@@ -80,7 +80,20 @@ npm run build          # Compile TypeScript to dist/
 npm start              # Run the compiled MCP server
 npm run dev            # Run with ts-node for development
 npm run setup          # Interactive setup wizard (OAuth + config for all Claude platforms)
+npm run check-tokens   # Verify all 3 token files in sync, report JWT expiry (no API call)
 ```
+
+### Token persistence safety
+
+OAuth tokens live in **three** files that must stay in lockstep: `.env`, `.mcp.json`, and `~/Library/Application Support/Claude/claude_desktop_config.json`. FreshBooks rotates the refresh token on every refresh call — if any file fails to persist, the chain breaks and full browser-based OAuth recovery is needed.
+
+`src/freshbooks-client.ts` enforces these invariants on every refresh:
+1. **Pre-flight refusal** — before calling `refreshAccessToken()`, verifies all 3 files exist, are writable, and contain both token markers. If any check fails, throws *without* calling the API (no burned refresh token).
+2. **Atomic writes** — writes to `<file>.tmp` then `rename()`s into place; backup saved as `<file>.bak`.
+3. **Post-write verification** — re-reads each file and confirms the new tokens are present.
+4. **Loud failure** — if persistence fails after a successful refresh, prints the new tokens to stderr so they can be manually pasted into the failed files.
+
+`scripts/check-token-health.js` (run via `npm run check-tokens`) is a no-API-cost drift detector. Wire it into cron/launchd to catch silent drift before the chain breaks.
 
 ### Linting and Formatting
 

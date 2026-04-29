@@ -2,6 +2,8 @@ node_modules/
 dist/
 .env
 .mcp.json
+*.bak
+*.tmp
 *.js.map
 *.d.ts.map
 .DS_Store
