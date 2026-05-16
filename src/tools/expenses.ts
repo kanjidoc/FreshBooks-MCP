@@ -156,6 +156,7 @@ export const updateExpense = tool(
     vendor: z.string().optional().describe("Updated vendor name"),
     notes: z.string().optional().describe("Updated notes about the expense"),
     category_id: z.number().int().optional().describe("Updated expense category ID"),
+    date: z.string().optional().describe("Updated expense date in YYYY-MM-DD format"),
     amount: z.object({
       amount: z.string().describe("Expense amount as a string, e.g. '50.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
@@ -166,7 +167,22 @@ export const updateExpense = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      // @freshbooks/api's transformExpenseRequest calls transformDateRequest(expense.date)
+      // unconditionally (unlike every other resource transform), so the SDK throws
+      // "Cannot read properties of 'undefined' (reading 'getFullYear')" if the update
+      // payload omits `date`. Read the existing expense and resend its date when the
+      // caller doesn't supply a new one.
+      const existing = await client.expenses.single(accountId, args.expense_id);
+      if (!existing.ok || !(existing.data as any)?.date) {
+        return {
+          content: [{ type: "text" as const, text: `Could not load existing expense ${args.expense_id} to preserve its date: ${existing.error?.message ?? "no date on returned expense"}` }],
+          isError: true,
+        };
+      }
+
+      const updateData: Record<string, unknown> = {
+        date: args.date ? new Date(args.date) : (existing.data as any).date,
+      };
       if (args.vendor !== undefined) updateData.vendor = args.vendor;
       if (args.notes !== undefined) updateData.notes = args.notes;
       if (args.category_id !== undefined) updateData.categoryId = args.category_id;
