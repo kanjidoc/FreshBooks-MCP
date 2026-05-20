@@ -15,6 +15,25 @@ let fbClient: Client | null = null;
 
 const REFRESH_BUFFER_SECONDS = 10 * 60;
 
+// The FreshBooks SDK's axios instance ships with no timeout and 10 retries on
+// idempotent failures (PUT/GET/DELETE). A hung connection or persistent 5xx —
+// e.g. trying to PATCH the amount of a bank-imported expense — produces an
+// indefinite spinner in MCP clients with no surfaced error. Cap both.
+const REQUEST_TIMEOUT_MS = 30_000;
+const RETRY_OPTIONS = {
+  retries: 2,
+  retryDelay: (retryCount: number) => Math.min(1000 * 2 ** retryCount, 5000),
+  retryCondition: (err: any) => {
+    // A timed-out request has no response; retrying it just multiplies the
+    // 30s wait. Fail fast instead. A persistent 5xx (e.g. updating a
+    // bank-locked field) also won't self-heal, so only retry 429s and genuine
+    // pre-response network errors.
+    if (err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT") return false;
+    if (err?.response?.status === 429) return true;
+    return !err?.response;
+  },
+};
+
 const ENV_FILE = join(__dirname, "..", ".env");
 const MCP_FILE = join(__dirname, "..", ".mcp.json");
 const DESKTOP_FILE = join(
@@ -216,7 +235,12 @@ export function getFreshBooksClient(): Client {
       refreshToken: process.env.FRESHBOOKS_REFRESH_TOKEN,
       clientSecret: process.env.FRESHBOOKS_CLIENT_SECRET,
       redirectUri: process.env.FRESHBOOKS_REDIRECT_URI,
+      retryOptions: RETRY_OPTIONS as any,
     });
+
+    // The SDK exposes its axios instance; set a hard per-request timeout so a
+    // stalled connection fails loudly instead of hanging the MCP tool call.
+    (fbClient as any).axios.defaults.timeout = REQUEST_TIMEOUT_MS;
   }
   return fbClient;
 }
