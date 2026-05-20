@@ -20,17 +20,21 @@ const REFRESH_BUFFER_SECONDS = 10 * 60;
 // e.g. trying to PATCH the amount of a bank-imported expense — produces an
 // indefinite spinner in MCP clients with no surfaced error. Cap both.
 const REQUEST_TIMEOUT_MS = 30_000;
+const IDEMPOTENT_METHODS = ["get", "head", "options", "put", "delete"];
 const RETRY_OPTIONS = {
   retries: 2,
   retryDelay: (retryCount: number) => Math.min(1000 * 2 ** retryCount, 5000),
   retryCondition: (err: any) => {
-    // A timed-out request has no response; retrying it just multiplies the
-    // 30s wait. Fail fast instead. A persistent 5xx (e.g. updating a
-    // bank-locked field) also won't self-heal, so only retry 429s and genuine
-    // pre-response network errors.
+    // A timed-out request has no response; retrying just multiplies the 30s
+    // wait. Fail fast instead.
     if (err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT") return false;
+    // 429 means the request was rejected, not processed — safe to retry.
     if (err?.response?.status === 429) return true;
-    return !err?.response;
+    // A pre-response network error may mean the request landed but the
+    // response was lost. Only retry idempotent methods — retrying a POST
+    // (e.g. create_expense) risks creating a duplicate record.
+    const method = String(err?.config?.method ?? "").toLowerCase();
+    return !err?.response && IDEMPOTENT_METHODS.includes(method);
   },
 };
 
