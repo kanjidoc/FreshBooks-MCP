@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listOtherIncomes = tool(
   "freshbooks_list_other_incomes",
@@ -99,7 +100,7 @@ export const createOtherIncome = tool(
       const incomeData: Record<string, unknown> = {
         source: args.source,
         amount: { amount: args.amount.amount, code: args.amount.code },
-        date: new Date(args.date),
+        date: parseLocalDate(args.date),
       };
       if (args.category_name !== undefined) incomeData.categoryName = args.category_name;
       if (args.note !== undefined) incomeData.note = args.note;

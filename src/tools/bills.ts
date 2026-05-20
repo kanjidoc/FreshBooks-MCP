@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listBills = tool(
   "freshbooks_list_bills",
@@ -107,7 +108,7 @@ export const createBill = tool(
           category: line.category,
           quantity: line.quantity,
         })),
-        dueDate: new Date(args.due_date),
+        dueDate: parseLocalDate(args.due_date),
         currencyCode: args.currency_code,
       };
 

@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listBillPayments = tool(
   "freshbooks_list_bill_payments",
@@ -94,7 +95,7 @@ export const createBillPayment = tool(
       const paymentData: Record<string, unknown> = {
         billId: args.bill_id,
         amount: { amount: args.amount.amount, code: args.amount.code },
-        paidDate: new Date(args.paid_date),
+        paidDate: parseLocalDate(args.paid_date),
       };
       if (args.type !== undefined) paymentData.type = args.type;
 
@@ -138,7 +139,7 @@ export const updateBillPayment = tool(
 
       const updateData: Record<string, unknown> = {};
       if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
-      if (args.paid_date !== undefined) updateData.paidDate = new Date(args.paid_date);
+      if (args.paid_date !== undefined) updateData.paidDate = parseLocalDate(args.paid_date);
       if (args.type !== undefined) updateData.type = args.type;
 
       const response = await client.billPayments.update(updateData as any, accountId, Number(args.bill_payment_id));

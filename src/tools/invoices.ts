@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listInvoices = tool(
   "freshbooks_list_invoices",
@@ -117,7 +118,7 @@ export const createInvoice = tool(
 
       const invoiceData = {
         customerId: args.customer_id,
-        createDate: new Date(args.create_date),
+        createDate: parseLocalDate(args.create_date),
         dueOffsetDays: args.due_offset_days,
         lines: args.lines.map((line) => ({
           name: line.name,

@@ -2,6 +2,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listCreditNotes = tool(
   "freshbooks_list_credit_notes",
@@ -124,7 +125,7 @@ export const createCreditNote = tool(
         clientid: args.client_id,
         lines,
       };
-      if (args.create_date) creditNoteData.createDate = args.create_date;
+      if (args.create_date) creditNoteData.createDate = parseLocalDate(args.create_date);
       if (args.notes) creditNoteData.notes = args.notes;
 
       const response = await client.creditNotes.create(creditNoteData as any, accountId);
