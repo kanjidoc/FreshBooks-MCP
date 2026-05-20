@@ -89,7 +89,7 @@ export const createOtherIncome = tool(
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Income amount as a Money object"),
     date: z.string().describe("Income date in YYYY-MM-DD format"),
-    category_name: z.string().optional().describe("Income category name, e.g. 'Other Income'"),
+    category_name: z.string().describe("Income category name, e.g. 'Other Income' (required by FreshBooks)"),
     note: z.string().optional().describe("Optional note about this income"),
   },
   async (args) => {
@@ -101,8 +101,8 @@ export const createOtherIncome = tool(
         source: args.source,
         amount: { amount: args.amount.amount, code: args.amount.code },
         date: parseLocalDate(args.date),
+        categoryName: args.category_name,
       };
-      if (args.category_name !== undefined) incomeData.categoryName = args.category_name;
       if (args.note !== undefined) incomeData.note = args.note;
 
       const response = await client.otherIncomes.create(incomeData as any, accountId);
