@@ -117,7 +117,10 @@ export const createExpense = tool(
       const expenseData: Record<string, unknown> = {
         categoryId: args.category_id,
         staffId: args.staff_id,
-        date: new Date(args.date),
+        // `new Date("YYYY-MM-DD")` parses as UTC midnight, which is the
+        // previous calendar day in any negative-offset timezone. Append a time
+        // so it parses as local midnight and the SDK serializes the right day.
+        date: new Date(`${args.date} 00:00:00`),
         amount: { amount: args.amount.amount, code: args.amount.code },
       };
       if (args.vendor) expenseData.vendor = args.vendor;
@@ -181,7 +184,10 @@ export const updateExpense = tool(
       }
 
       const updateData: Record<string, unknown> = {
-        date: args.date ? new Date(args.date) : (existing.data as any).date,
+        // Append a time so a "YYYY-MM-DD" arg parses as local (not UTC)
+        // midnight — see create_expense. The preserved `existing.data.date`
+        // is already a Date from the SDK and needs no adjustment.
+        date: args.date ? new Date(`${args.date} 00:00:00`) : (existing.data as any).date,
       };
       if (args.vendor !== undefined) updateData.vendor = args.vendor;
       if (args.notes !== undefined) updateData.notes = args.notes;
