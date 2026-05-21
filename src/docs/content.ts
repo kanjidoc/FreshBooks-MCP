@@ -145,6 +145,11 @@ non-functional — blocked by bugs in @freshbooks/api@4.1.0 (the latest SDK rele
 that serialize the request incorrectly. The defect is upstream, not in this server.
 The list/get tools for credit notes and journal entries work normally.
 
+**A new service is always billable.** \`create_service\` cannot set a billable
+flag — the FreshBooks SDK's transformServiceRequest serializes only the service
+name, so any billable value would be silently dropped. Change it in the
+FreshBooks web UI if a service must be non-billable.
+
 **Build errors after editing a tool.** Payloads are typed against SDK model
 interfaces — a compile error usually means a wrong property name. Fix the name;
 do not cast \`as any\`.
