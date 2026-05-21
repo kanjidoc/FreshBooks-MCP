@@ -89,8 +89,11 @@ export const createBill = tool(
     vendor_id: z.number().int().describe("The bill vendor ID this bill belongs to"),
     lines: z.array(z.object({
       description: z.string().describe("Line item description"),
-      amount: z.string().describe("Line item amount as a string, e.g. '100.00'"),
-      category: z.string().optional().describe("Expense category for the line item"),
+      unit_cost: z.object({
+        amount: z.string().describe("Unit cost as a string, e.g. '100.00'"),
+        code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+      }).describe("Unit cost as a Money object"),
+      category_id: z.number().int().optional().describe("Expense category ID for the line (from freshbooks_list_expense_categories)"),
       quantity: z.number().default(1).describe("Quantity of the line item"),
     })).min(1).describe("Bill line items — at least one is required"),
     due_date: z.string().describe("Bill due date in YYYY-MM-DD format"),
@@ -101,12 +104,16 @@ export const createBill = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
+      // The SDK's transformBillLinesParsedRequest (BillLines.js) reads only
+      // `unitCost` and `categoryId` on each line — `amount`/`category` exist on
+      // the BillLines interface for the response shape but are ignored on the
+      // request, so sending them silently drops the line's value and category.
       const billData: Bills = {
         vendorId: args.vendor_id,
         lines: args.lines.map((line) => ({
           description: line.description,
-          amount: { amount: line.amount, code: args.currency_code },
-          category: line.category,
+          unitCost: { amount: line.unit_cost.amount, code: line.unit_cost.code },
+          categoryId: line.category_id,
           quantity: line.quantity,
         })),
         dueDate: parseLocalDate(args.due_date),

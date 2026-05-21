@@ -2,7 +2,7 @@
 
 **Audit date:** 2026-05-21
 **Audited build:** commit `37f2748` (running `dist/index.js`, verified live)
-**Account used:** `615qVy` / business `13334273` (`tony@emergencydoconcall.com`)
+**Account used:** a private FreshBooks test account (account/business identifiers redacted for the public repo)
 **Scope:** all 74 MCP tools — behavioral (live API calls) + static (source vs. `@freshbooks/api@4.1.0` SDK)
 **Method:** `/systematic-debugging` — every bug below was reproduced and root-caused before a fix was written. No symptom patches.
 
@@ -69,7 +69,7 @@ enabling defect.
    `query-helpers.ts`, `date-helpers.ts`, `server.ts`, and cross-checked every SDK call
    against `node_modules/@freshbooks/api/dist/APIClient.js` and the per-model
    `transform*Request` functions in `dist/models/`.
-2. **Behavioral pass.** Called all 74 tools live against account `615qVy`. Read-only tools
+2. **Behavioral pass.** Called all 74 tools live against the test account. Read-only tools
    run as-is; write tools created real `ZZZ_MCP_AUDIT`-prefixed records that were then
    deleted (reverted). Reverting confirmed via `visState: 1`.
 3. **Root-cause pass.** For every failure, traced the bad value back through the tool → SDK
@@ -594,7 +594,7 @@ After rebuilding and restarting, confirm each fix with a live call (use
 | Bug | Verification |
 |---|---|
 | #1 | `create_item` → returns an item with an `id`; then `update_item` it. (No `delete_item` tool — clean up in the FreshBooks UI.) |
-| #2 | `create_credit_note` (client `1112937`, one line) → returns a credit note; `get`, `update`, `delete` it. |
+| #2 | `create_credit_note` (any active client, one line) → returns a credit note; `get`, `update`, `delete` it. |
 | #3 | `report_payments_collected` `2024-01-01 → 2026-05-21` → response `startDate`/`endDate` echo the **passed** range, not today; payments appear. |
 | #4 | `report_profit_loss` same range → non-zero income/expenses; `downloadToken` JWT decodes to the passed dates. |
 | #5 | `report_tax_summary` same range → `totalInvoiced` reflects real history. |
