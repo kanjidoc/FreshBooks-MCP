@@ -18,6 +18,7 @@ FreshBooks-MCP is a Model Context Protocol (MCP) server that exposes FreshBooks 
 |---|---|
 | `@freshbooks/api` | FreshBooks API client — OAuth, resources, query builders, types, retry |
 | `@anthropic-ai/claude-agent-sdk` | MCP tool definitions via `tool()` and `createSdkMcpServer` |
+| `@modelcontextprotocol/sdk` | `StdioServerTransport` — serves the MCP server over stdio (`src/index.ts`) |
 | `zod` | Input schema validation for tool parameters |
 | `big.js` | Decimal arithmetic for monetary amounts (FreshBooks returns amounts as strings) |
 | `dotenv` | Load environment variables from `.env` |

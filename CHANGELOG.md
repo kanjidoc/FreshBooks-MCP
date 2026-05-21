@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-05-21
+
+### Fixed
+
+- **The MCP stdio stream is no longer polluted by a dotenv banner.** dotenv v17
+  prints an `injected env (N) from .env` banner to stdout on every successful
+  load. Because the server speaks the MCP JSON-RPC protocol over stdout, that
+  banner was a non-JSON line injected into the protocol stream — tolerated by
+  lenient clients but a latent corruption bug, and it also broke the `--json`
+  output mode of `npm run check-tokens` / `refresh-tokens`. `src/load-env.ts`
+  now passes `quiet: true`, and a regression test (`test/load-env.test.ts`)
+  guards the flag.
+- **`@modelcontextprotocol/sdk` is now a declared dependency.** `src/index.ts`
+  imports `@modelcontextprotocol/sdk/server/stdio.js` directly, but the package
+  was only present transitively (via `@anthropic-ai/claude-agent-sdk`). The
+  build worked solely because npm flattens `node_modules` — a "phantom
+  dependency" that would break under a strict package manager (pnpm, Yarn PnP)
+  or if the Agent SDK changed its dependency tree. It is now listed explicitly.
+- The MCP server version reported in the `initialize` handshake was hardcoded
+  to `2.0.0` and had silently drifted from the package version. `src/server.ts`
+  now derives it from `package.json`, so the two can never diverge again.
+
+### Security
+
+- Resolved all 8 advisories reported by `npm audit` (2 high, 6 moderate) by
+  updating transitively-pinned dependencies to patched releases. No declared
+  dependency range changed; `npm audit` now reports zero vulnerabilities.
+
 ## [2.0.4] - 2026-05-21
 
 ### Fixed
