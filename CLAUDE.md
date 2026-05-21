@@ -28,10 +28,18 @@ FreshBooks-MCP is a Model Context Protocol (MCP) server that exposes FreshBooks 
 FreshBooks-MCP/
 ├── src/
 │   ├── index.ts                # Entry point — starts the MCP server via stdio transport
-│   ├── server.ts               # createSdkMcpServer setup, bundles all 74 tools
-│   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars
+│   ├── server.ts               # createSdkMcpServer setup; serves the tool list from tool-registry.ts
+│   ├── tool-registry.ts        # The single tool array; wraps each handler with automatic token refresh
+│   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars; OAuth token persistence/refresh
+│   ├── config-paths.ts         # OS-aware path to the Claude Desktop config
 │   ├── query-helpers.ts        # Shared utility to build query builders from tool args
-│   ├── tools/                  # One file per FreshBooks resource domain (17 files)
+│   ├── date-helpers.ts         # parseLocalDate() — avoids a UTC off-by-one on date-only fields
+│   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
+│   │   ├── content.ts          # Static help topic content (overview, architecture, etc.)
+│   │   └── render-tools.ts     # Renders the live tool inventory from the registry
+│   ├── tools/                  # Token-refresh wrapper, freshbooks_help, + one file per resource domain (17 files)
+│   │   ├── with-refresh.ts     # withTokenRefresh() — wraps a handler with pre-call token refresh
+│   │   ├── help.ts             # The freshbooks_help self-documentation tool (1 tool)
 │   │   ├── invoices.ts         # Invoice CRUD + delete (5 tools)
 │   │   ├── clients.ts          # Client CRUD + delete (5 tools)
 │   │   ├── expenses.ts         # Expense CRUD + delete (5 tools)
@@ -49,13 +57,13 @@ FreshBooks-MCP/
 │   │   ├── expense-categories.ts # Expense category list/get (2 read-only tools)
 │   │   ├── journal-entries.ts  # Journal entry create + account/detail listings (3 tools)
 │   │   └── reports.ts          # Profit & Loss, Payments Collected, Tax Summary (3 tools)
-│   └── types.ts                # Shared TypeScript types and interfaces
 ├── package.json
 ├── tsconfig.json
 ├── .gitignore
 ├── .env.example                # Template for required environment variables
 ├── scripts/
-│   └── setup.ts                # Interactive setup wizard (OAuth, ID discovery, config)
+│   ├── setup.ts                # Interactive setup wizard (OAuth, ID discovery, config)
+│   └── refresh-tokens.ts       # CLI to refresh the OAuth token (or audit token files with --check-only)
 ├── README.md
 ├── CLAUDE.md                   # This file
 ├── CLAUDE_PROJECT_INSTRUCTIONS.md  # System prompt + install guide for Claude projects
@@ -80,20 +88,23 @@ npm run build          # Compile TypeScript to dist/
 npm start              # Run the compiled MCP server
 npm run dev            # Run with ts-node for development
 npm run setup          # Interactive setup wizard (OAuth + config for all Claude platforms)
-npm run check-tokens   # Verify all 3 token files in sync, report JWT expiry (no API call)
+npm run refresh-tokens # Refresh the OAuth token if it is near expiry
+npm run check-tokens   # Audit token files + report JWT expiry (refresh-tokens --check-only, no API call)
 ```
 
 ### Token persistence safety
 
-OAuth tokens live in **three** files that must stay in lockstep: `.env`, `.mcp.json`, and `~/Library/Application Support/Claude/claude_desktop_config.json`. FreshBooks rotates the refresh token on every refresh call — if any file fails to persist, the chain breaks and full browser-based OAuth recovery is needed.
+OAuth tokens can live in up to **three** files. `.env` is the **required** canonical store. `.mcp.json` and the Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`) are **optional** mirrors — kept in sync only when they exist, so a fresh clone works on any OS and on installs that never use Claude Desktop. FreshBooks rotates the refresh token on every refresh call — if a present file fails to persist, the chain breaks and full browser-based OAuth recovery is needed.
 
 `src/freshbooks-client.ts` enforces these invariants on every refresh:
-1. **Pre-flight refusal** — before calling `refreshAccessToken()`, verifies all 3 files exist, are writable, and contain both token markers. If any check fails, throws *without* calling the API (no burned refresh token).
+1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightTokenFiles()` verifies each file exists, is writable, and contains both token markers. An absent *optional* mirror is skipped (not a failure); an absent *required* `.env`, or any present-but-broken file, throws *without* calling the API (no burned refresh token). It returns the present, valid files as the persist targets.
 2. **Atomic writes** — writes to `<file>.tmp` then `rename()`s into place; backup saved as `<file>.bak`.
 3. **Post-write verification** — re-reads each file and confirms the new tokens are present.
 4. **Loud failure** — if persistence fails after a successful refresh, prints the new tokens to stderr so they can be manually pasted into the failed files.
 
-`scripts/check-token-health.js` (run via `npm run check-tokens`) is a no-API-cost drift detector. Wire it into cron/launchd to catch silent drift before the chain breaks.
+Tokens refresh **automatically**: once at server startup (`ensureFreshToken()` in `index.ts`) and proactively before every tool call. The pre-call refresh is `refreshIfNeeded()` — a cheap no-op JWT-expiry check unless the token is within 10 minutes of expiring — wired centrally in `src/tool-registry.ts` via `withTokenRefresh`. A single-flight guard ensures concurrent tool calls share one refresh rather than each rotating the refresh token.
+
+`scripts/refresh-tokens.ts` is the manual CLI: `npm run refresh-tokens` refreshes if needed, and `npm run check-tokens` (i.e. `refresh-tokens --check-only`) is a no-API-cost drift detector. Wire `--check-only` into cron/launchd to catch silent drift before the chain breaks.
 
 ### Linting and Formatting
 
@@ -105,7 +116,7 @@ npm run format         # Prettier
 ### Testing
 
 ```bash
-npm test               # Run test suite
+npm test               # Runs the Vitest test suite
 ```
 
 ## Environment Variables
@@ -331,11 +342,11 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-All 74 tools are imported in `src/server.ts` and passed to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/server.ts`.
+All 75 tools are imported and assembled into a single array in `src/tool-registry.ts`, which wraps each handler with automatic token refresh. `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts`.
 
 ### Tool naming convention
 
-All 74 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+All 75 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
 
 **Accounting resources (accountId):**
 - Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
@@ -352,6 +363,7 @@ All 74 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 - Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+- Self-documentation: `freshbooks_help` — returns embedded docs about this project (architecture, conventions, the live tool inventory, how to extend); no FreshBooks API call
 
 **Project resources (businessId):**
 - Time Entries: `freshbooks_list_time_entries`, `freshbooks_get_time_entry`, `freshbooks_create_time_entry`, `freshbooks_update_time_entry`, `freshbooks_delete_time_entry`
@@ -419,10 +431,10 @@ This project is designed so any FreshBooks user can use it:
 ### File Organization
 
 - One tool file per FreshBooks resource domain (invoices, clients, expenses, etc.)
-- `src/server.ts` imports all tools and bundles them into the MCP server
+- `src/tool-registry.ts` imports all tools into a single array and wraps each handler with automatic token refresh
+- `src/server.ts` serves that tool list via `createSdkMcpServer`
 - `src/freshbooks-client.ts` is the single place that initializes the FreshBooks `Client`
 - `src/query-helpers.ts` provides `buildQueryBuilders()` to convert tool args to SDK query builders
-- Shared types go in `src/types.ts`
 
 ### Git Conventions
 
@@ -443,7 +455,7 @@ This project is designed so any FreshBooks user can use it:
 ## Notes for AI Assistants
 
 - Always read existing source files before modifying them
-- When adding a new tool: define with `tool()` in `src/tools/<resource>.ts`, then add to the tools array in `src/server.ts`
+- When adding a new tool: define with `tool()` in `src/tools/<resource>.ts`, then add to the tools array in `src/tool-registry.ts`
 - Use Zod `.describe()` on every schema field so Claude understands parameters
 - Use `.default()` on optional Zod fields with sensible defaults
 - Mark read-only tools (list, get) with `{ annotations: { readOnlyHint: true } }`

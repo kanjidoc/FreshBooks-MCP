@@ -1,8 +1,25 @@
 {
   "name": "freshbooks-mcp",
-  "version": "1.0.0",
-  "description": "MCP server exposing FreshBooks accounting tools for AI assistants",
+  "version": "2.0.0",
+  "description": "MCP server exposing 75 FreshBooks accounting tools for AI assistants",
   "main": "dist/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kanjidoc/FreshBooks-MCP.git"
+  },
+  "homepage": "https://github.com/kanjidoc/FreshBooks-MCP#readme",
+  "bugs": {
+    "url": "https://github.com/kanjidoc/FreshBooks-MCP/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
