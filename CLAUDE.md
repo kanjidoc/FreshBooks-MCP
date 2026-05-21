@@ -64,9 +64,11 @@ FreshBooks-MCP/
 ├── scripts/
 │   ├── setup.ts                # Interactive setup wizard (OAuth, ID discovery, config)
 │   └── refresh-tokens.ts       # CLI to refresh the OAuth token (or audit token files with --check-only)
-├── README.md
+├── README.md                   # Project landing page (what it does, architecture, tool list)
+├── SETUP.md                    # Beginner setup walkthrough — also a script Claude can follow
 ├── CLAUDE.md                   # This file
-├── CLAUDE_PROJECT_INSTRUCTIONS.md  # System prompt + install guide for Claude projects
+├── docs/
+│   └── claude-project-system-prompt.md  # Optional system prompt for Claude Projects users
 └── LICENSE
 ```
 
@@ -417,7 +419,7 @@ This project is designed so any FreshBooks user can use it:
 - All credentials are environment-variable driven — no hardcoded account IDs or tokens
 - `.env.example` documents every required variable with descriptions
 - Clone → `npm install` → configure `.env` → run
-- README should include OAuth setup instructions for obtaining tokens from the FreshBooks Developer Portal
+- `SETUP.md` is the user-facing install walkthrough — keep it accurate when the OAuth flow, the setup wizard, or the platform configs change
 
 ## Key Conventions
 
