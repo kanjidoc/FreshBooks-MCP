@@ -80,6 +80,7 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 | `src/tool-registry.ts` | The single list of all tools; wraps each handler with automatic token refresh |
 | `src/freshbooks-client.ts` | FreshBooks `Client` singleton + OAuth token persistence and refresh |
 | `src/config-paths.ts` | OS-aware path resolution for the Claude Desktop config |
+| `src/mcp-config.ts` | Builds the MCP server config entry for Claude Desktop and Claude Code |
 | `src/query-helpers.ts` | Converts tool arguments into FreshBooks SDK query builders (pagination, search, sort, includes) |
 | `src/date-helpers.ts` | Local-time parsing for date-only accounting fields |
 | `src/docs/` | Embedded documentation served by the `freshbooks_help` tool |

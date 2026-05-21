@@ -5,6 +5,28 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.3] - 2026-05-21
+
+### Added
+
+- The setup wizard (`npm run setup`) now offers to install the server into
+  **Claude Code**, not just Claude Desktop. When the `claude` CLI is present it
+  registers the server at user scope via `claude mcp add-json`, so FreshBooks is
+  available in every Claude Code project. Re-running setup is idempotent.
+
+### Fixed
+
+- Corrected the Claude Code configuration guidance. MCP servers belong in
+  `~/.claude.json` (user scope) or a project `.mcp.json` — not in an `mcpServers`
+  block in `~/.claude/settings.json`, which the wizard's printed fallback and
+  `SETUP.md` had previously instructed. That wrong path would silently fail to
+  register the server.
+
+### Changed
+
+- Extracted the MCP server-config builders into `src/mcp-config.ts`, now covered
+  by unit tests.
+
 ## [2.0.2] - 2026-05-21
 
 ### Changed

@@ -32,6 +32,7 @@ FreshBooks-MCP/
 │   ├── tool-registry.ts        # The single tool array; wraps each handler with automatic token refresh
 │   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars; OAuth token persistence/refresh
 │   ├── config-paths.ts         # OS-aware path to the Claude Desktop config
+│   ├── mcp-config.ts           # Builds the MCP server entry for Claude Desktop / Code config
 │   ├── query-helpers.ts        # Shared utility to build query builders from tool args
 │   ├── date-helpers.ts         # parseLocalDate() — avoids a UTC off-by-one on date-only fields
 │   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
