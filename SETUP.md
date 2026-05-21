@@ -178,9 +178,10 @@ The wizard walks you through, in order:
    bar and paste it back into the wizard.
 3. **Account detection** — the wizard finds your Account ID and Business ID for you.
 4. **Saving and building** — it writes your settings and compiles the server.
-5. **Claude Desktop install** — it asks if it should add the server to Claude
-   Desktop automatically. **(Desktop)** answer **yes**. **(Code)** answer is up to
-   you — see Step 7.
+5. **Connecting to Claude** — the wizard offers to install the server into
+   **Claude Desktop**, and (if the `claude` command-line tool is present) into
+   **Claude Code** as well. Say **yes** to whichever Claude you use — saying yes
+   to both is fine. If you skip both, it prints the configuration to add by hand.
 
 - ✅ The wizard ends with a line that says **`DONE!`**.
 - ⚠️ Something went wrong — see the Troubleshooting table at the bottom of this guide.
@@ -194,18 +195,20 @@ The wizard walks you through, in order:
 
 ## Step 7 — Connect the server to Claude
 
-**(Desktop)** If you answered **yes** to the auto-install in Step 6, this is already
-done — **skip to Step 8.** If you answered no, see *Manual Claude Desktop setup* in
-the Appendix.
+If you said **yes** to the install for your Claude in Step 6, the connection is
+already made — **skip to Step 8.** Otherwise:
 
-**(Code)** The wizard created a file called `.mcp.json` inside the project folder.
-Claude Code reads that file automatically when the project folder is open. So:
+**(Desktop)** See *Manual Claude Desktop setup* in the Appendix.
+
+**(Code)** The wizard always writes a file called `.mcp.json` inside the project
+folder. Claude Code reads it automatically when that folder is your open project:
 
 1. Open the project folder (the one you installed into — it contains a file named
    `.mcp.json`) as your project/workspace in Claude Code.
 2. Claude Code will ask whether to enable the **"freshbooks"** MCP server — say yes.
 
-To use FreshBooks from *any* Claude Code project (not just this folder), see *Manual
+That makes FreshBooks available inside this folder. To use it from *any* Claude
+Code project, let the wizard's Claude Code install do it (Step 6), or see *Manual
 Claude Code setup* in the Appendix.
 
 ---
@@ -333,10 +336,19 @@ If you skipped the wizard's auto-install, add the server to Claude Desktop yours
 
 ### Manual Claude Code setup
 
-The wizard writes a project-scoped `.mcp.json` (used when the FreshBooks-MCP folder
-is your open project). To make FreshBooks available in **every** Claude Code
-project, paste the same `"mcpServers"` block as above into your global Claude Code
-settings at `~/.claude/settings.json`, then restart your Claude Code session.
+The wizard always writes a project-scoped `.mcp.json` into the project folder —
+that's the file Claude Code reads when this folder is your open project.
+
+To make FreshBooks available in **every** Claude Code project, register it at
+"user" scope with the `claude` command-line tool:
+
+```bash
+claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["/absolute/path/to/FreshBooks-MCP/dist/index.js"],"env":{ ...your seven FRESHBOOKS_ values... }}' --scope user
+```
+
+The setup wizard offers to run this for you in Step 6 whenever the `claude` tool
+is installed. (Claude Code stores user-scoped servers in `~/.claude.json` — note
+that an `mcpServers` block in `~/.claude/settings.json` does **not** work.)
 
 ### Setting up without the wizard
 
@@ -371,8 +383,9 @@ If you can't run `npm run setup`, you can configure everything by hand:
 
 ### Other ways to use the server
 
-- **claude.ai/code (web):** add the `"mcpServers"` block to `.claude/settings.json`
-  in your repository and push it, so the web environment can read it.
+- **claude.ai/code (web):** the web environment reads a project-scoped `.mcp.json`,
+  but that file holds your FreshBooks tokens and must not be committed to a
+  repository — so this server is best run locally, via Claude Desktop or Claude Code.
 - **Claude Agent SDK (for developers):** import `freshbooksServer` from
   `src/server.ts` and pass it to `query()` as an MCP server. See
   [README.md](README.md) for a code example.

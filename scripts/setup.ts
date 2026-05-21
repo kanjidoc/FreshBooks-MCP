@@ -6,7 +6,7 @@
  * 2. Completing the OAuth2 flow (browser-based, paste-the-URL)
  * 3. Fetching your Account ID and Business ID
  * 4. Writing everything to .env
- * 5. Printing MCP config for Claude Desktop, Claude Code, and claude.ai/code
+ * 5. Building the server and installing it into Claude Desktop and/or Claude Code
  *
  * Usage:
  *   npx ts-node scripts/setup.ts
@@ -17,6 +17,7 @@ import * as path from "path";
 import * as readline from "readline";
 import { Client } from "@freshbooks/api";
 import { resolveDesktopConfigPath } from "../src/config-paths";
+import { buildClaudeServerConfig, buildClaudeCodeServerJson } from "../src/mcp-config";
 
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const MCP_JSON_PATH = path.resolve(__dirname, "..", ".mcp.json");
@@ -61,18 +62,10 @@ function writeEnvFile(vars: Record<string, string>) {
   fs.writeFileSync(ENV_PATH, lines + "\n");
 }
 
-function buildFreshbooksServerConfig(envVars: Record<string, string>, projectDir: string) {
-  return {
-    command: "node",
-    args: [path.join(projectDir, "dist", "index.js")],
-    env: envVars,
-  };
-}
-
 function writeMcpJson(envVars: Record<string, string>, projectDir: string) {
   const config = {
     mcpServers: {
-      freshbooks: buildFreshbooksServerConfig(envVars, projectDir),
+      freshbooks: buildClaudeServerConfig(envVars, projectDir),
     },
   };
   fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(config, null, 2) + "\n");
@@ -91,11 +84,48 @@ function upsertClaudeDesktopConfig(envVars: Record<string, string>, projectDir: 
       }
     }
     existing.mcpServers = existing.mcpServers ?? {};
-    existing.mcpServers.freshbooks = buildFreshbooksServerConfig(envVars, projectDir);
+    existing.mcpServers.freshbooks = buildClaudeServerConfig(envVars, projectDir);
     fs.writeFileSync(CLAUDE_DESKTOP_CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
     return true;
   } catch (err: any) {
     console.log(`   Warning: could not write Claude Desktop config (${err.message}).`);
+    return false;
+  }
+}
+
+/** True if the `claude` CLI (Claude Code) is installed and on PATH. */
+function isClaudeCliAvailable(): boolean {
+  const { execFileSync } = require("child_process");
+  try {
+    execFileSync("claude", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register the server with Claude Code at user scope (available in every
+ * project) via the `claude` CLI. Re-running setup is idempotent: any existing
+ * entry is removed first. Returns whether registration succeeded.
+ */
+function installIntoClaudeCode(envVars: Record<string, string>, projectDir: string): boolean {
+  const { execFileSync } = require("child_process");
+  const serverJson = JSON.stringify(buildClaudeCodeServerJson(envVars, projectDir));
+  try {
+    try {
+      execFileSync("claude", ["mcp", "remove", "freshbooks", "--scope", "user"], {
+        stdio: "ignore",
+      });
+    } catch {
+      // Not previously installed — nothing to remove.
+    }
+    execFileSync("claude", ["mcp", "add-json", "freshbooks", serverJson, "--scope", "user"], {
+      stdio: "ignore",
+    });
+    return true;
+  } catch (err: any) {
+    console.log(`   Warning: could not register with Claude Code (${err.message}).`);
     return false;
   }
 }
@@ -132,26 +162,15 @@ ${envBlock}
 }
 
 
---- CLAUDE CODE (CLI / IDE) ---
-File: ~/.claude/settings.json  (global)
-  or: <project>/.claude/settings.json  (per-project)
+--- CLAUDE CODE ---
+A project-scoped config file (.mcp.json) has already been written to this
+project folder. Open this folder as your project in Claude Code and enable
+the "freshbooks" server when prompted.
 
-{
-  "mcpServers": {
-    "freshbooks": {
-      "command": "node",
-      "args": ["${distPath}"],
-      "env": {
-${envBlock}
-      }
-    }
-  }
-}
+To make FreshBooks available in EVERY Claude Code project, install the
+"claude" CLI and run:
 
-
---- CLAUDE.AI/CODE (WEB) ---
-Same as Claude Code — add to your project's .claude/settings.json
-and push to the repo so the web environment picks it up.
+  claude mcp add-json freshbooks '${JSON.stringify(buildClaudeCodeServerJson(envVars, projectDir))}' --scope user
 
 
 ${"=".repeat(70)}
@@ -318,34 +337,50 @@ STEP 5: Building the MCP server
   }
 
   console.log(`
-STEP 6: Installing into Claude Desktop
-----------------------------------------
+STEP 6: Connecting to Claude
+------------------------------
 `);
 
-  const installAnswer = (
-    await ask(`   Add the FreshBooks MCP server to Claude Desktop automatically? [Y/n]: `)
-  ).toLowerCase();
-  const installed =
-    installAnswer === "" || installAnswer === "y" || installAnswer === "yes"
-      ? upsertClaudeDesktopConfig(envVars, projectDir)
-      : false;
+  const isYes = (answer: string): boolean => {
+    const a = answer.trim().toLowerCase();
+    return a === "" || a === "y" || a === "yes";
+  };
 
-  if (installed) {
-    console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
-  } else {
-    console.log(`   Skipped. You can copy the config block below manually instead.\n`);
+  let desktopInstalled = false;
+  if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "))) {
+    desktopInstalled = upsertClaudeDesktopConfig(envVars, projectDir);
+    if (desktopInstalled) {
+      console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
+    }
+  }
+
+  let codeInstalled = false;
+  if (isClaudeCliAvailable()) {
+    if (isYes(await ask("   Add the server to Claude Code, for all your projects? [Y/n]: "))) {
+      codeInstalled = installIntoClaudeCode(envVars, projectDir);
+      if (codeInstalled) {
+        console.log(`   Claude Code: registered the "freshbooks" server at user scope.\n`);
+      }
+    }
+  }
+
+  if (!desktopInstalled && !codeInstalled) {
+    console.log(`   No automatic install was done. Add the server by hand using the
+   configuration below.\n`);
     printMcpConfig(envVars, projectDir);
   }
 
   console.log(`
 DONE! Next steps:
-  1. Quit and reopen Claude Desktop so it picks up the new MCP server
-  2. Try asking: "List my recent invoices"
+  1. Fully quit and reopen Claude (Desktop: quit the app entirely; Code: start
+     a new session) so it picks up the new MCP server.
+  2. Try asking: "List my recent FreshBooks invoices"
 
-Tokens will auto-refresh on every server start, so you shouldn't have to
-re-run this setup again unless the refresh token is revoked (e.g. the app
-is deleted from the FreshBooks Developer Portal).
+Tokens auto-refresh on every server start, so you shouldn't have to run this
+setup again unless the refresh token is revoked (e.g. the FreshBooks Developer
+app is deleted).
 
+The full walkthrough and troubleshooting are in SETUP.md.
 `);
 }
 
