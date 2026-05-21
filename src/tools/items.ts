@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Item from "@freshbooks/api/dist/models/Item";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -97,16 +98,18 @@ export const createItem = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const itemData: Record<string, unknown> = {
+      const itemData: Partial<Item> = {
         name: args.name,
         unitCost: { amount: args.unit_cost.amount, code: args.unit_cost.code },
       };
       if (args.description !== undefined) itemData.description = args.description;
-      if (args.inventory !== undefined) itemData.inventory = args.inventory;
+      // SDK's Item.inventory is typed as a string; the tool exposes it as a number.
+      if (args.inventory !== undefined) itemData.inventory = String(args.inventory);
       if (args.tax1 !== undefined) itemData.tax1 = args.tax1;
       if (args.tax2 !== undefined) itemData.tax2 = args.tax2;
 
-      const response = await client.items.create(itemData as any, accountId);
+      // SDK signature is items.create(accountId, data) — accountId first (Bug #1).
+      const response = await client.items.create(accountId, itemData);
 
       if (!response.ok) {
         return {
@@ -147,11 +150,12 @@ export const updateItem = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: Partial<Item> = {};
       if (args.name !== undefined) updateData.name = args.name;
       if (args.description !== undefined) updateData.description = args.description;
       if (args.unit_cost !== undefined) updateData.unitCost = { amount: args.unit_cost.amount, code: args.unit_cost.code };
-      if (args.inventory !== undefined) updateData.inventory = args.inventory;
+      // SDK's Item.inventory is typed as a string; the tool exposes it as a number.
+      if (args.inventory !== undefined) updateData.inventory = String(args.inventory);
       if (args.tax1 !== undefined) updateData.tax1 = args.tax1;
       if (args.tax2 !== undefined) updateData.tax2 = args.tax2;
 

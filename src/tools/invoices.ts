@@ -1,5 +1,7 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Invoice from "@freshbooks/api/dist/models/Invoices";
+import Line from "@freshbooks/api/dist/models/Line";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 import { parseLocalDate } from "../date-helpers";
@@ -107,7 +109,7 @@ export const createInvoice = tool(
         amount: z.string().describe("Unit cost as a string, e.g. '100.00'"),
         code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
       }).describe("Unit cost as a Money object"),
-    })).describe("Invoice line items"),
+    })).min(1).describe("Invoice line items (at least one required)"),
     notes: z.string().optional().describe("Notes to include on the invoice"),
     po_number: z.string().optional().describe("Purchase order number"),
   },
@@ -116,11 +118,12 @@ export const createInvoice = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const invoiceData = {
+      // Typed against the SDK's Invoice model so wrong property names fail the build.
+      const invoiceData: Partial<Invoice> = {
         customerId: args.customer_id,
         createDate: parseLocalDate(args.create_date),
         dueOffsetDays: args.due_offset_days,
-        lines: args.lines.map((line) => ({
+        lines: args.lines.map((line): Line => ({
           name: line.name,
           description: line.description,
           qty: line.qty,
@@ -130,7 +133,7 @@ export const createInvoice = tool(
         poNumber: args.po_number,
       };
 
-      const response = await client.invoices.create(invoiceData as any, accountId);
+      const response = await client.invoices.create(invoiceData as Invoice, accountId);
 
       if (!response.ok) {
         return {
@@ -165,12 +168,13 @@ export const updateInvoice = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      // Typed against the SDK's Invoice model so wrong property names fail the build.
+      const updateData: Partial<Invoice> = {};
       if (args.notes !== undefined) updateData.notes = args.notes;
       if (args.po_number !== undefined) updateData.poNumber = args.po_number;
       if (args.due_offset_days !== undefined) updateData.dueOffsetDays = args.due_offset_days;
 
-      const response = await client.invoices.update(accountId, args.invoice_id, updateData);
+      const response = await client.invoices.update(accountId, args.invoice_id, updateData as Invoice);
 
       if (!response.ok) {
         return {

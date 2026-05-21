@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Service from "@freshbooks/api/dist/models/Service";
 import { getFreshBooksClient, getBusinessId } from "../freshbooks-client";
 
 export const listServices = tool(
@@ -77,12 +78,12 @@ export const createService = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      const serviceData: Record<string, unknown> = {
+      const serviceData: Service = {
         name: args.name,
         billable: args.billable,
       };
 
-      const response = await client.services.create(serviceData as any, businessId);
+      const response = await client.services.create(serviceData, businessId);
 
       if (!response.ok) {
         return {

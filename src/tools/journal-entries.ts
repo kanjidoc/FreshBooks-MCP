@@ -1,46 +1,73 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Big from "big.js";
+import JournalEntry from "@freshbooks/api/dist/models/JournalEntry";
+import Detail from "@freshbooks/api/dist/models/Detail";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
+
+/**
+ * `journalEntryAccounts` and `journalEntryDetails` exist on the SDK Client at
+ * runtime but are missing from its `Client` type declaration. This narrow shim
+ * types just those two resources so the rest of `client` stays fully typed
+ * instead of being blanket-cast `as any`.
+ */
+type JournalEntryListResources = {
+  journalEntryAccounts: { list: (a: string, q?: unknown[]) => Promise<any> };
+  journalEntryDetails: { list: (a: string, q?: unknown[]) => Promise<any> };
+};
 
 export const createJournalEntry = tool(
   "freshbooks_create_journal_entry",
-  "Create a new journal entry. Requires a description, credit entries, and debit entries. Credit and debit totals must balance. Amounts are strings to preserve decimal precision.",
+  "Create a new journal entry. Requires a description, credit entries, and debit entries. Credit and debit totals must balance. Amounts are passed as strings for precision but are converted to numbers because the FreshBooks SDK's journal-entry detail model types credit/debit as numbers.",
   {
     description: z.string().describe("Description of the journal entry"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+    entry_date: z.string().optional().describe("Journal entry date in YYYY-MM-DD format (defaults to today)"),
     credit_entries: z.array(
       z.object({
-        account_number: z.string().describe("Chart of accounts account number for the credit entry"),
-        amount: z.string().describe("Credit amount as a string, e.g. '500.00'"),
+        sub_account_id: z.number().int().describe(
+          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+        ),
+        amount: z.string().describe("Credit amount, e.g. '500.00'"),
       })
-    ).describe("Array of credit entries — each has an account number and amount"),
+    ).min(1).describe("Credit lines"),
     debit_entries: z.array(
       z.object({
-        account_number: z.string().describe("Chart of accounts account number for the debit entry"),
-        amount: z.string().describe("Debit amount as a string, e.g. '500.00'"),
+        sub_account_id: z.number().int().describe(
+          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+        ),
+        amount: z.string().describe("Debit amount, e.g. '500.00'"),
       })
-    ).describe("Array of debit entries — each has an account number and amount"),
+    ).min(1).describe("Debit lines"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const entryData: Record<string, unknown> = {
+      // Credit and debit totals must balance — reject before hitting the API.
+      const creditTotal = args.credit_entries.reduce((s, e) => s.plus(e.amount), new Big(0));
+      const debitTotal = args.debit_entries.reduce((s, e) => s.plus(e.amount), new Big(0));
+      if (!creditTotal.eq(debitTotal)) {
+        return {
+          content: [{ type: "text" as const, text: `Journal entry does not balance: credits ${creditTotal} vs debits ${debitTotal}` }],
+          isError: true,
+        };
+      }
+
+      const entryData: Partial<JournalEntry> = {
         description: args.description,
         currencyCode: args.currency_code,
-        creditEntries: args.credit_entries.map((e) => ({
-          accountNumber: e.account_number,
-          amount: e.amount,
-        })),
-        debitEntries: args.debit_entries.map((e) => ({
-          accountNumber: e.account_number,
-          amount: e.amount,
-        })),
+        details: [
+          ...args.credit_entries.map((e): Detail => ({ credit: Number(e.amount), subAccountId: e.sub_account_id })),
+          ...args.debit_entries.map((e): Detail => ({ debit: Number(e.amount), subAccountId: e.sub_account_id })),
+        ],
       };
+      if (args.entry_date) entryData.userEnteredDate = parseLocalDate(args.entry_date);
 
-      const response = await client.journalEntries.create(entryData as any, accountId);
+      const response = await client.journalEntries.create(entryData as JournalEntry, accountId);
 
       if (!response.ok) {
         return {
@@ -78,7 +105,8 @@ export const listJournalEntryAccounts = tool(
         perPage: args.per_page,
       });
 
-      const response = await (client as any).journalEntryAccounts.list(accountId, queryBuilders);
+      const jeClient = client as unknown as JournalEntryListResources;
+      const response = await jeClient.journalEntryAccounts.list(accountId, queryBuilders);
 
       if (!response.ok) {
         return {
@@ -117,7 +145,8 @@ export const listJournalEntryDetails = tool(
         perPage: args.per_page,
       });
 
-      const response = await (client as any).journalEntryDetails.list(accountId, queryBuilders);
+      const jeClient = client as unknown as JournalEntryListResources;
+      const response = await jeClient.journalEntryDetails.list(accountId, queryBuilders);
 
       if (!response.ok) {
         return {

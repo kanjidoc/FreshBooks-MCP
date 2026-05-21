@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import BillPayments from "@freshbooks/api/dist/models/BillPayments";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 import { parseLocalDate } from "../date-helpers";
@@ -85,21 +86,28 @@ export const createBillPayment = tool(
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Payment amount as a Money object"),
     paid_date: z.string().describe("Date the payment was made in YYYY-MM-DD format"),
-    type: z.string().optional().describe("Payment type (e.g. 'Check', 'Credit Card', 'Bank Transfer')"),
+    type: z
+      .enum([
+        "Check", "Credit", "Cash", "Bank Transfer", "Credit Card", "Debit", "PayPal",
+        "2Checkout", "VISA", "MASTERCARD", "DISCOVER", "AMEX", "DINERS", "JCB", "ACH", "Other",
+      ])
+      .describe("Payment method type (required by FreshBooks)"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const paymentData: Record<string, unknown> = {
+      const paymentData: Partial<BillPayments> = {
         billId: args.bill_id,
         amount: { amount: args.amount.amount, code: args.amount.code },
         paidDate: parseLocalDate(args.paid_date),
+        // SDK model property is paymentType (Bug #6); typed as the PaymentType enum.
+        paymentType: args.type as BillPayments["paymentType"],
       };
-      if (args.type !== undefined) paymentData.type = args.type;
 
-      const response = await client.billPayments.create(paymentData as any, accountId);
+      // SDK requires the full BillPayments type; the create transform tolerates a partial payload.
+      const response = await client.billPayments.create(paymentData as BillPayments, accountId);
 
       if (!response.ok) {
         return {
@@ -137,12 +145,14 @@ export const updateBillPayment = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: Partial<BillPayments> = {};
       if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
       if (args.paid_date !== undefined) updateData.paidDate = parseLocalDate(args.paid_date);
-      if (args.type !== undefined) updateData.type = args.type;
+      // SDK model property is paymentType (Bug #7); typed as the PaymentType enum.
+      if (args.type !== undefined) updateData.paymentType = args.type as BillPayments["paymentType"];
 
-      const response = await client.billPayments.update(updateData as any, accountId, Number(args.bill_payment_id));
+      // SDK requires the full BillPayments type; the update transform tolerates a partial payload.
+      const response = await client.billPayments.update(updateData as BillPayments, accountId, Number(args.bill_payment_id));
 
       if (!response.ok) {
         return {

@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Project from "@freshbooks/api/dist/models/Project";
 import { getFreshBooksClient, getBusinessId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -95,17 +96,21 @@ export const createProject = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      const projectData: Record<string, unknown> = {
+      // Typed against the SDK's Project model so wrong property names fail the build.
+      // A few fields are assigned values whose runtime type matches what the SDK
+      // serializes (it passes these straight through to JSON) but differs from the
+      // model's declared TS type — those assignments carry a narrow cast.
+      const projectData: Partial<Project> = {
         title: args.title,
       };
-      if (args.client_id !== undefined) projectData.clientId = args.client_id;
-      if (args.project_type !== undefined) projectData.projectType = args.project_type;
+      if (args.client_id !== undefined) projectData.clientId = args.client_id as unknown as Project["clientId"];
+      if (args.project_type !== undefined) projectData.projectType = args.project_type as Project["projectType"];
       if (args.description !== undefined) projectData.description = args.description;
-      if (args.due_date !== undefined) projectData.dueDate = args.due_date;
-      if (args.budget !== undefined) projectData.budget = args.budget;
+      if (args.due_date !== undefined) projectData.dueDate = args.due_date as unknown as Project["dueDate"];
+      if (args.budget !== undefined) projectData.budget = args.budget as unknown as Project["budget"];
       if (args.fixed_price !== undefined) projectData.fixedPrice = args.fixed_price;
 
-      const response = await client.projects.create(projectData as any, businessId);
+      const response = await client.projects.create(projectData as Project, businessId);
 
       if (!response.ok) {
         return {
@@ -141,13 +146,28 @@ export const updateProject = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      const projectData: Record<string, unknown> = {};
-      if (args.title !== undefined) projectData.title = args.title;
-      if (args.description !== undefined) projectData.description = args.description;
-      if (args.due_date !== undefined) projectData.dueDate = args.due_date;
-      if (args.budget !== undefined) projectData.budget = args.budget;
+      // The Projects API requires title on every PUT; fetch and preserve it when
+      // the caller doesn't supply a new one.
+      let title = args.title;
+      if (title === undefined) {
+        const existing = await client.projects.single(businessId, args.project_id);
+        if (!existing.ok || !existing.data?.title) {
+          return {
+            content: [{ type: "text" as const, text: `Could not load project ${args.project_id} to preserve its title: ${existing.error?.message ?? "no title on returned project"}` }],
+            isError: true,
+          };
+        }
+        title = existing.data.title;
+      }
 
-      const response = await client.projects.update(projectData as any, businessId, args.project_id);
+      // Typed against the SDK's Project model; dueDate/budget carry a narrow cast
+      // because the tool's input types differ from the model's declared TS types.
+      const projectData: Partial<Project> = { title };
+      if (args.description !== undefined) projectData.description = args.description;
+      if (args.due_date !== undefined) projectData.dueDate = args.due_date as unknown as Project["dueDate"];
+      if (args.budget !== undefined) projectData.budget = args.budget as unknown as Project["budget"];
+
+      const response = await client.projects.update(projectData as Project, businessId, args.project_id);
 
       if (!response.ok) {
         return {
@@ -189,7 +209,7 @@ export const deleteProject = tool(
       }
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+        content: [{ type: "text" as const, text: `Project ${args.project_id} deleted.` }],
       };
     } catch (error) {
       return {

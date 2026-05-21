@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import BillVendors from "@freshbooks/api/dist/models/BillVendors";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -107,13 +108,14 @@ export const createBillVendor = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const vendorData: Record<string, unknown> = {
+      const vendorData: BillVendors = {
         vendorName: args.vendor_name,
         currencyCode: args.currency_code,
       };
-      if (args.first_name) vendorData.fName = args.first_name;
-      if (args.last_name) vendorData.lName = args.last_name;
-      if (args.email) vendorData.email = args.email;
+      // SDK model properties are primaryContactFirstName/LastName/Email (Bug #12).
+      if (args.first_name) vendorData.primaryContactFirstName = args.first_name;
+      if (args.last_name) vendorData.primaryContactLastName = args.last_name;
+      if (args.email) vendorData.primaryContactEmail = args.email;
       if (args.phone) vendorData.phone = args.phone;
       if (args.account_number) vendorData.accountNumber = args.account_number;
       if (args.city) vendorData.city = args.city;
@@ -121,7 +123,7 @@ export const createBillVendor = tool(
       if (args.country) vendorData.country = args.country;
       if (args.postal_code) vendorData.postalCode = args.postal_code;
 
-      const response = await client.billVendors.create(vendorData as any, accountId);
+      const response = await client.billVendors.create(vendorData, accountId);
 
       if (!response.ok) {
         return {
@@ -164,11 +166,12 @@ export const updateBillVendor = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: BillVendors = {};
       if (args.vendor_name !== undefined) updateData.vendorName = args.vendor_name;
-      if (args.first_name !== undefined) updateData.fName = args.first_name;
-      if (args.last_name !== undefined) updateData.lName = args.last_name;
-      if (args.email !== undefined) updateData.email = args.email;
+      // SDK model properties are primaryContactFirstName/LastName/Email (Bug #13).
+      if (args.first_name !== undefined) updateData.primaryContactFirstName = args.first_name;
+      if (args.last_name !== undefined) updateData.primaryContactLastName = args.last_name;
+      if (args.email !== undefined) updateData.primaryContactEmail = args.email;
       if (args.phone !== undefined) updateData.phone = args.phone;
       if (args.account_number !== undefined) updateData.accountNumber = args.account_number;
       if (args.city !== undefined) updateData.city = args.city;
@@ -177,7 +180,7 @@ export const updateBillVendor = tool(
       if (args.postal_code !== undefined) updateData.postalCode = args.postal_code;
       if (args.currency_code !== undefined) updateData.currencyCode = args.currency_code;
 
-      const response = await client.billVendors.update(updateData as any, accountId, args.vendor_id);
+      const response = await client.billVendors.update(updateData, accountId, args.vendor_id);
 
       if (!response.ok) {
         return {

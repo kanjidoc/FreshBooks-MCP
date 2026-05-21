@@ -17,7 +17,11 @@ export const reportPaymentsCollected = tool(
       const accountId = getAccountId();
 
       const queryBuilders = buildQueryBuilders({
-        dateRange: { key: "date", min: args.start_date, max: args.end_date },
+        search: {
+          start_date: args.start_date,
+          end_date: args.end_date,
+          ...(args.currency_code ? { currency_code: args.currency_code } : {}),
+        },
       });
 
       const response = await client.reports.paymentsCollected(accountId, queryBuilders);
@@ -55,7 +59,7 @@ export const reportProfitLoss = tool(
       const accountId = getAccountId();
 
       const queryBuilders = buildQueryBuilders({
-        dateRange: { key: "date", min: args.start_date, max: args.end_date },
+        search: { start_date: args.start_date, end_date: args.end_date },
       });
 
       const response = await client.reports.profitLoss(accountId, queryBuilders);
@@ -93,7 +97,7 @@ export const reportTaxSummary = tool(
       const accountId = getAccountId();
 
       const queryBuilders = buildQueryBuilders({
-        dateRange: { key: "date", min: args.start_date, max: args.end_date },
+        search: { start_date: args.start_date, end_date: args.end_date },
       });
 
       const response = await client.reports.taxSummary(accountId, queryBuilders);
