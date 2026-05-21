@@ -1,7 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Expense from "@freshbooks/api/dist/models/Expense";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listExpenses = tool(
   "freshbooks_list_expenses",
@@ -114,10 +116,10 @@ export const createExpense = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const expenseData: Record<string, unknown> = {
+      const expenseData: Expense = {
         categoryId: args.category_id,
         staffId: args.staff_id,
-        date: new Date(args.date),
+        date: parseLocalDate(args.date),
         amount: { amount: args.amount.amount, code: args.amount.code },
       };
       if (args.vendor) expenseData.vendor = args.vendor;
@@ -127,7 +129,7 @@ export const createExpense = tool(
       if (args.tax_name1) expenseData.taxName1 = args.tax_name1;
       if (args.tax_percent1) expenseData.taxPercent1 = args.tax_percent1;
 
-      const response = await client.expenses.create(expenseData as any, accountId);
+      const response = await client.expenses.create(expenseData, accountId);
 
       if (!response.ok) {
         return {
@@ -173,22 +175,23 @@ export const updateExpense = tool(
       // payload omits `date`. Read the existing expense and resend its date when the
       // caller doesn't supply a new one.
       const existing = await client.expenses.single(accountId, args.expense_id);
-      if (!existing.ok || !(existing.data as any)?.date) {
+      if (!existing.ok || !(existing.data as Expense | undefined)?.date) {
         return {
           content: [{ type: "text" as const, text: `Could not load existing expense ${args.expense_id} to preserve its date: ${existing.error?.message ?? "no date on returned expense"}` }],
           isError: true,
         };
       }
 
-      const updateData: Record<string, unknown> = {
-        date: args.date ? new Date(args.date) : (existing.data as any).date,
+      const updateData: Partial<Expense> = {
+        // The preserved existing.data.date is already a Date from the SDK.
+        date: args.date ? parseLocalDate(args.date) : (existing.data as Expense).date,
       };
       if (args.vendor !== undefined) updateData.vendor = args.vendor;
       if (args.notes !== undefined) updateData.notes = args.notes;
       if (args.category_id !== undefined) updateData.categoryId = args.category_id;
       if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
 
-      const response = await client.expenses.update(updateData as any, accountId, args.expense_id);
+      const response = await client.expenses.update(updateData as Expense, accountId, args.expense_id);
 
       if (!response.ok) {
         return {

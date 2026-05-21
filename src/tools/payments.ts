@@ -1,7 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Payment, { PaymentType } from "@freshbooks/api/dist/models/Payment";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listPayments = tool(
   "freshbooks_list_payments",
@@ -104,15 +106,18 @@ export const createPayment = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const paymentData: Record<string, unknown> = {
+      // Typed against the SDK's Payment model so wrong property names fail the
+      // build. type is cast to PaymentType — the zod enum strings match the
+      // PaymentType enum values exactly.
+      const paymentData: Partial<Payment> = {
         invoiceId: args.invoice_id,
         amount: { amount: args.amount.amount, code: args.amount.code },
-        date: new Date(args.date),
-        type: args.type,
+        date: parseLocalDate(args.date),
+        type: args.type as PaymentType,
       };
       if (args.note) paymentData.note = args.note;
 
-      const response = await client.payments.create(accountId, paymentData);
+      const response = await client.payments.create(accountId, paymentData as Payment);
 
       if (!response.ok) {
         return {
@@ -144,17 +149,26 @@ export const updatePayment = tool(
       "Debit", "PayPal", "2Checkout", "VISA", "MASTERCARD",
       "DISCOVER", "AMEX", "DINERS", "JCB", "ACH", "Other",
     ]).optional().describe("Updated payment method type"),
+    amount: z.object({
+      amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
+      code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+    }).optional().describe("Updated payment amount as a Money object"),
+    date: z.string().optional().describe("Updated payment date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      // Typed against the SDK's Payment model. transformPaymentUpdateRequest
+      // serializes amount/date conditionally, so no fetch-merge is needed here.
+      const updateData: Partial<Payment> = {};
       if (args.note !== undefined) updateData.note = args.note;
-      if (args.type !== undefined) updateData.type = args.type;
+      if (args.type !== undefined) updateData.type = args.type as PaymentType;
+      if (args.amount !== undefined) updateData.amount = { amount: args.amount.amount, code: args.amount.code };
+      if (args.date !== undefined) updateData.date = parseLocalDate(args.date);
 
-      const response = await client.payments.update(accountId, args.payment_id, updateData);
+      const response = await client.payments.update(accountId, args.payment_id, updateData as Payment);
 
       if (!response.ok) {
         return {

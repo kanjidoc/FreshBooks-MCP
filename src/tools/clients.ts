@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Client from "@freshbooks/api/dist/models/Client";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -115,7 +116,21 @@ export const createClient = tool(
       const fbClient = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const clientData: Record<string, unknown> = {};
+      // The tool() helper validates each field but cannot express a cross-field
+      // rule, so enforce "first name or organization required" here.
+      if (!args.first_name && !args.organization) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "Provide at least one of first_name or organization to create a client.",
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      const clientData: Partial<Client> = {};
       if (args.first_name) clientData.fName = args.first_name;
       if (args.last_name) clientData.lName = args.last_name;
       if (args.organization) clientData.organization = args.organization;
@@ -129,7 +144,7 @@ export const createClient = tool(
       if (args.p_code) clientData.pCode = args.p_code;
       if (args.p_country) clientData.pCountry = args.p_country;
 
-      const response = await fbClient.clients.create(clientData as any, accountId);
+      const response = await fbClient.clients.create(clientData as Client, accountId);
 
       if (!response.ok) {
         return {
@@ -167,7 +182,7 @@ export const updateClient = tool(
       const fbClient = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: Partial<Client> = {};
       if (args.first_name !== undefined) updateData.fName = args.first_name;
       if (args.last_name !== undefined) updateData.lName = args.last_name;
       if (args.organization !== undefined) updateData.organization = args.organization;
@@ -175,7 +190,7 @@ export const updateClient = tool(
       if (args.phone !== undefined) updateData.busPhone = args.phone;
       if (args.note !== undefined) updateData.note = args.note;
 
-      const response = await fbClient.clients.update(updateData as any, accountId, args.client_id);
+      const response = await fbClient.clients.update(updateData as Client, accountId, args.client_id);
 
       if (!response.ok) {
         return {

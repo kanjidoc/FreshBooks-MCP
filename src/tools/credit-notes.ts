@@ -1,7 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import CreditNote from "@freshbooks/api/dist/models/CreditNote";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listCreditNotes = tool(
   "freshbooks_list_credit_notes",
@@ -86,7 +88,7 @@ export const getCreditNote = tool(
 
 export const createCreditNote = tool(
   "freshbooks_create_credit_note",
-  "Create a new credit note in FreshBooks for a client. Provide the client ID, line items, and an optional date and notes.",
+  "Create a new credit note for a client. KNOWN LIMITATION: currently non-functional — blocked by a bug in @freshbooks/api@4.1.0 (the SDK serializes the request with an incorrect wrapper key). See CHANGELOG.md. Provide the client ID, line items, and an optional date and notes.",
   {
     client_id: z.number().int().describe("The client ID to associate the credit note with (required)"),
     create_date: z.string().optional().describe("Credit note date in YYYY-MM-DD format (defaults to today)"),
@@ -103,7 +105,8 @@ export const createCreditNote = tool(
           }).describe("Unit cost of the line item"),
         })
       )
-      .describe("Line items for the credit note"),
+      .min(1)
+      .describe("Line items for the credit note (at least one required)"),
   },
   async (args) => {
     try {
@@ -120,14 +123,16 @@ export const createCreditNote = tool(
         },
       }));
 
-      const creditNoteData: Record<string, unknown> = {
-        clientid: args.client_id,
+      const creditNoteData: Partial<CreditNote> = {
+        // SDK model property is clientId (Bug #2); it is typed string, the tool's input is numeric.
+        clientId: String(args.client_id),
         lines,
       };
-      if (args.create_date) creditNoteData.createDate = args.create_date;
+      if (args.create_date) creditNoteData.createDate = parseLocalDate(args.create_date);
       if (args.notes) creditNoteData.notes = args.notes;
 
-      const response = await client.creditNotes.create(creditNoteData as any, accountId);
+      // SDK requires the full CreditNote type; the create transform tolerates a partial payload.
+      const response = await client.creditNotes.create(creditNoteData as CreditNote, accountId);
 
       if (!response.ok) {
         return {
@@ -161,11 +166,13 @@ export const updateCreditNote = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: Partial<CreditNote> = {};
       if (args.notes !== undefined) updateData.notes = args.notes;
-      if (args.status !== undefined) updateData.status = args.status;
+      // SDK types status as the DisplayStatus enum; the tool accepts a free-form string.
+      if (args.status !== undefined) updateData.status = args.status as CreditNote["status"];
 
-      const response = await client.creditNotes.update(updateData as any, accountId, args.credit_note_id);
+      // SDK requires the full CreditNote type; the update transform tolerates a partial payload.
+      const response = await client.creditNotes.update(updateData as CreditNote, accountId, args.credit_note_id);
 
       if (!response.ok) {
         return {

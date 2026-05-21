@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Tasks from "@freshbooks/api/dist/models/Tasks";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -95,14 +96,14 @@ export const createTask = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const taskData: Record<string, unknown> = {
+      const taskData: Tasks = {
         name: args.name,
         billable: args.billable,
       };
       if (args.description !== undefined) taskData.description = args.description;
       if (args.rate !== undefined) taskData.rate = { amount: args.rate.amount, code: args.rate.code };
 
-      const response = await client.tasks.create(taskData as any, accountId);
+      const response = await client.tasks.create(taskData, accountId);
 
       if (!response.ok) {
         return {
@@ -141,13 +142,13 @@ export const updateTask = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
+      const updateData: Tasks = {};
       if (args.name !== undefined) updateData.name = args.name;
       if (args.description !== undefined) updateData.description = args.description;
       if (args.rate !== undefined) updateData.rate = { amount: args.rate.amount, code: args.rate.code };
       if (args.billable !== undefined) updateData.billable = args.billable;
 
-      const response = await client.tasks.update(updateData as any, accountId, args.task_id);
+      const response = await client.tasks.update(updateData, accountId, args.task_id);
 
       if (!response.ok) {
         return {

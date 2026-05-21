@@ -1,7 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import Bills from "@freshbooks/api/dist/models/Bills";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listBills = tool(
   "freshbooks_list_bills",
@@ -90,7 +92,7 @@ export const createBill = tool(
       amount: z.string().describe("Line item amount as a string, e.g. '100.00'"),
       category: z.string().optional().describe("Expense category for the line item"),
       quantity: z.number().default(1).describe("Quantity of the line item"),
-    })).describe("Bill line items"),
+    })).min(1).describe("Bill line items — at least one is required"),
     due_date: z.string().describe("Bill due date in YYYY-MM-DD format"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
   },
@@ -99,7 +101,7 @@ export const createBill = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const billData = {
+      const billData: Bills = {
         vendorId: args.vendor_id,
         lines: args.lines.map((line) => ({
           description: line.description,
@@ -107,11 +109,11 @@ export const createBill = tool(
           category: line.category,
           quantity: line.quantity,
         })),
-        dueDate: new Date(args.due_date),
+        dueDate: parseLocalDate(args.due_date),
         currencyCode: args.currency_code,
       };
 
-      const response = await client.bills.create(billData as any, accountId);
+      const response = await client.bills.create(billData, accountId);
 
       if (!response.ok) {
         return {

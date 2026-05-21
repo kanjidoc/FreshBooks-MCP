@@ -1,7 +1,9 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import OtherIncome from "@freshbooks/api/dist/models/OtherIncome";
 import { getFreshBooksClient, getAccountId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
+import { parseLocalDate } from "../date-helpers";
 
 export const listOtherIncomes = tool(
   "freshbooks_list_other_incomes",
@@ -88,7 +90,7 @@ export const createOtherIncome = tool(
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Income amount as a Money object"),
     date: z.string().describe("Income date in YYYY-MM-DD format"),
-    category_name: z.string().optional().describe("Income category name, e.g. 'Other Income'"),
+    category_name: z.string().describe("Income category name, e.g. 'Other Income' (required by FreshBooks)"),
     note: z.string().optional().describe("Optional note about this income"),
   },
   async (args) => {
@@ -96,15 +98,18 @@ export const createOtherIncome = tool(
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const incomeData: Record<string, unknown> = {
+      // Typed against the SDK's OtherIncome model so wrong property names fail
+      // the build. categoryName/note carry a narrow cast because the model
+      // declares them as enum/Text while the tool accepts free strings.
+      const incomeData: Partial<OtherIncome> = {
         source: args.source,
         amount: { amount: args.amount.amount, code: args.amount.code },
-        date: new Date(args.date),
+        date: parseLocalDate(args.date),
+        categoryName: args.category_name as unknown as OtherIncome["categoryName"],
       };
-      if (args.category_name !== undefined) incomeData.categoryName = args.category_name;
-      if (args.note !== undefined) incomeData.note = args.note;
+      if (args.note !== undefined) incomeData.note = args.note as unknown as OtherIncome["note"];
 
-      const response = await client.otherIncomes.create(incomeData as any, accountId);
+      const response = await client.otherIncomes.create(incomeData as OtherIncome, accountId);
 
       if (!response.ok) {
         return {
@@ -133,18 +138,40 @@ export const updateOtherIncome = tool(
     source: z.string().optional().describe("Updated income source description"),
     note: z.string().optional().describe("Updated note"),
     category_name: z.string().optional().describe("Updated income category name"),
+    amount: z.object({
+      amount: z.string().describe("Amount as a string, e.g. '500.00'"),
+      code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
+    }).optional().describe("Updated income amount"),
+    date: z.string().optional().describe("Updated income date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const updateData: Record<string, unknown> = {};
-      if (args.source !== undefined) updateData.source = args.source;
-      if (args.note !== undefined) updateData.note = args.note;
-      if (args.category_name !== undefined) updateData.categoryName = args.category_name;
+      // The FreshBooks other_income PUT requires the full record (notably amount
+      // and date). Fetch the existing record and merge the caller's changes so a
+      // complete, valid object is always sent.
+      const existing = await client.otherIncomes.single(accountId, args.other_income_id);
+      if (!existing.ok) {
+        return {
+          content: [{ type: "text" as const, text: `Could not load other income ${args.other_income_id} to update it: ${existing.error?.message ?? "unknown error"}` }],
+          isError: true,
+        };
+      }
+      const cur = existing.data as OtherIncome;
+      const updateData: Partial<OtherIncome> = {
+        amount: args.amount ? { amount: args.amount.amount, code: args.amount.code } : cur.amount,
+        date: args.date ? parseLocalDate(args.date) : cur.date,
+        categoryName: (args.category_name ?? cur.categoryName) as OtherIncome["categoryName"],
+        source: args.source ?? cur.source,
+        note: (args.note ?? cur.note) as OtherIncome["note"],
+        // paymentType is non-optional on the SDK model — carry the existing
+        // value through so the merged record stays complete.
+        paymentType: cur.paymentType,
+      };
 
-      const response = await client.otherIncomes.update(accountId, args.other_income_id, updateData);
+      const response = await client.otherIncomes.update(accountId, args.other_income_id, updateData as OtherIncome);
 
       if (!response.ok) {
         return {

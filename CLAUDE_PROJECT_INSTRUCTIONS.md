@@ -123,7 +123,7 @@ Copy the text below into your Claude project's **custom instructions** (or syste
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with a FreshBooks accounting account. The server exposes 73 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
+You have access to a FreshBooks MCP server that lets you interact with a FreshBooks accounting account. The server exposes 75 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
@@ -160,6 +160,8 @@ You have access to a FreshBooks MCP server that lets you interact with a FreshBo
 **Journal Entries:** `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 
 **Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
+
+**Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend)
 
 ### Important conventions
 

@@ -18,8 +18,9 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 - Record **other incomes** outside of invoicing
 - Create **journal entries** for manual accounting adjustments
 - Run **reports**: Profit & Loss, Payments Collected, Tax Summary
+- Ask the server **how it works** — the `freshbooks_help` tool returns its own architecture, conventions, and live tool inventory
 
-All 73 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes.
+All 75 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
 
 ## How It Works
 
@@ -72,7 +73,16 @@ Before you start, create your FreshBooks Developer app (needed once per FreshBoo
 
 ### Token auto-refresh
 
-The server automatically refreshes your FreshBooks access token at startup if it's expired or within 10 minutes of expiring, and persists the rotated tokens back to `.env`, `.mcp.json`, and your Claude Desktop config. You should not need to touch your tokens again — if the refresh token ever gets revoked (e.g. you delete the FreshBooks Developer app, or don't use it for ~30 days), just re-run `npm run setup`.
+The server keeps your FreshBooks OAuth token fresh automatically — at startup **and** before every tool call (a cheap no-op unless the token is actually near expiry). Rotated tokens are persisted back to `.env` (always) and to `.mcp.json` and your Claude Desktop config *when those exist* — so it works on any OS, with or without Claude Desktop.
+
+You can also manage tokens manually:
+
+```bash
+npm run refresh-tokens                  # refresh now if needed
+npm run refresh-tokens -- --check-only  # audit the token files, no refresh
+```
+
+You should not need to touch your tokens again — if the refresh token ever gets revoked (e.g. you delete the FreshBooks Developer app, or don't use it for ~30 days), just re-run `npm run setup`.
 
 ### Manual setup (advanced / fallback)
 
@@ -210,10 +220,10 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 ┌─────────────▼───────────────────────────────────────┐
 │  FreshBooks MCP Server                              │
 │                                                     │
-│  src/server.ts        ← createSdkMcpServer          │
-│  src/tools/*.ts       ← tool() definitions          │
-│  src/query-helpers.ts ← query builder utilities      │
-│  src/freshbooks-client.ts ← SDK Client singleton    │
+│  src/server.ts         ← createSdkMcpServer         │
+│  src/tool-registry.ts  ← all tools + token refresh  │
+│  src/tools/*.ts        ← tool() definitions         │
+│  src/freshbooks-client.ts ← SDK client + OAuth      │
 └─────────────┬───────────────────────────────────────┘
               │ HTTPS (OAuth2)
 ┌─────────────▼───────────────────────────────────────┐
@@ -226,10 +236,14 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 
 | File | Purpose |
 |---|---|
-| `src/index.ts` | Entry point — loads env vars and exports the MCP server |
-| `src/server.ts` | Bundles all tools into a single MCP server via `createSdkMcpServer` |
-| `src/freshbooks-client.ts` | Singleton FreshBooks `Client` initialized from environment variables |
+| `src/index.ts` | Entry point — refreshes the OAuth token, then starts the stdio MCP server |
+| `src/server.ts` | Serves the registered tools via `createSdkMcpServer` |
+| `src/tool-registry.ts` | The single list of all tools; wraps each handler with automatic token refresh |
+| `src/freshbooks-client.ts` | FreshBooks `Client` singleton + OAuth token persistence and refresh |
+| `src/config-paths.ts` | OS-aware path resolution for the Claude Desktop config |
 | `src/query-helpers.ts` | Converts tool arguments into FreshBooks SDK query builders (pagination, search, sort, includes) |
+| `src/date-helpers.ts` | Local-time parsing for date-only accounting fields |
+| `src/docs/` | Embedded documentation served by the `freshbooks_help` tool |
 | `src/tools/invoices.ts` | Invoice tools: list, get, create, update, delete |
 | `src/tools/clients.ts` | Client tools: list, get, create, update, delete |
 | `src/tools/expenses.ts` | Expense tools: list, get, create, update, delete |
@@ -247,7 +261,9 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 | `src/tools/expense-categories.ts` | Expense category tools: list, get (read-only) |
 | `src/tools/journal-entries.ts` | Journal entry tools: create, list accounts, list details |
 | `src/tools/reports.ts` | Reports: Profit & Loss, Payments Collected, Tax Summary |
+| `src/tools/help.ts` | `freshbooks_help` — the self-documenting tool |
 | `scripts/setup.ts` | Interactive setup script — OAuth flow, ID discovery, config generation |
+| `scripts/refresh-tokens.ts` | Token health-check + refresh CLI (`npm run refresh-tokens`) |
 
 ### Technology stack
 
@@ -257,7 +273,7 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 - **[big.js](https://github.com/MikeMcl/big.js/)** — Decimal arithmetic for monetary values (FreshBooks returns amounts as strings to avoid floating-point precision issues)
 - **TypeScript** — Strict mode, compiled to ES2022
 
-## Available Tools (73 total)
+## Available Tools (75 total)
 
 ### Invoices
 | Tool | Description |
@@ -401,6 +417,11 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 | `freshbooks_report_payments_collected` | Generate a Payments Collected report |
 | `freshbooks_report_tax_summary` | Generate a Tax Summary report |
 
+### Self-Documentation
+| Tool | Description |
+|---|---|
+| `freshbooks_help` | Returns embedded docs about the server — architecture, conventions, the live tool inventory, authentication, and how to extend it |
+
 ## Monetary Values
 
 FreshBooks returns all monetary values as a `Money` object:
@@ -417,21 +438,36 @@ The `amount` is a **string** to avoid floating-point precision loss. When perfor
 npm run build          # Compile TypeScript
 npm run dev            # Run with ts-node
 npm run setup          # Interactive setup (OAuth + config generation)
+npm run refresh-tokens # Refresh the OAuth token if needed
+npm run check-tokens   # Audit the token files (no refresh)
 npm run lint           # Lint with ESLint
 npm run format         # Format with Prettier
-npm test               # Run tests
+npm test               # Run the test suite
 ```
+
+## Known limitations
+
+- **`create_credit_note` and `create_journal_entry` are currently non-functional**, blocked
+  by bugs in `@freshbooks/api@4.1.0` (the latest SDK release) that mis-serialize those two
+  requests. Listing and reading credit notes and journal-entry data works normally. See
+  [CHANGELOG.md](CHANGELOG.md) and `TOOL_AUDIT.md` for the full diagnosis.
+- The **bills / bill payments / bill vendors** write tools require the FreshBooks
+  Accounts-Payable add-on to be enabled on your account.
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---|---|
 | "FRESHBOOKS_CLIENT_ID is not set" | Your `.env` file is missing or incomplete. Run `npm run setup` or check `.env.example`. |
-| "401 Unauthorized" from FreshBooks | Restart the MCP server — startup auto-refresh will rotate the access token. If you keep seeing 401s, the refresh token was likely revoked; re-run `npm run setup`. |
+| "401 Unauthorized" from FreshBooks | Run `npm run refresh-tokens`. If it reports REFRESH FAILED, the refresh token was revoked — re-run `npm run setup`. |
 | `invalid_grant` when refreshing | The refresh token has been revoked or expired. Re-run `npm run setup` to do a fresh OAuth flow. |
 | MCP tools not showing in Claude | Make sure the config path in `"args"` is an absolute path to `dist/index.js`. Restart Claude. |
 | "Cannot find module dist/index.js" | Run `npm run build` first. |
 | Multiple FreshBooks businesses | The setup script uses the first business. Edit `.env` to change the Account ID / Business ID. |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and how to add a tool, [CHANGELOG.md](CHANGELOG.md) for version history, and [SECURITY.md](SECURITY.md) for the security policy.
 
 ## License
 

@@ -1,5 +1,6 @@
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
+import TimeEntry from "@freshbooks/api/dist/models/TimeEntry";
 import { getFreshBooksClient, getBusinessId } from "../freshbooks-client";
 import { buildQueryBuilders } from "../query-helpers";
 
@@ -97,7 +98,7 @@ export const createTimeEntry = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      const entryData: Record<string, unknown> = {
+      const entryData: Partial<TimeEntry> = {
         startedAt: new Date(args.started_at),
         duration: args.duration,
         isLogged: args.is_logged,
@@ -109,7 +110,7 @@ export const createTimeEntry = tool(
       if (args.service_id) entryData.serviceId = args.service_id;
       if (args.note) entryData.note = args.note;
 
-      const response = await client.timeEntries.create(entryData as any, businessId);
+      const response = await client.timeEntries.create(entryData as TimeEntry, businessId);
 
       if (!response.ok) {
         return {
@@ -144,12 +145,26 @@ export const updateTimeEntry = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      const updateData: Record<string, unknown> = {};
-      if (args.duration !== undefined) updateData.duration = args.duration;
+      // The SDK's transformTimeEntryRequest serializes started_at unconditionally
+      // (started_at: null when omitted), which the timetracking API rejects. Fetch
+      // the existing entry and preserve its startedAt so a complete object is sent.
+      const existing = await client.timeEntries.single(businessId, args.time_entry_id);
+      if (!existing.ok || !existing.data?.startedAt) {
+        return {
+          content: [{ type: "text" as const, text: `Could not load time entry ${args.time_entry_id} to preserve its start time: ${existing.error?.message ?? "no startedAt on returned entry"}` }],
+          isError: true,
+        };
+      }
+
+      const updateData: Partial<TimeEntry> = {
+        startedAt: existing.data.startedAt,
+        duration: args.duration ?? existing.data.duration,
+        isLogged: existing.data.isLogged,
+      };
       if (args.note !== undefined) updateData.note = args.note;
       if (args.billable !== undefined) updateData.billable = args.billable;
 
-      const response = await client.timeEntries.update(updateData as any, businessId, args.time_entry_id);
+      const response = await client.timeEntries.update(updateData as TimeEntry, businessId, args.time_entry_id);
 
       if (!response.ok) {
         return {
@@ -191,7 +206,7 @@ export const deleteTimeEntry = tool(
       }
 
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+        content: [{ type: "text" as const, text: `Time entry ${args.time_entry_id} deleted.` }],
       };
     } catch (error) {
       return {

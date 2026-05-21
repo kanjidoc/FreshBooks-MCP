@@ -13,19 +13,14 @@
  */
 
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import * as readline from "readline";
 import { Client } from "@freshbooks/api";
+import { resolveDesktopConfigPath } from "../src/config-paths";
 
 const ENV_PATH = path.resolve(__dirname, "..", ".env");
 const MCP_JSON_PATH = path.resolve(__dirname, "..", ".mcp.json");
-const CLAUDE_DESKTOP_CONFIG_PATH =
-  process.platform === "darwin"
-    ? path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json")
-    : process.platform === "win32"
-    ? path.join(process.env.APPDATA ?? "", "Claude", "claude_desktop_config.json")
-    : path.join(os.homedir(), ".config", "Claude", "claude_desktop_config.json");
+const CLAUDE_DESKTOP_CONFIG_PATH = resolveDesktopConfigPath();
 const REDIRECT_URI = "https://localhost/callback";
 
 function ask(question: string): Promise<string> {
