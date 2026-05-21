@@ -1,6 +1,6 @@
 ---
 name: freshbooks-token-refresh
-description: Check and refresh the FreshBooks MCP server's OAuth tokens. Use whenever FreshBooks MCP tools fail with 401 / unauthorized / "error" responses, when the user mentions FreshBooks tokens, auth, login, "expired", or "not working", before heavy FreshBooks tool use after a long idle, or when token drift between config files is suspected. Triggers on phrases like "freshbooks broken", "freshbooks 401", "refresh freshbooks", "check freshbooks tokens", "is freshbooks working". Runs the repo's bundled Node token CLI.
+description: Check and refresh the FreshBooks MCP server's OAuth tokens. Use whenever FreshBooks MCP tools fail with 401 / unauthorized / "error" responses, when the user mentions FreshBooks tokens, auth, login, "expired", or "not working", or before heavy FreshBooks tool use after a long idle. Triggers on phrases like "freshbooks broken", "freshbooks 401", "refresh freshbooks", "check freshbooks tokens", "is freshbooks working". Runs the repo's bundled Node token CLI.
 ---
 
 # FreshBooks Token Refresh
@@ -22,7 +22,7 @@ Run from the repo root:
 
 ```bash
 npm run refresh-tokens                  # refresh only if needed
-npm run refresh-tokens -- --check-only  # audit token files, never refresh
+npm run refresh-tokens -- --check-only  # audit .env, never refresh
 npm run refresh-tokens -- --json        # machine-readable output
 ```
 
@@ -45,8 +45,8 @@ relevant Claude config, then have the user reload their Claude app.
 
 ## Notes
 
-- Token persistence is **adaptive**: `.env` is the source of truth; `.mcp.json`
-  and the Claude Desktop config are synced only if they exist. A clone on any OS
-  refreshes cleanly.
+- Tokens live in exactly one file — `.env`. The server loads it by absolute path
+  and writes rotated tokens back to it; the MCP launcher configs hold no tokens,
+  so there is nothing that can drift.
 - Don't refresh a healthy token — rotating it for no reason burns a refresh-token
   cycle. When the CLI says `HEALTHY`, trust it.

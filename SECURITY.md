@@ -17,11 +17,13 @@ open a minimal issue and request a private channel to share the details.
 This server connects to a **live FreshBooks accounting account**. Treat its
 credentials accordingly.
 
-- `.env` and `.mcp.json` hold OAuth access and refresh tokens. Those tokens grant
-  full access to a real accounting account — its invoices, clients, payments, and
-  financial reports.
-- Both files are listed in `.gitignore`. **Never commit or share them**, and never
-  paste their contents into issues, pull requests, or logs.
+- `.env` holds your OAuth access and refresh tokens — the one file where
+  credentials live. Those tokens grant full access to a real accounting account:
+  its invoices, clients, payments, and financial reports.
+- `.env` is listed in `.gitignore`. **Never commit or share it**, and never paste
+  its contents into issues, pull requests, or logs. The MCP launcher configs
+  (`.mcp.json`, the Claude Desktop / Claude Code configs) carry only the start
+  command — no credentials.
 - FreshBooks rotates the refresh token on every refresh. If you suspect a token has
   leaked, revoke the app's access in the FreshBooks Developer Portal and re-run
   `npm run setup` to obtain fresh credentials.

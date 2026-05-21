@@ -63,10 +63,12 @@ export const TOPIC_AUTHENTICATION = `# FreshBooks MCP — Authentication
 FreshBooks uses **OAuth2 with rotating refresh tokens**: every refresh mints a
 new access+refresh pair and revokes the old one. Access tokens last ~12 hours.
 
-**Token files.** \`.env\` is the canonical store and is always required.
-\`.mcp.json\` and the Claude Desktop config are optional mirrors, kept in sync
-only when they exist — so a clone on any OS works. Persistence is atomic
-(tmp + rename), keeps \`.bak\` backups, and verifies the write.
+**The token store.** \`.env\`, sitting next to the server, is the *one* place
+tokens live. The server loads it by absolute path (so its working directory
+does not matter) and treats it as authoritative. Launcher configs
+(\`.mcp.json\`, the Claude Desktop config, \`~/.claude.json\`) hold only the start
+command, never tokens. Writes to \`.env\` are atomic (tmp + rename), keep a
+\`.bak\` backup, and are verified.
 
 **Auto-refresh.** The token is refreshed automatically:
 - at server startup (\`ensureFreshToken()\` in index.ts), and
@@ -76,7 +78,7 @@ expiry; concurrent calls share one refresh via a single-flight guard.
 
 **Manual control.**
 - \`npm run refresh-tokens\` — refresh now if needed.
-- \`npm run refresh-tokens -- --check-only\` — audit the token files, no refresh.
+- \`npm run refresh-tokens -- --check-only\` — audit \`.env\`, no refresh.
 
 **Recovery.** If the refresh token is rejected (used elsewhere, or the FreshBooks
 app was deleted), run \`npm run setup\` to re-authorize through the browser.`;

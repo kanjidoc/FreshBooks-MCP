@@ -1,27 +1,27 @@
 import * as path from "path";
 
-/** The FreshBooks credentials the MCP server reads from its environment. */
-export type FreshbooksEnv = Record<string, string>;
-
 /**
- * Build the FreshBooks MCP server entry in the shape Claude Desktop's config
- * file and a project `.mcp.json` both expect: `{ command, args, env }`.
+ * Build the FreshBooks MCP server entry for Claude Desktop's config file and a
+ * project `.mcp.json`: just `{ command, args }`. There is deliberately **no**
+ * `env` block — the server loads its credentials from `.env` itself (see
+ * `src/load-env.ts`), so a rotating token is never duplicated into a launcher
+ * config where it would go stale.
  */
-export function buildClaudeServerConfig(env: FreshbooksEnv, projectDir: string) {
+export function buildClaudeServerConfig(projectDir: string) {
   return {
     command: "node",
     args: [path.join(projectDir, "dist", "index.js")],
-    env,
   };
 }
 
 /**
- * Build the server entry in the shape the `claude mcp add-json` CLI expects —
- * the same `{ command, args, env }` plus an explicit `type: "stdio"`.
+ * Build the server entry for the `claude mcp add-json` CLI — the same
+ * `{ command, args }` plus an explicit `type: "stdio"`. No `env` block, for the
+ * same reason as above.
  */
-export function buildClaudeCodeServerJson(env: FreshbooksEnv, projectDir: string) {
+export function buildClaudeCodeServerJson(projectDir: string) {
   return {
     type: "stdio" as const,
-    ...buildClaudeServerConfig(env, projectDir),
+    ...buildClaudeServerConfig(projectDir),
   };
 }

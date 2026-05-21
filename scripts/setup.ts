@@ -5,7 +5,7 @@
  * 1. Entering your FreshBooks Developer App credentials
  * 2. Completing the OAuth2 flow (browser-based, paste-the-URL)
  * 3. Fetching your Account ID and Business ID
- * 4. Writing everything to .env
+ * 4. Writing everything to .env (the single token store)
  * 5. Building the server and installing it into Claude Desktop and/or Claude Code
  *
  * Usage:
@@ -35,11 +35,15 @@ function ask(question: string): Promise<string> {
 }
 
 function openBrowser(url: string) {
-  const { exec } = require("child_process");
+  const { execFile } = require("child_process");
   const platform = process.platform;
-  if (platform === "darwin") exec(`open "${url}"`);
-  else if (platform === "win32") exec(`start "${url}"`);
-  else exec(`xdg-open "${url}"`);
+  // execFile spawns no shell — the URL is passed as a literal argument, so
+  // there is no quoting or command-injection concern on any platform.
+  if (platform === "darwin") execFile("open", [url]);
+  // `start` is a cmd builtin, not an executable; the empty "" is its window
+  // title argument — without it, cmd treats the URL itself as the title.
+  else if (platform === "win32") execFile("cmd", ["/c", "start", "", url]);
+  else execFile("xdg-open", [url]);
 }
 
 function extractCodeFromUrl(urlString: string): string | null {
@@ -62,16 +66,16 @@ function writeEnvFile(vars: Record<string, string>) {
   fs.writeFileSync(ENV_PATH, lines + "\n");
 }
 
-function writeMcpJson(envVars: Record<string, string>, projectDir: string) {
+function writeMcpJson(projectDir: string) {
   const config = {
     mcpServers: {
-      freshbooks: buildClaudeServerConfig(envVars, projectDir),
+      freshbooks: buildClaudeServerConfig(projectDir),
     },
   };
   fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(config, null, 2) + "\n");
 }
 
-function upsertClaudeDesktopConfig(envVars: Record<string, string>, projectDir: string): boolean {
+function upsertClaudeDesktopConfig(projectDir: string): boolean {
   try {
     fs.mkdirSync(path.dirname(CLAUDE_DESKTOP_CONFIG_PATH), { recursive: true });
     let existing: any = {};
@@ -79,12 +83,14 @@ function upsertClaudeDesktopConfig(envVars: Record<string, string>, projectDir: 
       try {
         existing = JSON.parse(fs.readFileSync(CLAUDE_DESKTOP_CONFIG_PATH, "utf8"));
       } catch {
-        console.log(`   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`);
+        console.log(
+          `   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`,
+        );
         return false;
       }
     }
     existing.mcpServers = existing.mcpServers ?? {};
-    existing.mcpServers.freshbooks = buildClaudeServerConfig(envVars, projectDir);
+    existing.mcpServers.freshbooks = buildClaudeServerConfig(projectDir);
     fs.writeFileSync(CLAUDE_DESKTOP_CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
     return true;
   } catch (err: any) {
@@ -109,9 +115,9 @@ function isClaudeCliAvailable(): boolean {
  * project) via the `claude` CLI. Re-running setup is idempotent: any existing
  * entry is removed first. Returns whether registration succeeded.
  */
-function installIntoClaudeCode(envVars: Record<string, string>, projectDir: string): boolean {
+function installIntoClaudeCode(projectDir: string): boolean {
   const { execFileSync } = require("child_process");
-  const serverJson = JSON.stringify(buildClaudeCodeServerJson(envVars, projectDir));
+  const serverJson = JSON.stringify(buildClaudeCodeServerJson(projectDir));
   try {
     try {
       execFileSync("claude", ["mcp", "remove", "freshbooks", "--scope", "user"], {
@@ -130,19 +136,16 @@ function installIntoClaudeCode(envVars: Record<string, string>, projectDir: stri
   }
 }
 
-function printMcpConfig(envVars: Record<string, string>, projectDir: string) {
+function printMcpConfig(projectDir: string) {
   const distPath = path.join(projectDir, "dist", "index.js");
-
-  const envBlock = Object.entries(envVars)
-    .map(([k, v]) => `        "${k}": "${v}"`)
-    .join(",\n");
 
   console.log(`
 ${"=".repeat(70)}
-   MCP SERVER CONFIGURATION
+   MCP SERVER CONFIGURATION (manual)
 ${"=".repeat(70)}
 
-Copy the relevant config below into your Claude setup.
+The server reads its credentials from .env — these config blocks only tell
+Claude how to launch it, so they contain no secrets.
 
 
 --- CLAUDE DESKTOP ---
@@ -153,10 +156,7 @@ File: ~/Library/Application Support/Claude/claude_desktop_config.json (Mac)
   "mcpServers": {
     "freshbooks": {
       "command": "node",
-      "args": ["${distPath}"],
-      "env": {
-${envBlock}
-      }
+      "args": ["${distPath}"]
     }
   }
 }
@@ -170,7 +170,7 @@ the "freshbooks" server when prompted.
 To make FreshBooks available in EVERY Claude Code project, install the
 "claude" CLI and run:
 
-  claude mcp add-json freshbooks '${JSON.stringify(buildClaudeCodeServerJson(envVars, projectDir))}' --scope user
+  claude mcp add-json freshbooks '${JSON.stringify(buildClaudeCodeServerJson(projectDir))}' --scope user
 
 
 ${"=".repeat(70)}
@@ -233,24 +233,31 @@ STEP 2: Authorize with FreshBooks
    It will look like: ${REDIRECT_URI}?code=abc123...
 `);
 
-  let code: string | null = null;
-  while (!code) {
+  // One loop covers both a bad paste (no code) and a rejected/expired code, so
+  // a single mistake re-prompts instead of aborting the whole wizard.
+  let tokens: any = null;
+  while (!tokens) {
     const input = await ask("   Paste the redirect URL (or just the code): ");
-    code = extractCodeFromUrl(input);
+    const code = extractCodeFromUrl(input);
     if (!code) {
-      console.log("   Could not extract authorization code. Please try again.\n");
+      console.log("   Could not find an authorization code in that. Please try again.\n");
+      continue;
+    }
+    try {
+      tokens = await fbClient.getAccessToken(code);
+      if (!tokens) {
+        console.log("   FreshBooks returned no tokens — paste the redirect URL again.\n");
+      }
+    } catch (err: any) {
+      console.log(
+        `   That authorization code was rejected (${err?.message ?? err}).\n` +
+          "   It may have expired or been mistyped — paste a fresh redirect URL.\n",
+      );
+      tokens = null;
     }
   }
 
-  console.log("\n   Authorization code received. Exchanging for tokens...\n");
-
-  const tokens = await fbClient.getAccessToken(code);
-  if (!tokens) {
-    console.error("   Error: Failed to exchange code for tokens.\n");
-    process.exit(1);
-  }
-
-  console.log("   Access token obtained!\n");
+  console.log("\n   Access token obtained!\n");
 
   console.log(`
 STEP 3: Fetching your Account ID and Business ID
@@ -272,7 +279,9 @@ STEP 3: Fetching your Account ID and Business ID
     const meResponse = await authedClient.users.me();
     if (meResponse.ok && meResponse.data) {
       const user = meResponse.data as any;
-      console.log(`   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`);
+      console.log(
+        `   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`,
+      );
 
       // Extract account ID and business ID from business memberships
       if (user.businessMemberships && user.businessMemberships.length > 0) {
@@ -320,7 +329,7 @@ STEP 4: Saving configuration
   writeEnvFile(envVars);
   console.log(`   .env file written to: ${ENV_PATH}`);
 
-  writeMcpJson(envVars, projectDir);
+  writeMcpJson(projectDir);
   console.log(`   .mcp.json file written to: ${MCP_JSON_PATH}\n`);
 
   console.log(`
@@ -348,7 +357,7 @@ STEP 6: Connecting to Claude
 
   let desktopInstalled = false;
   if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "))) {
-    desktopInstalled = upsertClaudeDesktopConfig(envVars, projectDir);
+    desktopInstalled = upsertClaudeDesktopConfig(projectDir);
     if (desktopInstalled) {
       console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
     }
@@ -357,7 +366,7 @@ STEP 6: Connecting to Claude
   let codeInstalled = false;
   if (isClaudeCliAvailable()) {
     if (isYes(await ask("   Add the server to Claude Code, for all your projects? [Y/n]: "))) {
-      codeInstalled = installIntoClaudeCode(envVars, projectDir);
+      codeInstalled = installIntoClaudeCode(projectDir);
       if (codeInstalled) {
         console.log(`   Claude Code: registered the "freshbooks" server at user scope.\n`);
       }
@@ -367,7 +376,7 @@ STEP 6: Connecting to Claude
   if (!desktopInstalled && !codeInstalled) {
     console.log(`   No automatic install was done. Add the server by hand using the
    configuration below.\n`);
-    printMcpConfig(envVars, projectDir);
+    printMcpConfig(projectDir);
   }
 
   console.log(`

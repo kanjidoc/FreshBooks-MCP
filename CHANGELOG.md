@@ -5,6 +5,34 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.4] - 2026-05-21
+
+### Fixed
+
+- Token staleness on the Claude Code user-scope install. The 2.0.3 wizard
+  embedded credentials into `~/.claude.json` via `claude mcp add-json`, but that
+  file was never updated when FreshBooks rotated the refresh token — so the
+  integration broke within a day or two. The root cause was a rotating secret
+  duplicated across multiple launcher configs (see *Changed* below).
+- `setup.ts` opened the OAuth browser through a shell command; on Windows the
+  quoted URL was read as a window title and the browser never launched. It now
+  spawns the browser without a shell, which behaves correctly on every platform.
+- One mistyped or expired authorization code aborted the whole setup wizard. The
+  token exchange now re-prompts instead of exiting.
+
+### Changed
+
+- **Tokens now live in exactly one file — `.env`.** The server loads `.env` by
+  absolute path with `override: true` (`src/load-env.ts`), making it the single
+  source of truth. MCP launcher configs (`.mcp.json`, the Claude Desktop config,
+  `~/.claude.json`) carry only the command to start the server — no credentials.
+  The multi-file token-sync machinery (`discoverTokenFiles`, multi-file preflight
+  and persistence) is deleted: with one home for the secret there is nothing to
+  keep in sync and nothing that can drift.
+- Corrected the documented Claude Code configuration target throughout — MCP
+  servers belong in `~/.claude.json` or a project `.mcp.json`, never in an
+  `mcpServers` block in `~/.claude/settings.json`.
+
 ## [2.0.3] - 2026-05-21
 
 ### Added
