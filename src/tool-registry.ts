@@ -16,6 +16,7 @@ import { reportPaymentsCollected, reportProfitLoss, reportTaxSummary } from "./t
 import { listTasks, getTask, createTask, updateTask, deleteTask } from "./tools/tasks";
 import { listExpenseCategories, getExpenseCategory } from "./tools/expense-categories";
 import { createJournalEntry, listJournalEntryAccounts, listJournalEntryDetails } from "./tools/journal-entries";
+import { freshbooksHelp } from "./tools/help";
 
 /**
  * Every FreshBooks MCP tool, in display order.
@@ -59,4 +60,6 @@ export const allTools = [
   listExpenseCategories, getExpenseCategory,
   // Journal entries
   createJournalEntry, listJournalEntryAccounts, listJournalEntryDetails,
+  // Self-documentation
+  freshbooksHelp,
 ].map(withTokenRefresh);
