@@ -22,15 +22,23 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 
 All 75 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
 
+## 🚀 Getting Started
+
+**New here? Follow [SETUP.md](SETUP.md) — the complete, beginner-friendly setup walkthrough.** It takes about 15 minutes, assumes no coding experience, and covers both Claude Desktop and Claude Code. All you need is Claude installed on your computer and a regular FreshBooks account.
+
+> **🤖 If you are an AI assistant** helping someone install this: open **[SETUP.md](SETUP.md)** and follow it from top to bottom. It is written as a step-by-step script — do the steps you can, and hand the interactive ones (the browser login, the setup wizard) to the user with exact instructions.
+
+Already set up, or just want to understand how it works? Read on.
+
 ## How It Works
 
 This MCP server runs **locally on your computer** as a Node.js process. When you configure Claude to use it, Claude launches the server automatically whenever you start a conversation. The server talks to the FreshBooks API using your OAuth credentials.
 
 ```
 GitHub repo
-    ↓ git clone
+    ↓ download or git clone
 Your computer: ~/FreshBooks-MCP/
-    ↓ npm install + npm run build + configure .env
+    ↓ npm install + npm run setup (OAuth, config, build)
 dist/index.js (compiled MCP server, ready to run)
     ↓ Claude reads your config file
 Claude launches "node dist/index.js" as a background process
@@ -39,175 +47,6 @@ Claude sends a tool call → MCP server → FreshBooks API → results back to C
 ```
 
 Nothing runs "in the cloud" — the server is a local program on your machine that Claude knows how to start and talk to.
-
-## Quick Start
-
-### Prerequisites
-
-- **[Node.js](https://nodejs.org/) 18+** — if you don't have it, download it from nodejs.org
-- A **FreshBooks account** — any plan that has API access
-- **Claude Desktop** installed (for most users) — the setup script can auto-install the MCP server into it
-
-### Recommended: interactive setup script
-
-One command that handles everything — OAuth, ID discovery, `.env`, `.mcp.json`, the build, and auto-installing into Claude Desktop:
-
-```bash
-git clone https://github.com/kanjidoc/FreshBooks-MCP.git
-cd FreshBooks-MCP
-npm install
-npm run setup
-```
-
-Then quit and reopen Claude Desktop and try: *"List my recent invoices"*
-
-Before you start, create your FreshBooks Developer app (needed once per FreshBooks account):
-
-1. Log in to [FreshBooks](https://www.freshbooks.com/)
-2. Go to **Settings > Developer Portal**: https://my.freshbooks.com/#/developer
-3. Click **"Create an App"** (set Application Type to "Private App")
-4. Set the **Redirect URI** to: `https://localhost/callback`
-5. Save — you'll need the **Client ID** and **Client Secret** in a moment
-
-> **Note:** `npm run setup` needs an interactive terminal (regular Terminal, iTerm, etc). It won't work inside a Claude Code session.
-
-### Token auto-refresh
-
-The server keeps your FreshBooks OAuth token fresh automatically — at startup **and** before every tool call (a cheap no-op unless the token is actually near expiry). Rotated tokens are persisted back to `.env` (always) and to `.mcp.json` and your Claude Desktop config *when those exist* — so it works on any OS, with or without Claude Desktop.
-
-You can also manage tokens manually:
-
-```bash
-npm run refresh-tokens                  # refresh now if needed
-npm run refresh-tokens -- --check-only  # audit the token files, no refresh
-```
-
-You should not need to touch your tokens again — if the refresh token ever gets revoked (e.g. you delete the FreshBooks Developer app, or don't use it for ~30 days), just re-run `npm run setup`.
-
-### Manual setup (advanced / fallback)
-
-Prefer to wire everything up yourself? You need 7 values from FreshBooks:
-
-1. **Client ID** and **Client Secret** — from the Developer Portal app above
-2. **Access Token** and **Refresh Token** — complete the OAuth flow (see [Completing the OAuth Flow](#completing-the-oauth-flow))
-3. **Account ID** and **Business ID** — call `/users/me` with your access token
-
-Then:
-
-```bash
-cp .env.example .env   # fill in all 7 values
-npm run build
-```
-
-And add the MCP server to your Claude config manually — see [Installing on Claude](#installing-on-claude).
-
-## Installing on Claude
-
-Add the MCP server config to your Claude platform. Replace the placeholder values with your actual credentials from `.env`.
-
-### Claude Desktop
-
-1. Open your Claude Desktop config file:
-   - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-2. If the file doesn't exist, create it
-3. Add the following (replace values with your own):
-
-```json
-{
-  "mcpServers": {
-    "freshbooks": {
-      "command": "node",
-      "args": ["/absolute/path/to/FreshBooks-MCP/dist/index.js"],
-      "env": {
-        "FRESHBOOKS_CLIENT_ID": "your_client_id",
-        "FRESHBOOKS_CLIENT_SECRET": "your_client_secret",
-        "FRESHBOOKS_REDIRECT_URI": "https://localhost/callback",
-        "FRESHBOOKS_ACCESS_TOKEN": "your_access_token",
-        "FRESHBOOKS_REFRESH_TOKEN": "your_refresh_token",
-        "FRESHBOOKS_ACCOUNT_ID": "your_account_id",
-        "FRESHBOOKS_BUSINESS_ID": "your_business_id"
-      }
-    }
-  }
-}
-```
-
-4. **Important:** The path in `"args"` must be the **absolute path** to `dist/index.js`
-5. **Restart Claude Desktop** for the changes to take effect
-6. You should see a hammer icon indicating MCP tools are available
-7. Try: *"List my recent invoices"*
-
-### Claude Code (CLI / IDE Extensions)
-
-1. Open your settings file:
-   - **Global:** `~/.claude/settings.json` (applies to all projects)
-   - **Per-project:** `<project>/.claude/settings.json`
-2. Paste the same config block as above
-3. Restart your Claude Code session
-4. Try: *"List my FreshBooks clients"*
-
-### claude.ai/code (Web)
-
-1. Add the config to your project's `.claude/settings.json`
-2. Push the settings file to your repo so the web environment can access it
-3. Start a new claude.ai/code session in that repo
-4. Try: *"Show me my unpaid invoices"*
-
-### Claude Agent SDK (Programmatic)
-
-```typescript
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { freshbooksServer } from "./path/to/FreshBooks-MCP/src/server";
-
-for await (const message of query({
-  prompt: "Show me my unpaid invoices",
-  options: {
-    mcpServers: { freshbooks: freshbooksServer },
-    allowedTools: ["mcp__freshbooks__*"],
-  },
-})) {
-  if (message.type === "result" && message.subtype === "success") {
-    console.log(message.result);
-  }
-}
-```
-
-## Completing the OAuth Flow
-
-FreshBooks uses OAuth2, so you need to exchange a one-time authorization code for access/refresh tokens. Here's how:
-
-1. **Build the authorization URL** — visit this in your browser (replace your client ID):
-   ```
-   https://auth.freshbooks.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=https://localhost/callback
-   ```
-
-2. **Click "Allow"** — FreshBooks will redirect your browser to `https://localhost/callback?code=SOME_CODE`. The page won't load (that's expected). Copy the `code` value from the URL bar.
-
-3. **Exchange the code for tokens** — make a POST request (e.g., with `curl`):
-   ```bash
-   curl -X POST https://api.freshbooks.com/auth/oauth/token \
-     -H "Content-Type: application/json" \
-     -d '{
-       "grant_type": "authorization_code",
-       "client_id": "YOUR_CLIENT_ID",
-       "client_secret": "YOUR_CLIENT_SECRET",
-       "code": "THE_CODE_FROM_STEP_2",
-       "redirect_uri": "https://localhost/callback"
-     }'
-   ```
-   The response contains your `access_token` and `refresh_token`.
-
-4. **Get your Account ID and Business ID** — call the identity endpoint:
-   ```bash
-   curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
-     https://api.freshbooks.com/auth/api/v1/users/me
-   ```
-   Look for `business_memberships[0].business.account_id` (Account ID) and `business_memberships[0].business.id` (Business ID).
-
-**Why two IDs?**
-- **Account ID** (string) — Used for accounting endpoints: invoices, clients, expenses, payments, items, bills, etc.
-- **Business ID** (number) — Used for project endpoints: time entries, projects, services
 
 ## Architecture
 
@@ -244,24 +83,7 @@ FreshBooks uses OAuth2, so you need to exchange a one-time authorization code fo
 | `src/query-helpers.ts` | Converts tool arguments into FreshBooks SDK query builders (pagination, search, sort, includes) |
 | `src/date-helpers.ts` | Local-time parsing for date-only accounting fields |
 | `src/docs/` | Embedded documentation served by the `freshbooks_help` tool |
-| `src/tools/invoices.ts` | Invoice tools: list, get, create, update, delete |
-| `src/tools/clients.ts` | Client tools: list, get, create, update, delete |
-| `src/tools/expenses.ts` | Expense tools: list, get, create, update, delete |
-| `src/tools/payments.ts` | Payment tools: list, get, create, update, delete |
-| `src/tools/time-entries.ts` | Time entry tools: list, get, create, update, delete |
-| `src/tools/items.ts` | Item tools: list, get, create, update |
-| `src/tools/bills.ts` | Bill tools: list, get, create, delete |
-| `src/tools/bill-payments.ts` | Bill payment tools: list, get, create, update, delete |
-| `src/tools/bill-vendors.ts` | Bill vendor tools: list, get, create, update, delete |
-| `src/tools/credit-notes.ts` | Credit note tools: list, get, create, update, delete |
-| `src/tools/other-incomes.ts` | Other income tools: list, get, create, update, delete |
-| `src/tools/projects.ts` | Project tools: list, get, create, update, delete |
-| `src/tools/services.ts` | Service tools: list, get, create |
-| `src/tools/tasks.ts` | Task tools: list, get, create, update, delete |
-| `src/tools/expense-categories.ts` | Expense category tools: list, get (read-only) |
-| `src/tools/journal-entries.ts` | Journal entry tools: create, list accounts, list details |
-| `src/tools/reports.ts` | Reports: Profit & Loss, Payments Collected, Tax Summary |
-| `src/tools/help.ts` | `freshbooks_help` — the self-documenting tool |
+| `src/tools/*.ts` | One file per resource domain — the `tool()` definitions |
 | `scripts/setup.ts` | Interactive setup script — OAuth flow, ID discovery, config generation |
 | `scripts/refresh-tokens.ts` | Token health-check + refresh CLI (`npm run refresh-tokens`) |
 
@@ -445,6 +267,8 @@ npm run format         # Format with Prettier
 npm test               # Run the test suite
 ```
 
+New to the project? [SETUP.md](SETUP.md) is the end-to-end install walkthrough. Contributing a change or a new tool? See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Known limitations
 
 - **`create_credit_note` and `create_journal_entry` are currently non-functional**, blocked
@@ -454,16 +278,11 @@ npm test               # Run the test suite
 - The **bills / bill payments / bill vendors** write tools require the FreshBooks
   Accounts-Payable add-on to be enabled on your account.
 
-## Troubleshooting
+Setup problems are covered in the [SETUP.md troubleshooting table](SETUP.md#troubleshooting).
 
-| Problem | Solution |
-|---|---|
-| "FRESHBOOKS_CLIENT_ID is not set" | Your `.env` file is missing or incomplete. Run `npm run setup` or check `.env.example`. |
-| "401 Unauthorized" from FreshBooks | Run `npm run refresh-tokens`. If it reports REFRESH FAILED, the refresh token was revoked — re-run `npm run setup`. |
-| `invalid_grant` when refreshing | The refresh token has been revoked or expired. Re-run `npm run setup` to do a fresh OAuth flow. |
-| MCP tools not showing in Claude | Make sure the config path in `"args"` is an absolute path to `dist/index.js`. Restart Claude. |
-| "Cannot find module dist/index.js" | Run `npm run build` first. |
-| Multiple FreshBooks businesses | The setup script uses the first business. Edit `.env` to change the Account ID / Business ID. |
+## Using FreshBooks MCP inside a Claude Project
+
+If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 75 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
 
 ## Contributing
 

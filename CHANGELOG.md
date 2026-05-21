@@ -5,6 +5,22 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-05-21
+
+### Changed
+
+- Onboarding overhaul. Added `SETUP.md` — a single, beginner-grade setup
+  walkthrough that doubles as a script Claude can follow to install the server
+  for a non-technical user. It covers both Claude Desktop and Claude Code, opens
+  with a "which Claude do you have?" fork, and explicitly marks the steps Claude
+  cannot do itself (the browser login, the interactive setup wizard).
+- `README.md` is now a concise landing page that points to `SETUP.md`, rather
+  than carrying its own (separately drifting) copy of the setup instructions.
+- Retired `CLAUDE_PROJECT_INSTRUCTIONS.md` — it was a second copy of the setup
+  instructions that had already drifted from the README. Its setup content is
+  consolidated into `SETUP.md`; its claude.ai Projects system prompt moved to
+  `docs/claude-project-system-prompt.md`.
+
 ## [2.0.1] - 2026-05-21
 
 ### Fixed
