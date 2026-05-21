@@ -9,7 +9,6 @@ import {
   constants as fsConstants,
 } from "node:fs";
 import { join } from "node:path";
-import { resolveDesktopConfigPath } from "./config-paths";
 
 let fbClient: Client | null = null;
 
@@ -38,27 +37,15 @@ const RETRY_OPTIONS = {
   },
 };
 
-const ENV_FILE = join(__dirname, "..", ".env");
-const MCP_FILE = join(__dirname, "..", ".mcp.json");
-
-const JSON_ENV_PATH = ["mcpServers", "freshbooks", "env"] as const;
-
-export type TokenFile = { path: string; kind: "env" | "json"; required: boolean };
-
 /**
- * The token files this install uses. `.env` is the canonical store and is
- * always required. `.mcp.json` and the Claude Desktop config are OPTIONAL
- * mirrors — kept in sync only when they exist. This is what lets a fresh clone
- * on any OS (or an install that never touches Claude Desktop) refresh cleanly:
- * an absent optional mirror is simply skipped, never a failure.
+ * The single source of truth for OAuth tokens. `.env` lives next to this
+ * package; the server loads it by absolute path (`src/load-env.ts`) and the
+ * refresh logic writes rotated tokens back here. No other file holds tokens —
+ * launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`)
+ * carry only the command to start the server. One home for the secret means
+ * there is nothing to keep in sync and nothing that can drift.
  */
-export function discoverTokenFiles(): TokenFile[] {
-  return [
-    { path: ENV_FILE, kind: "env", required: true },
-    { path: MCP_FILE, kind: "json", required: false },
-    { path: resolveDesktopConfigPath(), kind: "json", required: false },
-  ];
-}
+const ENV_FILE = join(__dirname, "..", ".env");
 
 /** Decode a JWT's `exp` (epoch seconds), or null if the token is opaque/invalid. */
 export function decodeJwtExp(token: string): number | null {
@@ -72,72 +59,60 @@ export function decodeJwtExp(token: string): number | null {
   }
 }
 
-function getJsonEnvBlock(data: any): Record<string, string> {
-  let cur = data;
-  for (const key of JSON_ENV_PATH) {
-    if (!cur || typeof cur !== "object" || !(key in cur)) {
-      throw new Error(`missing path ${JSON_ENV_PATH.join(".")}`);
-    }
-    cur = cur[key];
-  }
-  if (typeof cur !== "object" || cur === null) {
-    throw new Error(`path ${JSON_ENV_PATH.join(".")} is not an object`);
-  }
-  return cur as Record<string, string>;
-}
-
-function readTokensFromFile(file: TokenFile): { access?: string; refresh?: string } {
-  const content = readFileSync(file.path, "utf8");
-  if (file.kind === "env") {
-    const access = content.match(/^FRESHBOOKS_ACCESS_TOKEN=(.*)$/m)?.[1]?.trim();
-    const refresh = content.match(/^FRESHBOOKS_REFRESH_TOKEN=(.*)$/m)?.[1]?.trim();
-    return { access, refresh };
-  }
-  const block = getJsonEnvBlock(JSON.parse(content));
-  return { access: block.FRESHBOOKS_ACCESS_TOKEN, refresh: block.FRESHBOOKS_REFRESH_TOKEN };
+/** Read the access/refresh tokens currently stored in `.env`. */
+function readEnvTokens(): { access?: string; refresh?: string } {
+  const content = readFileSync(ENV_FILE, "utf8");
+  return {
+    access: content.match(/^FRESHBOOKS_ACCESS_TOKEN=(.*)$/m)?.[1]?.trim(),
+    refresh: content.match(/^FRESHBOOKS_REFRESH_TOKEN=(.*)$/m)?.[1]?.trim(),
+  };
 }
 
 /**
- * Verify the token files are reachable, writable, and contain both token markers.
- * Throws BEFORE any refresh API call so a refresh token is never burned when
- * persistence cannot complete — the "no preflight, no rotation" rule.
- *
- * An absent OPTIONAL mirror is skipped (legitimately not present). An absent
- * REQUIRED file (`.env`) fails preflight. A file that IS present must pass every
- * check — a present-but-broken mirror would drift, so it must abort the refresh.
- * Returns the files that exist and passed: these are the persist targets.
+ * Return `.env` file content with the two token lines replaced. Throws if
+ * either line is absent — a failed substitution must surface loudly, never
+ * silently leave the old token in place.
  */
-function preflightTokenFiles(): TokenFile[] {
-  const failures: string[] = [];
-  const present: TokenFile[] = [];
-  for (const file of discoverTokenFiles()) {
-    if (!existsSync(file.path)) {
-      if (file.required) failures.push(`${file.path}: does not exist (required)`);
-      continue;
-    }
-    try {
-      accessSync(file.path, fsConstants.R_OK | fsConstants.W_OK);
-    } catch {
-      failures.push(`${file.path}: not readable/writable`);
-      continue;
-    }
-    try {
-      const { access, refresh } = readTokensFromFile(file);
-      if (!access) failures.push(`${file.path}: missing FRESHBOOKS_ACCESS_TOKEN`);
-      if (!refresh) failures.push(`${file.path}: missing FRESHBOOKS_REFRESH_TOKEN`);
-    } catch (err: any) {
-      failures.push(`${file.path}: parse error — ${err.message ?? err}`);
-      continue;
-    }
-    present.push(file);
+export function applyTokensToEnv(
+  content: string,
+  accessToken: string,
+  refreshToken: string,
+): string {
+  const next = content
+    .replace(/^FRESHBOOKS_ACCESS_TOKEN=.*$/m, `FRESHBOOKS_ACCESS_TOKEN=${accessToken}`)
+    .replace(/^FRESHBOOKS_REFRESH_TOKEN=.*$/m, `FRESHBOOKS_REFRESH_TOKEN=${refreshToken}`);
+  if (!next.includes(`FRESHBOOKS_ACCESS_TOKEN=${accessToken}`)) {
+    throw new Error("FRESHBOOKS_ACCESS_TOKEN line not found in .env");
   }
-  if (failures.length > 0) {
+  if (!next.includes(`FRESHBOOKS_REFRESH_TOKEN=${refreshToken}`)) {
+    throw new Error("FRESHBOOKS_REFRESH_TOKEN line not found in .env");
+  }
+  return next;
+}
+
+/**
+ * Verify `.env` is present, readable, writable, and holds both token markers —
+ * BEFORE any refresh API call, so a refresh token is never burned when the
+ * write-back could not have completed ("no preflight, no rotation").
+ */
+function preflightEnvFile(): void {
+  if (!existsSync(ENV_FILE)) {
+    throw new Error(`[freshbooks] ${ENV_FILE} does not exist — run \`npm run setup\``);
+  }
+  try {
+    accessSync(ENV_FILE, fsConstants.R_OK | fsConstants.W_OK);
+  } catch {
+    throw new Error(`[freshbooks] ${ENV_FILE} is not readable/writable`);
+  }
+  const { access, refresh } = readEnvTokens();
+  const missing: string[] = [];
+  if (!access) missing.push("FRESHBOOKS_ACCESS_TOKEN");
+  if (!refresh) missing.push("FRESHBOOKS_REFRESH_TOKEN");
+  if (missing.length > 0) {
     throw new Error(
-      `[freshbooks] preflight failed — refusing to refresh (would burn refresh token):\n  ` +
-        failures.join("\n  "),
+      `[freshbooks] ${ENV_FILE} is missing ${missing.join(", ")} — refusing to refresh`,
     );
   }
-  return present;
 }
 
 function writeAtomic(path: string, content: string): void {
@@ -149,59 +124,27 @@ function writeAtomic(path: string, content: string): void {
   renameSync(tmp, path);
 }
 
-function persistOne(file: TokenFile, accessToken: string, refreshToken: string): void {
-  const original = readFileSync(file.path, "utf8");
-  let next: string;
-  if (file.kind === "env") {
-    next = original
-      .replace(/^FRESHBOOKS_ACCESS_TOKEN=.*$/m, `FRESHBOOKS_ACCESS_TOKEN=${accessToken}`)
-      .replace(/^FRESHBOOKS_REFRESH_TOKEN=.*$/m, `FRESHBOOKS_REFRESH_TOKEN=${refreshToken}`);
-    if (!next.includes(`FRESHBOOKS_ACCESS_TOKEN=${accessToken}`)) {
-      throw new Error(`replace failed for FRESHBOOKS_ACCESS_TOKEN in ${file.path}`);
+/**
+ * Write rotated tokens into `.env` — atomically (tmp + rename), with a `.bak`
+ * backup and post-write read-back verification. If the write fails, the new
+ * tokens are printed to stderr: the refresh has already rotated FreshBooks-side
+ * state, so losing them silently would force a full OAuth recovery.
+ */
+function persistTokens(accessToken: string, refreshToken: string): void {
+  try {
+    const next = applyTokensToEnv(readFileSync(ENV_FILE, "utf8"), accessToken, refreshToken);
+    writeAtomic(ENV_FILE, next);
+    const after = readEnvTokens();
+    if (after.access !== accessToken || after.refresh !== refreshToken) {
+      throw new Error("post-write verification failed");
     }
-    if (!next.includes(`FRESHBOOKS_REFRESH_TOKEN=${refreshToken}`)) {
-      throw new Error(`replace failed for FRESHBOOKS_REFRESH_TOKEN in ${file.path}`);
-    }
-  } else {
-    const data = JSON.parse(original);
-    const block = getJsonEnvBlock(data);
-    if (!("FRESHBOOKS_ACCESS_TOKEN" in block) || !("FRESHBOOKS_REFRESH_TOKEN" in block)) {
-      throw new Error(`env block missing token keys in ${file.path}`);
-    }
-    block.FRESHBOOKS_ACCESS_TOKEN = accessToken;
-    block.FRESHBOOKS_REFRESH_TOKEN = refreshToken;
-    next = JSON.stringify(data, null, 2) + "\n";
-  }
-  writeAtomic(file.path, next);
-  // Read-back verification.
-  const after = readTokensFromFile(file);
-  if (after.access !== accessToken || after.refresh !== refreshToken) {
-    throw new Error(`post-write verification failed for ${file.path}`);
-  }
-}
-
-function persistTokens(accessToken: string, refreshToken: string, files: TokenFile[]): void {
-  const failures: { path: string; error: string }[] = [];
-  for (const file of files) {
-    try {
-      persistOne(file, accessToken, refreshToken);
-    } catch (err: any) {
-      failures.push({ path: file.path, error: err?.message ?? String(err) });
-    }
-  }
-  if (failures.length > 0) {
-    // Loudly print the new tokens so they aren't lost — refresh has already rotated
-    // the FreshBooks-side state, so silently swallowing this would force full OAuth recovery.
-    console.error("[freshbooks] CRITICAL — refresh succeeded but persist failed for some files.");
+  } catch (err: any) {
+    console.error("[freshbooks] CRITICAL — refresh succeeded but writing .env failed.");
     console.error(`[freshbooks] NEW ACCESS TOKEN:  ${accessToken}`);
     console.error(`[freshbooks] NEW REFRESH TOKEN: ${refreshToken}`);
-    for (const f of failures) {
-      console.error(`[freshbooks]   failed: ${f.path} (${f.error})`);
-    }
-    console.error("[freshbooks] Manually paste the tokens above into the failed files NOW.");
-    throw new Error(
-      `Token persist failed for ${failures.length}/${files.length} files; new tokens logged above.`,
-    );
+    console.error(`[freshbooks]   ${ENV_FILE}: ${err?.message ?? err}`);
+    console.error("[freshbooks] Paste the two tokens above into .env NOW.");
+    throw new Error(`Token persist to .env failed: ${err?.message ?? err}`, { cause: err });
   }
   process.env.FRESHBOOKS_ACCESS_TOKEN = accessToken;
   process.env.FRESHBOOKS_REFRESH_TOKEN = refreshToken;
@@ -216,15 +159,13 @@ async function refreshAndPersist(client: Client): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
-      const present = preflightTokenFiles();
+      preflightEnvFile();
       const result = await client.refreshAccessToken();
       if (!result) throw new Error("FreshBooks refreshAccessToken returned no data");
-      persistTokens(result.accessToken, result.refreshToken, present);
+      persistTokens(result.accessToken, result.refreshToken);
       client.accessToken = result.accessToken;
       client.refreshToken = result.refreshToken;
-      console.error(
-        `[freshbooks] access token refreshed and persisted to ${present.length} file(s)`,
-      );
+      console.error("[freshbooks] access token refreshed");
     } finally {
       refreshInFlight = null;
     }
@@ -267,19 +208,13 @@ export async function ensureFreshToken(): Promise<void> {
   await refreshIfNeeded();
 }
 
-export interface TokenFileState {
-  path: string;
-  kind: "env" | "json";
-  required: boolean;
+export interface TokenHealth {
+  /** Absolute path of the `.env` token store. */
+  envPath: string;
   exists: boolean;
   access?: string;
   refresh?: string;
-  error?: string;
-}
-
-export interface TokenHealth {
-  files: TokenFileState[];
-  drift: boolean;
+  /** Seconds until the access token expires (negative if already expired). */
   expirySeconds: number | null;
   expired: boolean;
   issues: string[];
@@ -287,47 +222,52 @@ export interface TokenHealth {
 }
 
 /**
- * Read every token file and report drift + JWT expiry. No API call, no refresh —
+ * Read `.env` and report token presence + JWT expiry. No API call, no refresh —
  * safe to run anytime. Backs the `refresh-tokens` CLI's --check-only mode.
  */
 export function inspectTokenHealth(bufferSeconds: number = REFRESH_BUFFER_SECONDS): TokenHealth {
-  const states: TokenFileState[] = [];
-  const issues: string[] = [];
-  for (const file of discoverTokenFiles()) {
-    if (!existsSync(file.path)) {
-      states.push({ ...file, exists: false });
-      if (file.required) issues.push(`${file.path}: missing (required)`);
-      continue;
-    }
-    try {
-      const { access, refresh } = readTokensFromFile(file);
-      states.push({ ...file, exists: true, access, refresh });
-      if (!access) issues.push(`${file.path}: no access token`);
-      if (!refresh) issues.push(`${file.path}: no refresh token`);
-    } catch (err: any) {
-      states.push({ ...file, exists: true, error: err?.message ?? String(err) });
-      issues.push(`${file.path}: parse error — ${err?.message ?? err}`);
-    }
+  if (!existsSync(ENV_FILE)) {
+    return {
+      envPath: ENV_FILE,
+      exists: false,
+      expirySeconds: null,
+      expired: false,
+      issues: [`${ENV_FILE}: missing — run \`npm run setup\``],
+      needsRefresh: false,
+    };
   }
-  const accessValues = new Set(states.map((s) => s.access).filter(Boolean));
-  const refreshValues = new Set(states.map((s) => s.refresh).filter(Boolean));
-  const drift = accessValues.size > 1 || refreshValues.size > 1;
-  if (drift) issues.push("token drift: token files hold different values");
 
-  const primary = states.find((s) => s.access)?.access;
+  let access: string | undefined;
+  let refresh: string | undefined;
+  try {
+    ({ access, refresh } = readEnvTokens());
+  } catch (err: any) {
+    return {
+      envPath: ENV_FILE,
+      exists: true,
+      expirySeconds: null,
+      expired: false,
+      issues: [`${ENV_FILE}: read error — ${err?.message ?? err}`],
+      needsRefresh: false,
+    };
+  }
+
+  const issues: string[] = [];
+  if (!access) issues.push(`${ENV_FILE}: no access token`);
+  if (!refresh) issues.push(`${ENV_FILE}: no refresh token`);
+
   let expirySeconds: number | null = null;
   let expired = false;
-  if (primary) {
-    const exp = decodeJwtExp(primary);
+  if (access) {
+    const exp = decodeJwtExp(access);
     if (exp !== null) {
       expirySeconds = exp - Math.floor(Date.now() / 1000);
       expired = expirySeconds <= 0;
     }
   }
   const nearExpiry = expirySeconds !== null && expirySeconds < bufferSeconds;
-  const needsRefresh =
-    drift || expired || nearExpiry || (primary !== undefined && expirySeconds === null);
-  return { files: states, drift, expirySeconds, expired, issues, needsRefresh };
+  const needsRefresh = expired || nearExpiry || (access !== undefined && expirySeconds === null);
+  return { envPath: ENV_FILE, exists: true, access, refresh, expirySeconds, expired, issues, needsRefresh };
 }
 
 export function getFreshBooksClient(): Client {

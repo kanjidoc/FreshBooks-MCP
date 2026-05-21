@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./load-env";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { freshbooksServer } from "./server";
 import { ensureFreshToken } from "./freshbooks-client";

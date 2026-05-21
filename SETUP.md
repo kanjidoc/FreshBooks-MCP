@@ -169,27 +169,32 @@ npm run setup
 > explain what the wizard will ask (below), and wait for them to tell you it
 > finished before you continue.
 
-The wizard walks you through, in order:
+The wizard prints its own headers, `STEP 1` through `STEP 6`. Here is what each
+one does:
 
-1. **Paste your Client ID and Client Secret** — from the FreshBooks tab in Step 5.
-2. **Authorize in your browser** — the wizard opens a FreshBooks page; click
-   **"Allow"**. Your browser then jumps to a page that **fails to load** — *that is
-   expected and correct*. Copy the **full web address** from your browser's address
-   bar and paste it back into the wizard.
-3. **Account detection** — the wizard finds your Account ID and Business ID for you.
-4. **Saving and building** — it writes your settings and compiles the server.
-5. **Connecting to Claude** — the wizard offers to install the server into
-   **Claude Desktop**, and (if the `claude` command-line tool is present) into
-   **Claude Code** as well. Say **yes** to whichever Claude you use — saying yes
-   to both is fine. If you skip both, it prints the configuration to add by hand.
+- **`STEP 1` — Create a FreshBooks Developer App.** It re-shows the app-creation
+  instructions; you already did this in Step 5 above, so just have your **Client
+  ID** and **Client Secret** ready to paste.
+- **`STEP 2` — Authorize.** The wizard opens a FreshBooks page; click **"Allow"**.
+  Your browser then jumps to a page that **fails to load** — *that is expected and
+  correct*. Copy the **full web address** from the address bar and paste it back
+  into the wizard.
+- **`STEP 3` — Account detection.** It finds your Account ID and Business ID for you.
+- **`STEP 4` and `STEP 5` — Saving and building.** It writes your `.env` file and
+  compiles the server.
+- **`STEP 6` — Connecting to Claude.** It offers to install the server into
+  **Claude Desktop**, and (if the `claude` command-line tool is present) into
+  **Claude Code** as well. Say **yes** to whichever Claude you use — saying yes to
+  both is fine. If you skip both, it prints the configuration to add by hand.
 
 - ✅ The wizard ends with a line that says **`DONE!`**.
 - ⚠️ Something went wrong — see the Troubleshooting table at the bottom of this guide.
 
 > **Keep your credentials private.** The wizard saves your FreshBooks login in a
-> file named `.env` inside the project folder. Don't share that file or upload it
-> anywhere — it holds the keys to your accounting account. (It's already excluded
-> from Git, so it won't be committed by accident.)
+> file named `.env` inside the project folder — that one file is the only place
+> your tokens live. Don't share it or upload it anywhere; it holds the keys to
+> your accounting account. (It's already excluded from Git, so it won't be
+> committed by accident.)
 
 ---
 
@@ -284,7 +289,7 @@ projects, reports, and more — works on a regular FreshBooks account.
 | `node: command not found` or `npm: command not found` | Node.js isn't installed. See Step 2. |
 | The setup wizard didn't open my browser | Copy the authorization URL the wizard printed in the Terminal and paste it into your browser yourself. |
 | Browser shows "this page can't be reached" after I click Allow | That is expected. Copy the **full address** from the address bar and paste it into the wizard. |
-| "OAuth callback timeout" or the code is rejected | Your app's Redirect URI must be **exactly** `https://localhost/callback`. Fix it in the FreshBooks Developer Portal and run `npm run setup` again. |
+| The wizard says the authorization code was rejected | Codes are short-lived — the wizard lets you paste a fresh redirect URL and retry, so try again first. If it keeps failing, your app's Redirect URI must be **exactly** `https://localhost/callback` — fix it in the FreshBooks Developer Portal. |
 | `FRESHBOOKS_CLIENT_ID is not set` | The server has no credentials. Re-run `npm run setup`. |
 | "401 Unauthorized" from FreshBooks | Your token expired. Run `npm run refresh-tokens`. If that says `REFRESH FAILED`, re-run `npm run setup`. |
 | `invalid_grant` while refreshing | The login was revoked or expired. Re-run `npm run setup` for a fresh connection. |
@@ -309,24 +314,15 @@ If you skipped the wizard's auto-install, add the server to Claude Desktop yours
 1. Open Claude Desktop's config file (create it if it doesn't exist):
    - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
    - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-2. Add the block below. Use the values from the `.env` file the wizard created, and
-   the **absolute path** to `dist/index.js`:
+2. Add the block below, with the **absolute path** to your `dist/index.js`. It
+   holds no credentials — the server reads those from `.env` itself:
 
 ```json
 {
   "mcpServers": {
     "freshbooks": {
       "command": "node",
-      "args": ["/absolute/path/to/FreshBooks-MCP/dist/index.js"],
-      "env": {
-        "FRESHBOOKS_CLIENT_ID": "your_client_id",
-        "FRESHBOOKS_CLIENT_SECRET": "your_client_secret",
-        "FRESHBOOKS_REDIRECT_URI": "https://localhost/callback",
-        "FRESHBOOKS_ACCESS_TOKEN": "your_access_token",
-        "FRESHBOOKS_REFRESH_TOKEN": "your_refresh_token",
-        "FRESHBOOKS_ACCOUNT_ID": "your_account_id",
-        "FRESHBOOKS_BUSINESS_ID": "your_business_id"
-      }
+      "args": ["/absolute/path/to/FreshBooks-MCP/dist/index.js"]
     }
   }
 }
@@ -343,7 +339,7 @@ To make FreshBooks available in **every** Claude Code project, register it at
 "user" scope with the `claude` command-line tool:
 
 ```bash
-claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["/absolute/path/to/FreshBooks-MCP/dist/index.js"],"env":{ ...your seven FRESHBOOKS_ values... }}' --scope user
+claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["/absolute/path/to/FreshBooks-MCP/dist/index.js"]}' --scope user
 ```
 
 The setup wizard offers to run this for you in Step 6 whenever the `claude` tool

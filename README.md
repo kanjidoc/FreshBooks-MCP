@@ -76,6 +76,7 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 | File | Purpose |
 |---|---|
 | `src/index.ts` | Entry point — refreshes the OAuth token, then starts the stdio MCP server |
+| `src/load-env.ts` | Loads `.env` (the single token store) by absolute path before startup |
 | `src/server.ts` | Serves the registered tools via `createSdkMcpServer` |
 | `src/tool-registry.ts` | The single list of all tools; wraps each handler with automatic token refresh |
 | `src/freshbooks-client.ts` | FreshBooks `Client` singleton + OAuth token persistence and refresh |

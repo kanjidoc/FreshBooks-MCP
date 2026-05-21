@@ -28,6 +28,7 @@ FreshBooks-MCP is a Model Context Protocol (MCP) server that exposes FreshBooks 
 FreshBooks-MCP/
 ├── src/
 │   ├── index.ts                # Entry point — starts the MCP server via stdio transport
+│   ├── load-env.ts             # Loads .env (the single token store) by absolute path
 │   ├── server.ts               # createSdkMcpServer setup; serves the tool list from tool-registry.ts
 │   ├── tool-registry.ts        # The single tool array; wraps each handler with automatic token refresh
 │   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars; OAuth token persistence/refresh
@@ -97,17 +98,17 @@ npm run check-tokens   # Audit token files + report JWT expiry (refresh-tokens -
 
 ### Token persistence safety
 
-OAuth tokens can live in up to **three** files. `.env` is the **required** canonical store. `.mcp.json` and the Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`) are **optional** mirrors — kept in sync only when they exist, so a fresh clone works on any OS and on installs that never use Claude Desktop. FreshBooks rotates the refresh token on every refresh call — if a present file fails to persist, the chain breaks and full browser-based OAuth recovery is needed.
+OAuth tokens live in exactly **one** file: `.env`, the single source of truth. The server loads `.env` by absolute path at startup (`src/load-env.ts`, with `override: true`), so its working directory is irrelevant and a stale token frozen into any launcher config cannot outrank it. MCP launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`) carry only the command to start the server — never tokens — so there is nothing to keep in sync and nothing that can drift. FreshBooks rotates the refresh token on every refresh call; the rotated pair is written back to `.env`.
 
 `src/freshbooks-client.ts` enforces these invariants on every refresh:
-1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightTokenFiles()` verifies each file exists, is writable, and contains both token markers. An absent *optional* mirror is skipped (not a failure); an absent *required* `.env`, or any present-but-broken file, throws *without* calling the API (no burned refresh token). It returns the present, valid files as the persist targets.
-2. **Atomic writes** — writes to `<file>.tmp` then `rename()`s into place; backup saved as `<file>.bak`.
-3. **Post-write verification** — re-reads each file and confirms the new tokens are present.
-4. **Loud failure** — if persistence fails after a successful refresh, prints the new tokens to stderr so they can be manually pasted into the failed files.
+1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightEnvFile()` verifies `.env` exists, is readable/writable, and contains both token markers. If not, it throws *without* calling the API (no burned refresh token).
+2. **Atomic write** — writes `.env.tmp` then `rename()`s into place; backup saved as `.env.bak`.
+3. **Post-write verification** — re-reads `.env` and confirms the new tokens are present.
+4. **Loud failure** — if the write fails after a successful refresh, prints the new tokens to stderr so they can be pasted into `.env` manually.
 
 Tokens refresh **automatically**: once at server startup (`ensureFreshToken()` in `index.ts`) and proactively before every tool call. The pre-call refresh is `refreshIfNeeded()` — a cheap no-op JWT-expiry check unless the token is within 10 minutes of expiring — wired centrally in `src/tool-registry.ts` via `withTokenRefresh`. A single-flight guard ensures concurrent tool calls share one refresh rather than each rotating the refresh token.
 
-`scripts/refresh-tokens.ts` is the manual CLI: `npm run refresh-tokens` refreshes if needed, and `npm run check-tokens` (i.e. `refresh-tokens --check-only`) is a no-API-cost drift detector. Wire `--check-only` into cron/launchd to catch silent drift before the chain breaks.
+`scripts/refresh-tokens.ts` is the manual CLI: `npm run refresh-tokens` refreshes if needed, and `npm run check-tokens` (i.e. `refresh-tokens --check-only`) audits `.env` and reports JWT expiry with no API call.
 
 ### Linting and Formatting
 
