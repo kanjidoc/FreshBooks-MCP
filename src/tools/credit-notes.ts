@@ -88,7 +88,7 @@ export const getCreditNote = tool(
 
 export const createCreditNote = tool(
   "freshbooks_create_credit_note",
-  "Create a new credit note in FreshBooks for a client. Provide the client ID, line items, and an optional date and notes.",
+  "Create a new credit note for a client. KNOWN LIMITATION: currently non-functional — blocked by a bug in @freshbooks/api@4.1.0 (the SDK serializes the request with an incorrect wrapper key). See CHANGELOG.md. Provide the client ID, line items, and an optional date and notes.",
   {
     client_id: z.number().int().describe("The client ID to associate the credit note with (required)"),
     create_date: z.string().optional().describe("Credit note date in YYYY-MM-DD format (defaults to today)"),

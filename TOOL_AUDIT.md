@@ -631,3 +631,26 @@ inherent FreshBooks task/service coupling, not an MCP defect — but worth knowi
 
 No other test data persists. Account totals and the real `Adjustment` item (id `1338131`,
 whose description was temporarily changed and reverted to `""`) are unaffected.
+
+---
+
+## 12. v2.0 remediation outcome (2026-05-21)
+
+All fixes in this document were applied on the `v2.0` branch and re-verified live.
+**Outcome: 11 of the 13 tools fully fixed and verified working.** The two exceptions were
+found, during verification, to be broken *deeper than this audit first diagnosed* — inside
+the `@freshbooks/api@4.1.0` SDK (the latest release), not just the wrapper:
+
+- **#2 `create_credit_note`** — the `clientid`→`clientId` fix was necessary but not
+  sufficient. The SDK's `transformCreditNoteRequest` wraps the body in `credit_notes`
+  (plural); the API requires `credit_note` (singular) — every other resource transform
+  uses the singular key. The response transform is broken the same way, and `create_date`
+  is API-required. A custom `client.call` with the singular wrapper was verified to create
+  a credit note, confirming the SDK as the root cause.
+- **#8 `create_journal_entry`** — the `details[]` redesign was correct, but the SDK's
+  `transformJournalEntryRequest` omits the API-required `name` field and emits
+  `user_entered_date` where the API expects `date`.
+
+Per the owner's decision, these two `create` tools ship in v2.0 **documented as known
+limitations** (see `CHANGELOG.md`) rather than patched with custom transforms — the defect
+is upstream and belongs in `@freshbooks/api`. Their `list`/`get` tools are unaffected.

@@ -20,7 +20,7 @@ type JournalEntryListResources = {
 
 export const createJournalEntry = tool(
   "freshbooks_create_journal_entry",
-  "Create a new journal entry. Requires a description, credit entries, and debit entries. Credit and debit totals must balance. Amounts are passed as strings for precision but are converted to numbers because the FreshBooks SDK's journal-entry detail model types credit/debit as numbers.",
+  "Create a new journal entry. KNOWN LIMITATION: currently non-functional — blocked by a bug in @freshbooks/api@4.1.0 (the SDK omits API-required fields). See CHANGELOG.md. Requires a description, credit entries, and debit entries; credit and debit totals must balance. Amounts are passed as strings but converted to numbers (the SDK's detail model types credit/debit as numbers).",
   {
     description: z.string().describe("Description of the journal entry"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),

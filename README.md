@@ -445,6 +445,15 @@ npm run format         # Format with Prettier
 npm test               # Run the test suite
 ```
 
+## Known limitations
+
+- **`create_credit_note` and `create_journal_entry` are currently non-functional**, blocked
+  by bugs in `@freshbooks/api@4.1.0` (the latest SDK release) that mis-serialize those two
+  requests. Listing and reading credit notes and journal-entry data works normally. See
+  [CHANGELOG.md](CHANGELOG.md) and `TOOL_AUDIT.md` for the full diagnosis.
+- The **bills / bill payments / bill vendors** write tools require the FreshBooks
+  Accounts-Payable add-on to be enabled on your account.
+
 ## Troubleshooting
 
 | Problem | Solution |

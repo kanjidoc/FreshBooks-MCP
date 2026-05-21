@@ -140,6 +140,11 @@ different account — list the resource first to get a valid ID.
 **Bills / bill-payments / bill-vendors fail with "no access".** The FreshBooks
 account does not have the Accounts-Payable add-on enabled.
 
+**create_credit_note or create_journal_entry fails.** These two are known to be
+non-functional — blocked by bugs in @freshbooks/api@4.1.0 (the latest SDK release)
+that serialize the request incorrectly. The defect is upstream, not in this server.
+The list/get tools for credit notes and journal entries work normally.
+
 **Build errors after editing a tool.** Payloads are typed against SDK model
 interfaces — a compile error usually means a wrong property name. Fix the name;
 do not cast \`as any\`.
