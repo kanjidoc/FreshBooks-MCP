@@ -90,7 +90,9 @@ export const createOtherIncome = tool(
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Income amount as a Money object"),
     date: z.string().describe("Income date in YYYY-MM-DD format"),
-    category_name: z.string().describe("Income category name, e.g. 'Other Income' (required by FreshBooks)"),
+    category_name: z
+      .enum(["advertising", "in_person_sales", "online_sales", "rentals", "other"])
+      .describe("Income category — one of the FreshBooks other-income categories (required)"),
     note: z.string().optional().describe("Optional note about this income"),
   },
   async (args) => {
@@ -137,7 +139,10 @@ export const updateOtherIncome = tool(
     other_income_id: z.string().describe("The other income ID to update"),
     source: z.string().optional().describe("Updated income source description"),
     note: z.string().optional().describe("Updated note"),
-    category_name: z.string().optional().describe("Updated income category name"),
+    category_name: z
+      .enum(["advertising", "in_person_sales", "online_sales", "rentals", "other"])
+      .optional()
+      .describe("Updated income category"),
     amount: z.object({
       amount: z.string().describe("Amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
@@ -212,8 +217,10 @@ export const deleteOtherIncome = tool(
         };
       }
 
+      // The other_income DELETE returns an empty body; report a clear
+      // confirmation rather than an uninformative "{}".
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(response.data, null, 2) }],
+        content: [{ type: "text" as const, text: `Other income ${args.other_income_id} deleted.` }],
       };
     } catch (error) {
       return {

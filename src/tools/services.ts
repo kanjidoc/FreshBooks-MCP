@@ -68,19 +68,19 @@ export const getService = tool(
 
 export const createService = tool(
   "freshbooks_create_service",
-  "Create a new service in FreshBooks.",
+  "Create a new service in FreshBooks. Note: services are created billable — the FreshBooks SDK's transformServiceRequest serializes only the name, so a billable flag passed on creation would be silently ignored and is therefore not exposed.",
   {
     name: z.string().describe("Service name (required)"),
-    billable: z.boolean().default(true).describe("Whether the service is billable (default: true)"),
   },
   async (args) => {
     try {
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
+      // Only `name` is sent: the SDK's transformServiceRequest (Service.js)
+      // serializes nothing else, so `billable` cannot be set on creation.
       const serviceData: Service = {
         name: args.name,
-        billable: args.billable,
       };
 
       const response = await client.services.create(serviceData, businessId);

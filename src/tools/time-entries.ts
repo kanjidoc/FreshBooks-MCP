@@ -145,26 +145,29 @@ export const updateTimeEntry = tool(
       const client = getFreshBooksClient();
       const businessId = getBusinessId();
 
-      // The SDK's transformTimeEntryRequest serializes started_at unconditionally
-      // (started_at: null when omitted), which the timetracking API rejects. Fetch
-      // the existing entry and preserve its startedAt so a complete object is sent.
+      // The FreshBooks timetracking PUT is a full replace, and the SDK's
+      // transformTimeEntryRequest serializes every field unconditionally — so any
+      // field absent from the payload is reset: started_at -> null (the API
+      // rejects this outright), and client_id/project_id/task_id/service_id ->
+      // null (which silently drops the entry's associations). Fetch the existing
+      // entry and send it back complete, overriding only the caller's changes.
       const existing = await client.timeEntries.single(businessId, args.time_entry_id);
       if (!existing.ok || !existing.data?.startedAt) {
         return {
-          content: [{ type: "text" as const, text: `Could not load time entry ${args.time_entry_id} to preserve its start time: ${existing.error?.message ?? "no startedAt on returned entry"}` }],
+          content: [{ type: "text" as const, text: `Could not load time entry ${args.time_entry_id} to update it: ${existing.error?.message ?? "no startedAt on returned entry"}` }],
           isError: true,
         };
       }
 
-      const updateData: Partial<TimeEntry> = {
-        startedAt: existing.data.startedAt,
-        duration: args.duration ?? existing.data.duration,
-        isLogged: existing.data.isLogged,
+      const current = existing.data;
+      const updateData: TimeEntry = {
+        ...current,
+        duration: args.duration ?? current.duration,
+        note: args.note !== undefined ? args.note : current.note,
+        billable: args.billable !== undefined ? args.billable : current.billable,
       };
-      if (args.note !== undefined) updateData.note = args.note;
-      if (args.billable !== undefined) updateData.billable = args.billable;
 
-      const response = await client.timeEntries.update(updateData as TimeEntry, businessId, args.time_entry_id);
+      const response = await client.timeEntries.update(updateData, businessId, args.time_entry_id);
 
       if (!response.ok) {
         return {
