@@ -5,6 +5,31 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [2.1.1] - 2026-05-22
+
+### Added
+
+- `freshbooks_help` gains a `version` topic — it reports the installed version
+  and the live tool count, directs the assistant to check GitHub for a newer
+  release, and explains how to update (covering both git-clone and ZIP installs).
+- Automated GitHub releases: `.github/workflows/release.yml` tags `vX.Y.Z` and
+  publishes a release whenever `package.json`'s version changes on `main`, with
+  notes extracted from this changelog by `scripts/extract-changelog.mjs`.
+
+### Changed
+
+- `package.json` is the single source of truth for the version. `src/version.ts`
+  is the one module that reads it; `src/server.ts` and `freshbooks_help` derive
+  the version from it, and the `overview` help topic derives the tool count from
+  the registry instead of a hardcoded number.
+
+### Fixed
+
+- Regression tests guard against version and tool-count drift
+  (`test/version.test.ts`, `test/doc-tool-count.test.ts`).
+
 ## [2.1.0] - 2026-05-21
 
 ### Fixed
