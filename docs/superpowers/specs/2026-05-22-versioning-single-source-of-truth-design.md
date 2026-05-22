@@ -75,12 +75,6 @@ export function getVersion(): string {
 }
 ```
 
-> Review note: an empirical build on this repo's tsc showed `import pkg from
-> "../package.json"` compiles cleanly (`resolveJsonModule` is on). `require` is
-> kept regardless — for immunity to `rootDir` strictness across tsc versions
-> and consistency with `server.ts`/`render-tools.ts` — and the comment no
-> longer claims a specific failure mode it cannot guarantee.
-
 `src/server.ts` is refactored to `import { getVersion } from "./version"` and
 use `version: getVersion()`, dropping its own `require`. `src/version.ts` lives
 in `src/`, so it compiles cleanly to `dist/version.js`; the `eslint-disable`
@@ -282,7 +276,9 @@ npm run lint && npm test` before `gh release create`.
   starts with `## [` (or end of file); the heading line itself is not emitted.
 - **If the section is missing or has no non-whitespace content, it prints a
   stderr message and `exit 1`s** — and it runs before `gh release create`, so
-  `set -e` aborts the job before any Release is published.
+  `set -e` aborts the job before any Release is published. A missing
+  `CHANGELOG.md` *file* is handled the same way — a clean stderr message and
+  `exit 1`, not an uncaught `ENOENT` stack trace.
 
 Workflow shape:
 
@@ -411,10 +407,12 @@ aborts the release loudly. Heading format is exactly `## [X.Y.Z]` or
   guards the *total* tool count wherever a human-maintained doc states it. It
   derives the live total `count = allTools.length` at runtime (never a hardcoded
   literal) and, for each watched file, counts occurrences of **that exact
-  number** used as a tool total — operationally a `\b<count>\b` match on a line
-  that also contains `tool` or `total` (for `package.json`, within the parsed
-  `description` string). It asserts the occurrence count equals the file's
-  expected value.
+  number** used as a tool total — operationally, an occurrence of `<count>`
+  immediately followed by `tool`/`tools` (allowing intervening words such as
+  `FreshBooks accounting`) or appearing as `(<count> total)`. For `package.json`
+  the scan target is the `description` value obtained via `JSON.parse`, not the
+  raw file text. It asserts the occurrence count equals the file's expected
+  value.
 
   Scanning for the *literal current total* — not a generic `\d+ tools` pattern
   — is essential: `CLAUDE.md`'s project-structure tree legitimately contains
@@ -568,8 +566,12 @@ and the `v2.1.0` backfill (Rollout), then merge the PR.
   places; `npm version --no-git-tag-version` updates both — hand-editing is
   forbidden.
 - **Doc-scan brittleness.** Scanning for the *literal current total* (not a
-  generic pattern) avoids matching `CLAUDE.md`'s per-domain counts; the exact
-  per-file expected-count assertion fails loudly on any drift.
+  generic pattern) avoids matching `CLAUDE.md`'s ~18 per-domain counts. It is a
+  prose heuristic — collision-free at the current total, but not by
+  construction: if a future total coincided with another `N tools` / `(N total)`
+  figure in a watched file, that file's expected count would need
+  re-confirming. The test still fails loudly and catches real drift; only the
+  diagnosis might need a second look at those specific counts.
 - **Server startup robustness.** `getVersion()` falls back to `"unknown"`
   instead of throwing if `package.json` is unreadable — the server always
   starts.
