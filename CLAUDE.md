@@ -124,6 +124,29 @@ npm run format         # Prettier
 npm test               # Runs the Vitest test suite
 ```
 
+### Versioning and releases
+
+The version has **one** source of truth: the `version` field in `package.json`.
+`src/version.ts` is the only module that reads it; `src/server.ts` (the MCP
+handshake) and the `freshbooks_help` `version` topic both call `getVersion()`.
+Never hardcode a version string anywhere else.
+
+The tool count is likewise derived — from `allTools.length`. State the tool
+*total* only in the files watched by `test/doc-tool-count.test.ts` (README,
+SETUP, `package.json`'s description, the Claude-project prompt, this file);
+that test fails if any of them drifts from the live registry count.
+
+**Cutting a release.** Everyday PRs add notes under the `## [Unreleased]`
+heading in `CHANGELOG.md`. To release, make one commit that (a) renames
+`## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and (b) bumps the version with
+`npm version X.Y.Z --no-git-tag-version` (this updates `package.json` and
+`package-lock.json` together). Merge that commit to `main`.
+
+`.github/workflows/release.yml` then tags `vX.Y.Z` and publishes a GitHub
+Release automatically, with notes extracted from the changelog section by
+`scripts/extract-changelog.mjs`. It is idempotent — ordinary commits never
+release; only a new version does.
+
 ## Environment Variables
 
 All credentials are loaded from environment variables so any FreshBooks user can plug in their own account. Copy `.env.example` to `.env` and fill in your values. **Never commit `.env`.**
