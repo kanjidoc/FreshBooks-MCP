@@ -31,9 +31,10 @@ appearance is *derived* or *guarded by a test*, never silently copied.
 ## Non-goals
 
 - Publishing to the npm registry. This project stays clone-and-run.
-- A network call from the MCP server to detect whether a newer version
-  exists. The `version` topic reports the *installed* version only; Claude
-  checks GitHub on demand if the user asks "am I up to date?".
+- A network call **from the MCP server**. The server stays network-free and
+  reports only the *installed* version. The `version` topic instead *directs
+  the AI assistant* to fetch the latest GitHub release and compare — so the
+  update check happens assistant-side, never server-side.
 - A project-local release skill. Decided against — a `CLAUDE.md` section is
   the chosen guidance mechanism.
 - An executable self-update MCP tool. Decided against — updating is handed off
@@ -86,10 +87,10 @@ A new `version` topic is added to the `freshbooks_help` tool.
   `Record<string, string | (() => string)>` (confirmed at `help.ts:50`), so a
   function-valued topic needs no type change — `tools` already works this way.
   **Also extend the `freshbooks_help` tool *description*** (the second argument
-  to `tool()`) to mention the installed version — without it, a question like
-  "what version of the FreshBooks MCP do I have?" has nothing in the tool list
-  signalling that `freshbooks_help` can answer it, so the topic would be
-  undiscoverable.
+  to `tool()`) to mention the installed version *and whether a newer one is
+  available* — without it, questions like "what version do I have?" or "is my
+  FreshBooks MCP up to date?" have nothing in the tool list routing them to
+  `freshbooks_help`, so the `version` topic would be undiscoverable.
 - `TOPIC_INDEX` (a module-local `const` in `help.ts`, not exported — confirmed)
   becomes a function: it shows the installed version on its first line and
   lists `version` among the topics.
@@ -102,8 +103,9 @@ A new `version` topic is added to the `freshbooks_help` tool.
   enforces this.
 - **What each rendered topic must show** (stated explicitly so the test in 5b
   and the implementation cannot diverge):
-  - `renderVersionTopic()` → the installed version, the live tool count, and
-    the "How to update" block.
+  - `renderVersionTopic()` → the installed version, the live tool count, an
+    "Are you running the latest?" directive (which tells the assistant to fetch
+    the latest GitHub release and compare), and the "How to update" block.
   - `renderOverviewTopic()` → the existing overview prose, **plus** a version
     line near the top, **and** with the literal `75 tools` replaced by the
     interpolated count. Converting `TOPIC_OVERVIEW` to a function without
@@ -133,6 +135,18 @@ The version comes from a normal top-level `import { getVersion } from "../versio
 This is the version of the FreshBooks MCP server currently running. It comes
 from `package.json` — the single source of truth — so it always matches the
 installed code.
+
+## Are you running the latest?
+
+**For the AI assistant reading this:** before answering, check for a newer
+release. Fetch `https://api.github.com/repos/kanjidoc/FreshBooks-MCP/releases/latest`
+and read its `tag_name` (e.g. `v2.1.1`); compare it to the installed version
+above.
+
+- Latest is newer → tell the user an update is available, then walk them
+  through "How to update" below.
+- They match → confirm the user is on the latest version.
+- GitHub unreachable → just report the installed version and move on.
 
 ## How to update
 
@@ -166,6 +180,14 @@ a Claude that can reason about them — with a plain `git pull` fallback for
 users who do not have Claude Code. In Claude Code, Claude can run the steps
 itself; in Claude Desktop (no shell), Claude relays the prompt for the user to
 paste into a terminal.
+
+Both the "Are you running the latest?" and "How to update" blocks are
+*instructions embedded for the reading assistant*, not passive text. That is
+the deliberate pattern of the `version` topic: the server itself never touches
+the network or the shell — it hands Claude a clear directive, and Claude (which
+*can* fetch a URL and *can* run a terminal in Claude Code) carries it out. This
+keeps the server minimal and trustworthy while still giving the user a
+proactive "you're on 2.1.0, 2.1.1 is out — want me to update you?" experience.
 
 ### Component 3 — `.github/workflows/release.yml` (new): release automation
 
@@ -498,3 +520,8 @@ After the six steps, still on the feature branch: run the `v2.1.0` backfill
 - **Doc-scan brittleness.** The exact per-file match-count assertion in
   `test/doc-tool-count.test.ts` fails loudly if any watched mention is
   reworded, added, or removed — drift cannot pass silently.
+- **Update-check is best-effort.** The "Are you running the latest?" check
+  relies on the assistant honouring the topic's embedded directive and on the
+  GitHub API being reachable. The directive includes a fallback (report the
+  installed version) for when it is not. It is a helpful nudge, not a
+  guarantee — and it deliberately keeps the *server* network-free.
