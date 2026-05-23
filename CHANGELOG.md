@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-05-23
+
+### Security
+
+- Bump transitive `qs` dependency from 6.15.1 to 6.15.2 to clear
+  GHSA-q8mj-m7cp-5q26 (a remotely triggerable DoS in `qs.stringify` with
+  comma-formatted arrays and `encodeValuesOnly`). The advisory was disclosed
+  after 2.1.1 was cut. The affected code path lives in
+  `@modelcontextprotocol/sdk`'s optional Express-based HTTP transport, which
+  this server does not use (stdio only) — runtime exposure was effectively
+  zero — but `npm audit` is now clean. Lockfile-only change; no API surface
+  or behavior changes.
+
 ## [2.1.1] - 2026-05-22
 
 ### Added
