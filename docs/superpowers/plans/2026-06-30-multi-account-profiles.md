@@ -94,8 +94,16 @@ describe("parseProfileConfig", () => {
       businessId: "42",
     });
   });
-  it("returns null when any marker is missing", () => {
+  it("returns null when a TOKEN is missing (refresh absent)", () => {
     expect(parseProfileConfig("FRESHBOOKS_ACCESS_TOKEN=a\n")).toBeNull();
+  });
+  it("parses with blank account/business ids (accounting-only single-login — U1)", () => {
+    expect(parseProfileConfig("FRESHBOOKS_ACCESS_TOKEN=a\nFRESHBOOKS_REFRESH_TOKEN=r\n")).toEqual({
+      accessToken: "a",
+      refreshToken: "r",
+      accountId: "",
+      businessId: "",
+    });
   });
 });
 
@@ -139,6 +147,7 @@ export interface ProfileState {
   config: ProfileConfig;
   client: Client | null;
   refreshInFlight: Promise<void> | null;
+  quarantined?: boolean; // R2: same-accountId collision, excluded from rotation until opt-in
 }
 
 export class UnknownProfileError extends Error {
@@ -173,10 +182,19 @@ export function parseProfileConfig(content: string): ProfileConfig | null {
   const p = dotenv.parse(content);
   const accessToken = p.FRESHBOOKS_ACCESS_TOKEN?.trim();
   const refreshToken = p.FRESHBOOKS_REFRESH_TOKEN?.trim();
-  const accountId = p.FRESHBOOKS_ACCOUNT_ID?.trim();
-  const businessId = p.FRESHBOOKS_BUSINESS_ID?.trim();
-  if (!accessToken || !refreshToken || !accountId || !businessId) return null;
-  return { accessToken, refreshToken, accountId, businessId };
+  // U1: gate validity on the two TOKENS only. That still excludes empty stubs /
+  // editor-backup copies (A5's real intent), but does NOT brick an accounting-
+  // only single-login install that legitimately ships a blank
+  // FRESHBOOKS_BUSINESS_ID (A3 "single-login unchanged" outranks A5's literal
+  // "all four markers"). IDs default to "" and keep their throw-at-call-time
+  // semantics in getAccountId()/getBusinessId().
+  if (!accessToken || !refreshToken) return null;
+  return {
+    accessToken,
+    refreshToken,
+    accountId: p.FRESHBOOKS_ACCOUNT_ID?.trim() ?? "",
+    businessId: p.FRESHBOOKS_BUSINESS_ID?.trim() ?? "",
+  };
 }
 ```
 
@@ -371,11 +389,14 @@ export function resolveProfile(name: string): ProfileState {
 }
 
 export function defaultProfileName(): string | null {
+  // R3: the lone profile's name, or null. NO FRESHBOOKS_DEFAULT_PROFILE selector
+  // — with >=2 profiles withAccount requires an explicit account before this is
+  // consulted, so an env default would be dead code with multiple profiles and
+  // an implicit-routing footgun against the "name every request" decision.
   const reg = getRegistry();
-  const fromEnv = process.env.FRESHBOOKS_DEFAULT_PROFILE?.trim().toLowerCase();
-  if (fromEnv && reg.profiles.has(fromEnv)) return fromEnv;
-  if (reg.profiles.size === 1) return [...reg.profiles.keys()][0];
-  return null;
+  if (reg.profiles.size !== 1) return null;
+  const only = [...reg.profiles.values()][0];
+  return only.quarantined ? null : only.name; // never default to a quarantined profile (R2)
 }
 
 const als = new AsyncLocalStorage<{ profile: ProfileState }>();
@@ -1286,7 +1307,7 @@ git commit -m "test: real MCP round-trip locks in account-schema exposure + conc
   - `function lockPathFor(rootDir: string): string`
   - `function writeLock(path: string): void` (records `{ pid, at }`)
   - `function removeLock(path: string): void`
-  - `function isServerLockFresh(path: string, maxAgeMs?: number): boolean` — held iff the recorded pid is a **live process** (`process.kill(pid, 0)`), NOT a fixed time window. (Overseer CRITICAL: an age-based lock looks stale after 60s, so a normally-running server would be seen as "not running" and migration would proceed concurrently → token-burn race.)
+  - `function isServerLockFresh(path: string): boolean` — held iff the recorded pid is a **live process** (`process.kill(pid, 0)`); NO age bound and NO heartbeat (R1). A reused PID after an uncleaned crash fails closed (migration refuses; recover via the hardened `--force`). (Overseer CRITICAL + lock debate: an age-based lock looks stale after its window, so a long-running/suspended server would be seen as "not running" and migration would proceed concurrently → token-burn race.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1326,7 +1347,7 @@ Expected: FAIL — module not found.
 
 ```ts
 // src/server-lock.ts
-import { writeFileSync, existsSync, statSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export function lockPathFor(rootDir: string): string {
@@ -1340,18 +1361,18 @@ export function removeLock(path: string): void {
 }
 
 /**
- * A lock means "a server is alive" — judged by PID LIVENESS, not file age. A
- * write-once + mtime-window lock would look stale after the window and let
- * migration run concurrently with a long-running server (Amendment A2 token-burn
- * race). `maxAgeMs` is only a secondary guard so a PID reused after an uncleaned
- * crash can't masquerade as the old server forever.
+ * A lock means "a server is alive" — judged by PID LIVENESS ONLY (R1). There is
+ * NO file-age bound and NO heartbeat: a long-running or laptop-suspended server
+ * must never be judged "stale" while its PID is alive, or migration could run
+ * concurrently with it and burn a token (the A2 CRITICAL race). A reused PID
+ * after an uncleaned crash fails CLOSED (migration refuses; recover via the
+ * hardened `--force` path), which is the correct bias for a token-safety lock.
  */
-export function isServerLockFresh(path: string, maxAgeMs = 24 * 60 * 60 * 1000): boolean {
+export function isServerLockFresh(path: string): boolean {
   if (!existsSync(path)) return false;
   let pid: unknown;
   try { pid = JSON.parse(readFileSync(path, "utf8")).pid; } catch { return false; }
   if (typeof pid !== "number") return false;
-  if (Date.now() - statSync(path).mtimeMs > maxAgeMs) return false;
   try {
     process.kill(pid, 0); // signal 0 = liveness probe (sends nothing)
     return true;
@@ -1544,10 +1565,10 @@ export function buildProfileFileContent(config: ProfileConfig): string {
 
 export function stripTokensFromBaseEnv(content: string): string {
   let out = content
-    .replace(/^FRESHBOOKS_ACCESS_TOKEN=.*$\n?/m, "")
-    .replace(/^FRESHBOOKS_REFRESH_TOKEN=.*$\n?/m, "")
-    .replace(/^FRESHBOOKS_ACCOUNT_ID=.*$\n?/m, "")
-    .replace(/^FRESHBOOKS_BUSINESS_ID=.*$\n?/m, "");
+    .replace(/^FRESHBOOKS_ACCESS_TOKEN=.*$\n?/gm, "")
+    .replace(/^FRESHBOOKS_REFRESH_TOKEN=.*$\n?/gm, "")
+    .replace(/^FRESHBOOKS_ACCOUNT_ID=.*$\n?/gm, "")
+    .replace(/^FRESHBOOKS_BUSINESS_ID=.*$\n?/gm, "");
   if (!isMigrated(out)) {
     if (!out.endsWith("\n")) out += "\n";
     out += `${MIGRATED_MARKER}=1\n`;
@@ -1789,6 +1810,9 @@ describe("gitignore protects all token stores", () => {
     expect(ignored(".env.bak")).toBe(true);
     expect(ignored("profiles/acme.env.bak")).toBe(true);
   });
+  it("ignores the advisory server lock", () => {
+    expect(ignored(".server.lock")).toBe(true);
+  });
 });
 ```
 
@@ -1804,6 +1828,8 @@ Add to `.gitignore` (after the `.env` line):
 ```
 # Per-login OAuth token stores (one file per FreshBooks login) — never commit.
 profiles/
+# Advisory server lock (pid + start time), written at startup.
+.server.lock
 ```
 
 Rewrite `.env.example` so it documents ONLY shared app creds plus a pointer:
@@ -1816,8 +1842,7 @@ FRESHBOOKS_REDIRECT_URI=
 
 # Per-login tokens are NOT stored here. Run `npm run setup` to create one
 # profiles/<name>.env per FreshBooks login (access/refresh token + account/business id).
-# Optional: pick which profile a tool uses when you omit `account` and only one exists.
-# FRESHBOOKS_DEFAULT_PROFILE=
+# `npm run setup` also writes FRESHBOOKS_MIGRATED=1 here after migrating a legacy single-login .env.
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1867,6 +1892,70 @@ git commit -m "docs: document multi-account profiles; sync tool count to 76; upd
 ```
 
 ---
+
+## Round-3 Rulings & Final Amendments (binding — supersede the tasks above where they conflict)
+
+A 14-reviewer panel (10 facet specialists + 4 senior-dev personas) plus three adjudicated debates produced the following. These are binding; implement them over the inline task code where they differ. Some contained code edits are already applied inline (server-lock, parseProfileConfig, defaultProfileName, .env.example, .gitignore, strip regexes); the rest are specified here.
+
+### R1 — Server lock: pure pid-liveness; harden `--force` (debate: synthesis)
+- **`isServerLockFresh` gates on PID liveness ONLY.** Delete the `maxAgeMs` parameter and the `statSync` mtime check entirely; probe `process.kill(pid,0)` (alive on success or `EPERM`, dead on `ESRCH`). A live PID is never judged stale by age (a long-running or laptop-suspended server must never look dead, or migration could run concurrently and burn a token). Reused-PID after an uncleaned crash fails CLOSED (migration refuses), which is the correct bias. *(Applied inline in Task 8.)*
+- **Harden `--force` in `runMigration` (Task 9).** `--force` must NOT blindly delete the interlock. It may skip the staleness heuristic but must still re-probe `process.kill(pid,0)` against the stored pid and REFUSE when a live process holds the lock, unless an explicit interactive "no FreshBooks server is attached — confirm?" is given. An unconditional bypass is not acceptable for an operation whose failure mode is permanent lockout — it trains the user to type the one keystroke that disables the safety. Add a test: `runMigration({force:true})` against a live-pid lock still refuses without confirmation.
+- **No heartbeat, no v1 identity matching.** Document, as the sanctioned FUTURE enhancement (only if reused-PID false-blocks actually bite), process **start-time / boot-nonce** identity — repurposing the lock's currently-unused `at` field to store process start-time — explicitly NOT file age and NOT a heartbeat.
+
+### R2 — Duplicate-login handling: 3-state, fail-closed, write-path refuse (debate: synthesis)
+Replace Task 2's fused `seenRefresh.has(...) || seenAccount.has(...)` exclusion with three outcomes, and move the hard refuse to the write path:
+- **Identical `refreshToken` string** → hard-exclude into `duplicates` (a definite double-rotation snapshot). Unchanged.
+- **Same `accountId`, DISTINCT refresh tokens** → do NOT blanket-exclude (this is the legitimate accountant / granted-access topology — two separate logins to one company — and silently dropping it loses a login the owner added on purpose) AND do NOT silently admit the second into the refresh set (a copied-then-rotated file shares accountId but has a diverged token, and rotating its superseded token risks a token-family lockout). **Fail closed:** load the second profile but mark it `quarantined` — excluded from `ensureFreshTokens()` rotation and never usable as a no-arg default — until the user adds an explicit opt-in marker line `# freshbooks-distinct-login` to that profile file (discovery scans the raw text for it, since dotenv ignores comments). Record the pair in a `collisions` list.
+- **Clean** → admit.
+- **`sub` (JWT claim) is ADVISORY ONLY.** Use it (decoded by the existing `decodeJwtExp` JSON parse) to *word* the collision warning ("looks like the same login" vs "looks like distinct logins"), NEVER as the sole automatic gate deciding whether a token enters rotation — its presence/stability in FreshBooks tokens is unverified and #1 forbids minting a token to check.
+- **`writeNewProfile` (Task 9) gains a synchronous hard-refuse** on a duplicate `refreshToken` across existing `profiles/*.env` (the real lockout vector, currently unguarded), keeping the `existsSync` name/case guard. A duplicate `accountId` at write time is a loud WARNING, not a refusal.
+- **A detected collision keeps the server in account-required mode** regardless of active-profile count, so reads can't silently auto-route to the surviving sibling. Surface every exclusion/quarantine/collision loudly through `list_accounts` (extend the `ignored_files` channel with a `collisions` list naming which file collides with which — the `seenRefresh`/`seenAccount` Maps already store the first claimant).
+- `ProfileState` gains `quarantined: boolean`; `ensureFreshTokens()` and `defaultProfileName()` skip quarantined profiles; tests cover each branch (refresh-dup exclude, accountId-collision quarantine, marker opt-in, write-path refuse).
+
+### R3 — Delete `FRESHBOOKS_DEFAULT_PROFILE` (debate: side A)
+- **`defaultProfileName()` returns the lone profile's name or null** — no env-var selector. With ≥2 profiles `withAccount` requires an explicit account before this is consulted, so the env default was dead code and an implicit-routing footgun against the "name every request" decision. *(Applied inline in Task 2.)*
+- Remove the `FRESHBOOKS_DEFAULT_PROFILE=` line from `.env.example` *(applied inline, Task 12)*; drop any spec/doc text advertising a default-among-many.
+- **The sole migration idempotency marker is `FRESHBOOKS_MIGRATED=1`** (decouples "migrated" from "pick a default"). Drop the "bad FRESHBOOKS_DEFAULT_PROFILE" case from the test matrix; keep the wrapper's try/catch (it still guards unknown-name and zero-profile).
+
+### U1 — `parseProfileConfig`: require only the two tokens (high; backward-compat A3)
+Gate validity on `accessToken`+`refreshToken` only; default `accountId`/`businessId` to `""`. Requiring `businessId` (blank by default in `.env.example`, and for accounting-only logins) would brick previously-working single-login installs and block their migration. `getAccountId()`/`getBusinessId()` keep their throw-at-call-time semantics. Skip the R2 duplicate-accountId logic when `accountId` is empty. *(Applied inline in Task 1, with an added test for blank IDs.)*
+
+### U2 — Make the Task 2 case-collision test filesystem-aware (medium)
+On the owner's APFS Mac, `writeFileSync("acme.env")` then `writeFileSync("Acme.env")` leaves ONE file, so the test's `duplicates+broken===1` assertion fails locally (the runtime guard is fine; only the test is non-portable). Either probe case-sensitivity at runtime (write `x`, stat `X`) and branch the assertion, OR feed `discoverProfiles` a stubbed `readdir` returning `['acme.env','Acme.env']` so the lowercase-stem dedupe is exercised deterministically. This unblocks `npm test` on the target machine (and stops an executor from "fixing" red by gutting the guard).
+
+### U3 — Cross-process refresh guard (high)
+The in-memory single-flight does not coordinate across separate server processes, and `SETUP.md` documents registering the server in multiple Claude surfaces (each its own process against one `profiles/` dir). In Task 5 `refreshAndPersist`, **re-read `profiles/<name>.env` immediately before `refreshAccessToken()` and skip the rotation if the on-disk access token is already fresh** (another process rotated). Document the single-instance assumption in the plan/spec. This also fixes stale-in-memory degradation after another process rotates.
+
+### U4 — Shred the token-bearing `.env.bak` after migration verifies (medium; A2)
+`writeAtomic` copies the pre-strip base `.env` (full token set) to `.env.bak` and never deletes it; A2 requires shredding it. In Task 9 `runMigration`, after the profile file verifies AND the base-`.env` strip succeeds, `rmSync` `${baseEnv}.bak` (and any leftover `.tmp`). Add a test asserting no token-bearing `.env.bak` survives a completed migration.
+
+### U5 — Global flag on the strip regexes (medium; A10)
+`stripTokensFromBaseEnv` must use `/.../gm` (not `/.../m`) on all four token/ID lines, and assert post-strip that none of the four markers remains — otherwise a duplicated line (partial prior write / hand-edit) leaves a residual that `load-env`'s `override:true` silently repopulates into `process.env`. *(Applied inline in Task 9.)*
+
+### U6 — Build-gap accuracy + import hygiene (low)
+- Task 5's illustrative block re-imports `existsSync/accessSync/readFileSync/constants` already at the top of `freshbooks-client.ts` — a TS2300 duplicate-identifier on verbatim paste. Change the instruction to "CONSOLIDATE the existing top-of-file `node:fs` import down to `{ existsSync, accessSync, readFileSync, constants as fsConstants }` (drop the now-moved `writeFileSync/copyFileSync/renameSync`) and add the `./atomic-write` + `./profiles` imports."
+- Add `src/tools/with-refresh.ts` to Task 5's expected-broken-build list (it calls zero-arg `refreshIfNeeded()` until Task 6) and correct the Self-Review "no other intermediate broken state" line to name all three files.
+
+### U7 — Fully specify Task 11 `printHealth` + `--profile` (low)
+Task 5's new `TokenHealth` drops `envPath`/`exists` and adds `name`/`filePath`. Task 11 must explicitly: replace every `health.envPath` with `health.filePath`, delete the `health.exists` branch (a registry profile always exists), tag lines with `health.name`, key the "no profiles" path on `getRegistry().profiles.size===0` (exit 2), and add a `parseArgs` snippet for `--profile <name>` (consume `argv[++i]`, reject empty, return as `only`).
+
+### U8 — `writeLock` must never fail startup (low)
+Wrap `writeLock(lock)` in `index.ts` in try/catch (log and continue), or make `writeLock` internally tolerant like `removeLock`. An advisory lock that can't be written (read-only dir / EBUSY) must not `process.exit(1)` the whole server.
+
+### U9 — gitignore `.server.lock` (low)
+Add `.server.lock` to `.gitignore` and assert `ignored('.server.lock')` in the gitignore test. *(Applied inline in Task 12.)*
+
+### U10 — Make migration partial-failure resumable (low)
+If the base-`.env` strip fails after the profile file is written, a re-run hits `writeNewProfile`'s "already exists" and wedges. Make it resumable: if `profiles/<name>.env` already exists AND parses equal to the source token set, treat the profile-write step as done and proceed to (re)strip+mark; otherwise keep refusing. At minimum, the error message must state the manual recovery.
+
+### U11 — Concrete Task 10 setup.ts decoupling + assertion (low)
+Specify the exact edit: drop `FRESHBOOKS_ACCESS_TOKEN/REFRESH_TOKEN/ACCOUNT_ID/BUSINESS_ID` from the `envVars` object so `writeEnvFile` persists only `CLIENT_ID/SECRET/REDIRECT_URI` (+ `FRESHBOOKS_MIGRATED`), routing per-login tokens exclusively through `writeNewProfile`. Add an assertion (extend the migrate/gitignore test) that a setup-produced base `.env` contains no token/ID markers.
+
+### U12 — `fsync` in `writeAtomic` for crash-durability (low)
+`writeAtomic` is crash-atomic (rename) but not crash-durable: on power loss the rename metadata can land before the data, yielding a zero-length/garbage token file (lockout for a refresh write; silent vanish for discovery). In Task 3, `fsync` the tmp fd before `renameSync`, then `fsync` the containing directory after. Cheap insurance for every token write.
+
+### U13 — Update the bundled `freshbooks-token-refresh` skill text (low; A8)
+In Task 13, update the skill's Notes ("Tokens live in exactly one file — `.env`") and exit-code text to the profiles model (tokens in `profiles/<name>.env`; base `.env` holds only app creds + `FRESHBOOKS_MIGRATED`; exit 2 = "no profiles configured"), and its trigger text to mention a specific account/profile.
 
 ## Self-Review
 
