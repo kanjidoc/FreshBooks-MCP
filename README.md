@@ -18,9 +18,10 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 - Record **other incomes** outside of invoicing
 - Create **journal entries** for manual accounting adjustments
 - Run **reports**: Profit & Loss, Payments Collected, Tax Summary
+- Work across **multiple FreshBooks logins** from one server — each tool takes an `account` parameter, and `freshbooks_list_accounts` lists the configured logins
 - Ask the server **how it works** — the `freshbooks_help` tool returns its own architecture, conventions, and live tool inventory
 
-All 75 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
+All 76 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
 
 ## 🚀 Getting Started
 
@@ -75,11 +76,13 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 
 | File | Purpose |
 |---|---|
-| `src/index.ts` | Entry point — refreshes the OAuth token, then starts the stdio MCP server |
-| `src/load-env.ts` | Loads `.env` (the single token store) by absolute path before startup |
+| `src/index.ts` | Entry point — connects the stdio MCP server, then refreshes every profile's token in the background |
+| `src/load-env.ts` | Loads the base `.env` (shared app credentials) by absolute path before startup |
 | `src/server.ts` | Serves the registered tools via `createSdkMcpServer` |
-| `src/tool-registry.ts` | The single list of all tools; wraps each handler with automatic token refresh |
-| `src/freshbooks-client.ts` | FreshBooks `Client` singleton + OAuth token persistence and refresh |
+| `src/tool-registry.ts` | The single list of all tools; wraps each API tool with `withAccount` (account injection + per-profile token refresh) |
+| `src/profiles.ts` | Discovers `profiles/<name>.env` files into a memoized registry; resolves the active profile via `AsyncLocalStorage` |
+| `src/freshbooks-client.ts` | Per-profile FreshBooks `Client` (one `getOrCreateClient` per login) + per-profile OAuth token persistence and refresh |
+| `src/tools/accounts.ts` | The account-free `freshbooks_list_accounts` tool |
 | `src/config-paths.ts` | OS-aware path resolution for the Claude Desktop config |
 | `src/mcp-config.ts` | Builds the MCP server config entry for Claude Desktop and Claude Code |
 | `src/query-helpers.ts` | Converts tool arguments into FreshBooks SDK query builders (pagination, search, sort, includes) |
@@ -97,7 +100,9 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 - **[big.js](https://github.com/MikeMcl/big.js/)** — Decimal arithmetic for monetary values (FreshBooks returns amounts as strings to avoid floating-point precision issues)
 - **TypeScript** — Strict mode, compiled to ES2022
 
-## Available Tools (75 total)
+## Available Tools (76 total)
+
+Every API tool below also accepts an optional **`account`** parameter naming which configured FreshBooks login to act on. With a single login it can be omitted; with two or more it is required. Run `freshbooks_list_accounts` to see the configured names. See [Multiple FreshBooks accounts](#multiple-freshbooks-accounts) for the full model.
 
 ### Invoices
 | Tool | Description |
@@ -241,10 +246,27 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 | `freshbooks_report_payments_collected` | Generate a Payments Collected report |
 | `freshbooks_report_tax_summary` | Generate a Tax Summary report |
 
+### Accounts
+| Tool | Description |
+|---|---|
+| `freshbooks_list_accounts` | List the FreshBooks logins this server is configured with — each profile's name, account/business id, company name, and token health. Use a returned name as the `account` argument to any other tool. (Account-free: no `account` parameter.) |
+
 ### Self-Documentation
 | Tool | Description |
 |---|---|
-| `freshbooks_help` | Returns embedded docs about the server — architecture, conventions, the live tool inventory, authentication, and how to extend it |
+| `freshbooks_help` | Returns embedded docs about the server — architecture, conventions, the live tool inventory, authentication, and how to extend it. (Account-free: no `account` parameter.) |
+
+## Multiple FreshBooks accounts
+
+One server can serve several FreshBooks logins ("profiles") — handy if you keep separate books for multiple companies, or have been granted access to a client's account.
+
+- **One file per login.** Each login is a `profiles/<name>.env` file holding only that login's tokens and IDs (`FRESHBOOKS_ACCESS_TOKEN`, `FRESHBOOKS_REFRESH_TOKEN`, `FRESHBOOKS_ACCOUNT_ID`, `FRESHBOOKS_BUSINESS_ID`). The base `.env` holds only the shared OAuth **app** credentials (`FRESHBOOKS_CLIENT_ID`/`SECRET`/`REDIRECT_URI`) plus the `FRESHBOOKS_MIGRATED=1` marker — never a token.
+- **The `account` parameter.** Every API tool accepts an optional `account` naming the login to act on. With one login configured it can be omitted; with two or more it is required (the server returns a clear error listing the valid names if you forget).
+- **Discover names** by calling `freshbooks_list_accounts`, which reports each profile's name, account/business id, company name, and token health.
+- **Add a login** by running `npm run setup` — it offers to migrate a legacy single-login `.env` into a profile, then loops to add more logins, each with its own OAuth flow and business selection.
+- **Per-profile token maintenance.** `npm run check-tokens` audits every profile; `npm run refresh-tokens` refreshes each one that needs it; `npm run refresh-tokens -- --profile <name>` targets a single login.
+
+A single-login install needs none of this — leave `account` off and everything works as before.
 
 ## Monetary Values
 
@@ -284,7 +306,7 @@ Setup problems are covered in the [SETUP.md troubleshooting table](SETUP.md#trou
 
 ## Using FreshBooks MCP inside a Claude Project
 
-If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 75 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
+If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 76 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
 
 ## Contributing
 

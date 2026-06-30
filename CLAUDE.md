@@ -28,11 +28,15 @@ FreshBooks-MCP is a Model Context Protocol (MCP) server that exposes FreshBooks 
 ```
 FreshBooks-MCP/
 ├── src/
-│   ├── index.ts                # Entry point — starts the MCP server via stdio transport
-│   ├── load-env.ts             # Loads .env (the single token store) by absolute path
+│   ├── index.ts                # Entry point — connects the stdio server, then refreshes every profile in the background; manages the server lock
+│   ├── load-env.ts             # Loads the base .env (shared app credentials) by absolute path
 │   ├── server.ts               # createSdkMcpServer setup; serves the tool list from tool-registry.ts
-│   ├── tool-registry.ts        # The single tool array; wraps each handler with automatic token refresh
-│   ├── freshbooks-client.ts    # Initializes @freshbooks/api Client from env vars; OAuth token persistence/refresh
+│   ├── tool-registry.ts        # The single tool array; wraps API tools with withAccount, account-free tools with withoutAccount
+│   ├── profiles.ts             # Profile types, discovery of profiles/<name>.env, memoized registry, AsyncLocalStorage context
+│   ├── freshbooks-client.ts    # Per-profile @freshbooks/api Client (single getOrCreateClient); per-profile OAuth refresh/persist
+│   ├── atomic-write.ts         # writeAtomic() + readTokenMarkers() — crash-safe token writes shared by client refresh and migration
+│   ├── migrate.ts              # Transactional migration of a legacy single-login .env into profiles/<name>.env
+│   ├── server-lock.ts          # Best-effort .server.lock (pid-liveness) so migration refuses to run while a server holds tokens
 │   ├── config-paths.ts         # OS-aware path to the Claude Desktop config
 │   ├── mcp-config.ts           # Builds the MCP server entry for Claude Desktop / Code config
 │   ├── query-helpers.ts        # Shared utility to build query builders from tool args
@@ -40,9 +44,10 @@ FreshBooks-MCP/
 │   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
 │   │   ├── content.ts          # Static help topic content (overview, architecture, etc.)
 │   │   └── render-tools.ts     # Renders the live tool inventory from the registry
-│   ├── tools/                  # Token-refresh wrapper, freshbooks_help, + one file per resource domain (17 files)
-│   │   ├── with-refresh.ts     # withTokenRefresh() — wraps a handler with pre-call token refresh
-│   │   ├── help.ts             # The freshbooks_help self-documentation tool (1 tool)
+│   ├── tools/                  # Account wrapper, freshbooks_help, freshbooks_list_accounts, + one file per resource domain (18 files)
+│   │   ├── with-refresh.ts     # withAccount() (account injection + per-profile pre-call refresh) and withoutAccount()
+│   │   ├── help.ts             # The freshbooks_help self-documentation tool (1 tool, account-free)
+│   │   ├── accounts.ts         # The freshbooks_list_accounts tool (1 tool, account-free)
 │   │   ├── invoices.ts         # Invoice CRUD + delete (5 tools)
 │   │   ├── clients.ts          # Client CRUD + delete (5 tools)
 │   │   ├── expenses.ts         # Expense CRUD + delete (5 tools)
@@ -60,13 +65,14 @@ FreshBooks-MCP/
 │   │   ├── expense-categories.ts # Expense category list/get (2 read-only tools)
 │   │   ├── journal-entries.ts  # Journal entry create + account/detail listings (3 tools)
 │   │   └── reports.ts          # Profit & Loss, Payments Collected, Tax Summary (3 tools)
+├── profiles/                   # One <name>.env per FreshBooks login (tokens + IDs); git-ignored, created by setup/migration
 ├── package.json
 ├── tsconfig.json
 ├── .gitignore
-├── .env.example                # Template for required environment variables
+├── .env.example                # Template for the shared OAuth app credentials (no tokens)
 ├── scripts/
-│   ├── setup.ts                # Interactive setup wizard (OAuth, ID discovery, config)
-│   └── refresh-tokens.ts       # CLI to refresh the OAuth token (or audit token files with --check-only)
+│   ├── setup.ts                # Interactive setup wizard (migration, add-login loop, OAuth, config)
+│   └── refresh-tokens.ts       # CLI to refresh each profile's token (or audit with --check-only; --profile <name> to target one)
 ├── README.md                   # Project landing page (what it does, architecture, tool list)
 ├── SETUP.md                    # Beginner setup walkthrough — also a script Claude can follow
 ├── CLAUDE.md                   # This file
@@ -92,24 +98,24 @@ cp .env.example .env   # Fill in your FreshBooks credentials
 npm run build          # Compile TypeScript to dist/
 npm start              # Run the compiled MCP server
 npm run dev            # Run with ts-node for development
-npm run setup          # Interactive setup wizard (OAuth + config for all Claude platforms)
-npm run refresh-tokens # Refresh the OAuth token if it is near expiry
-npm run check-tokens   # Audit token files + report JWT expiry (refresh-tokens --check-only, no API call)
+npm run setup          # Interactive setup wizard (migrate + add-login loop, OAuth, config for all Claude platforms)
+npm run refresh-tokens # Refresh each profile's token if near expiry (-- --profile <name> targets one)
+npm run check-tokens   # Audit every profile's tokens + report JWT expiry (refresh-tokens --check-only, no API call)
 ```
 
 ### Token persistence safety
 
-OAuth tokens live in exactly **one** file: `.env`, the single source of truth. The server loads `.env` by absolute path at startup (`src/load-env.ts`, with `override: true`), so its working directory is irrelevant and a stale token frozen into any launcher config cannot outrank it. MCP launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`) carry only the command to start the server — never tokens — so there is nothing to keep in sync and nothing that can drift. FreshBooks rotates the refresh token on every refresh call; the rotated pair is written back to `.env`.
+OAuth tokens live **only in dotenv files**, one per FreshBooks login: `profiles/<name>.env` (a legacy single-login base `.env` is still honored as the implicit `default` profile). The base `.env` holds only the shared OAuth **app** credentials (`FRESHBOOKS_CLIENT_ID`/`SECRET`/`REDIRECT_URI`) plus the `FRESHBOOKS_MIGRATED=1` marker — never a token. The server loads the base `.env` by absolute path at startup (`src/load-env.ts`, with `override: true`), and `src/profiles.ts` discovers the profile files into a memoized registry. MCP launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`) carry only the command to start the server — never tokens. FreshBooks rotates the refresh token on every refresh call; the rotated pair is written back to that profile's own file.
 
-`src/freshbooks-client.ts` enforces these invariants on every refresh:
-1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightEnvFile()` verifies `.env` exists, is readable/writable, and contains both token markers. If not, it throws *without* calling the API (no burned refresh token).
-2. **Atomic write** — writes `.env.tmp` then `rename()`s into place; backup saved as `.env.bak`.
-3. **Post-write verification** — re-reads `.env` and confirms the new tokens are present.
-4. **Loud failure** — if the write fails after a successful refresh, prints the new tokens to stderr so they can be pasted into `.env` manually.
+A FreshBooks `Client` is constructed in exactly **one** place — `getOrCreateClient(profile)` in `src/freshbooks-client.ts` — so token state lives on one object per profile. `src/freshbooks-client.ts` enforces these invariants on every refresh (each scoped to the active profile's file via the `src/atomic-write.ts` helper):
+1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightEnvFile()` verifies the profile's file exists, is readable/writable, and contains both token markers. If not, it throws *without* calling the API (no burned refresh token).
+2. **Atomic write** — `writeAtomic()` writes `<file>.tmp` (fsync'd) then `rename()`s into place; backup saved as `<file>.bak` (tmp/bak names are always derived from the target path, never a shared constant).
+3. **Post-write verification** — re-reads the file and confirms the new tokens are present.
+4. **Loud failure** — if the write fails after a successful refresh, prints the new tokens to stderr so they can be pasted into the profile file manually; `config` is still updated so the live client never sits on a revoked token.
 
-Tokens refresh **automatically**: once at server startup (`ensureFreshToken()` in `index.ts`) and proactively before every tool call. The pre-call refresh is `refreshIfNeeded()` — a cheap no-op JWT-expiry check unless the token is within 10 minutes of expiring — wired centrally in `src/tool-registry.ts` via `withTokenRefresh`. A single-flight guard ensures concurrent tool calls share one refresh rather than each rotating the refresh token.
+Tokens refresh **automatically**: at server startup (`ensureFreshTokens()` in `index.ts` refreshes every profile sequentially, with per-profile isolation, in the background) and proactively before every tool call. The pre-call refresh is `refreshIfNeeded(profile)` — a cheap no-op JWT-expiry check unless the token is within 10 minutes of expiring — wired centrally in `src/tool-registry.ts` via `withAccount`. A per-profile single-flight guard ensures concurrent tool calls on one profile share a single refresh rather than each rotating the refresh token.
 
-`scripts/refresh-tokens.ts` is the manual CLI: `npm run refresh-tokens` refreshes if needed, and `npm run check-tokens` (i.e. `refresh-tokens --check-only`) audits `.env` and reports JWT expiry with no API call.
+`scripts/refresh-tokens.ts` is the manual CLI: `npm run refresh-tokens` iterates every profile and refreshes the ones that need it (`-- --profile <name>` targets one), and `npm run check-tokens` (i.e. `refresh-tokens --check-only`) audits each profile and reports JWT expiry with no API call. With no profiles configured it exits `2`.
 
 ### Linting and Formatting
 
@@ -149,19 +155,39 @@ release; only a new version does.
 
 ## Environment Variables
 
-All credentials are loaded from environment variables so any FreshBooks user can plug in their own account. Copy `.env.example` to `.env` and fill in your values. **Never commit `.env`.**
+Credentials are loaded from dotenv files so any FreshBooks user can plug in their own account(s). They split across two kinds of file: the base `.env` holds the shared OAuth **app** credentials, and each FreshBooks login's tokens live in its own `profiles/<name>.env`. **Never commit `.env` or any `profiles/*.env`.** `npm run setup` writes both; the model below is the contract.
+
+**Base `.env` — shared app credentials only (copy from `.env.example`):**
 
 | Variable | Description | Maps to |
 |---|---|---|
 | `FRESHBOOKS_CLIENT_ID` | OAuth2 client ID from FreshBooks Developer Portal | `Client` constructor first arg |
 | `FRESHBOOKS_CLIENT_SECRET` | OAuth2 client secret | `clientSecret` option |
 | `FRESHBOOKS_REDIRECT_URI` | OAuth2 redirect URI | `redirectUri` option |
+| `FRESHBOOKS_MIGRATED` | Set to `1` once a legacy single-login `.env` has been migrated into a profile (idempotency marker; not a credential) | — |
+
+**Per-profile `profiles/<name>.env` — one file per FreshBooks login (tokens, never in the base `.env`):**
+
+| Variable | Description | Maps to |
+|---|---|---|
 | `FRESHBOOKS_ACCESS_TOKEN` | Access token (after OAuth flow) | `accessToken` option |
 | `FRESHBOOKS_REFRESH_TOKEN` | Refresh token (for automatic renewal) | `refreshToken` option |
 | `FRESHBOOKS_ACCOUNT_ID` | FreshBooks account ID (for accounting endpoints) | Passed to resource `.list()`, `.single()`, `.create()` |
 | `FRESHBOOKS_BUSINESS_ID` | FreshBooks business ID (for project/time endpoints) | Passed to `timeEntries`, `projects`, `services` methods |
 
-**accountId vs businessId:** Most accounting resources (invoices, clients, expenses, payments) use `accountId: string`. Project-related resources (time entries, projects, services) use `businessId: number`. Both are available from `client.users.me()`.
+`parseProfileConfig` requires only the two tokens to be present; `FRESHBOOKS_ACCOUNT_ID`/`FRESHBOOKS_BUSINESS_ID` may be blank for an accounting-only login and throw at call time only if a tool actually needs them.
+
+**accountId vs businessId:** Most accounting resources (invoices, clients, expenses, payments) use `accountId: string`. Project-related resources (time entries, projects, services) use `businessId: number`. Both are available from `client.users.me()`. There is no `FRESHBOOKS_DEFAULT_PROFILE` selector — with one login it is used by default; with two or more, every API tool's `account` argument is required.
+
+## Multi-Account Model (Profiles)
+
+One server can serve several FreshBooks logins. Each login is a **profile** — a `profiles/<name>.env` file. The model:
+
+- **The `account` convention.** `withAccount` injects an optional `account: z.string().optional()` field into every API tool's schema. The wrapper resolves it to a profile (`resolveProfile`), refreshes that profile's token (`refreshIfNeeded`), strips `account` from the args, and runs the original handler inside `runInProfile(profile, …)`. The unchanged zero-arg `getFreshBooksClient()` / `getAccountId()` / `getBusinessId()` read the active profile from `AsyncLocalStorage`, so the resource tool files never had to change. With ≥2 profiles, omitting `account` returns an `isError` result listing the valid names (never throws); with exactly one profile, `defaultProfileName()` supplies it.
+- **`freshbooks_list_accounts`** is the discovery tool — it enumerates profiles (name, account/business id, company, token health) and any ignored/colliding files. It and `freshbooks_help` are the only account-free tools.
+- **One `Client` per profile.** A FreshBooks `Client` is constructed in exactly one place — `getOrCreateClient(profile)` — and cached on `profile.client`, so each login's rotating token state lives on a single object. Never call `new Client(...)` elsewhere.
+- **Discovery is validated.** `discoverProfiles` excludes malformed files (`broken`), refuses duplicate refresh tokens (`duplicates`), and quarantines a profile that shares an `accountId` with another but carries a distinct token (until an explicit `# freshbooks-distinct-login` opt-in marker) so its possibly-superseded token is never auto-rotated.
+- **Server lock for migration safety.** `src/server-lock.ts` writes `.server.lock` (`{ pid }`) at startup. Migration refuses to run while a live server holds the lock — judged by **PID liveness only** (`process.kill(pid, 0)`), with no file-age bound and no heartbeat — so it can never rotate a token concurrently with a running server. A reused PID after an uncleaned crash fails closed; the `confirmNoServer` override on `runMigration` is the only recovery.
 
 ## FreshBooks SDK Patterns
 
@@ -370,11 +396,11 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-All 75 tools are imported and assembled into a single array in `src/tool-registry.ts`, which wraps each handler with automatic token refresh. `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts`.
+All 76 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 74 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
 
 ### Tool naming convention
 
-All 75 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
 
 **Accounting resources (accountId):**
 - Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
@@ -391,12 +417,14 @@ All 75 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 - Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
-- Self-documentation: `freshbooks_help` — returns embedded docs about this project (architecture, conventions, the live tool inventory, how to extend); no FreshBooks API call
-
 **Project resources (businessId):**
 - Time Entries: `freshbooks_list_time_entries`, `freshbooks_get_time_entry`, `freshbooks_create_time_entry`, `freshbooks_update_time_entry`, `freshbooks_delete_time_entry`
 - Projects: `freshbooks_list_projects`, `freshbooks_get_project`, `freshbooks_create_project`, `freshbooks_update_project`, `freshbooks_delete_project`
 - Services: `freshbooks_list_services`, `freshbooks_get_service`, `freshbooks_create_service`
+
+**Account-free tools (no `account` argument, no profile context):**
+- Account directory: `freshbooks_list_accounts` — enumerates the configured FreshBooks logins (each profile's name, account/business id, company, token health, plus any ignored/colliding files); resolves a `Client` directly via `getOrCreateClient(profile)` since it runs outside any profile context
+- Self-documentation: `freshbooks_help` — returns embedded docs about this project (architecture, conventions, the live tool inventory, how to extend); no FreshBooks API call
 
 Use `allowedTools: ["mcp__freshbooks__*"]` to allow all tools on the server.
 
@@ -491,5 +519,6 @@ This project is designed so any FreshBooks user can use it:
 - Check `response.ok` before accessing `response.data`, and catch thrown errors
 - Monetary amounts are strings — use `big.js` for any arithmetic
 - Accounting resources use `accountId` (string), project resources use `businessId` (number)
+- Do NOT add an `account` field to a tool's own schema — `withAccount` injects it. Keep using the zero-arg `getFreshBooksClient()`/`getAccountId()`/`getBusinessId()`; they resolve the active profile from the `AsyncLocalStorage` context
 - Run `npm run build` after changes to verify TypeScript compiles cleanly
 - Do not add dependencies without justification

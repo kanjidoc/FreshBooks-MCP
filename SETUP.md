@@ -169,20 +169,28 @@ npm run setup
 > explain what the wizard will ask (below), and wait for them to tell you it
 > finished before you continue.
 
-The wizard prints its own headers, `STEP 1` through `STEP 6`. Here is what each
+The wizard prints its own headers, `STEP 1` through `STEP 5`. Here is what each
 one does:
 
 - **`STEP 1` — Create a FreshBooks Developer App.** It re-shows the app-creation
   instructions; you already did this in Step 5 above, so just have your **Client
-  ID** and **Client Secret** ready to paste.
-- **`STEP 2` — Authorize.** The wizard opens a FreshBooks page; click **"Allow"**.
-  Your browser then jumps to a page that **fails to load** — *that is expected and
-  correct*. Copy the **full web address** from the address bar and paste it back
-  into the wizard.
-- **`STEP 3` — Account detection.** It finds your Account ID and Business ID for you.
-- **`STEP 4` and `STEP 5` — Saving and building.** It writes your `.env` file and
-  compiles the server.
-- **`STEP 6` — Connecting to Claude.** It offers to install the server into
+  ID** and **Client Secret** ready to paste. (If you have an older single-login
+  `.env` from a previous version, the wizard first offers to **migrate** it into a
+  named profile — say yes; your existing tokens move into `profiles/<name>.env`
+  and nothing is lost.)
+- **`STEP 2` — Authorize your FreshBooks login(s).** For each login the wizard
+  opens a FreshBooks page; click **"Allow"**. Your browser then jumps to a page
+  that **fails to load** — *that is expected and correct*. Copy the **full web
+  address** from the address bar and paste it back into the wizard. It then finds
+  that login's Account ID and Business ID for you (letting you pick which business
+  if the login has more than one), and saves the tokens to its own
+  `profiles/<name>.env`. When it asks **"Add another login?"**, answer **y** to
+  connect more accounts or **N** to finish — you can always re-run setup later to
+  add more.
+- **`STEP 3` — Saving configuration.** It writes the base `.env` (your shared app
+  credentials only — *no tokens*) and the `.mcp.json` launcher config.
+- **`STEP 4` — Building the MCP server.** It compiles the server.
+- **`STEP 5` — Connecting to Claude.** It offers to install the server into
   **Claude Desktop**, and (if the `claude` command-line tool is present) into
   **Claude Code** as well. Say **yes** to whichever Claude you use — saying yes to
   both is fine. If you skip both, it prints the configuration to add by hand.
@@ -190,11 +198,12 @@ one does:
 - ✅ The wizard ends with a line that says **`DONE!`**.
 - ⚠️ Something went wrong — see the Troubleshooting table at the bottom of this guide.
 
-> **Keep your credentials private.** The wizard saves your FreshBooks login in a
-> file named `.env` inside the project folder — that one file is the only place
-> your tokens live. Don't share it or upload it anywhere; it holds the keys to
-> your accounting account. (It's already excluded from Git, so it won't be
-> committed by accident.)
+> **Keep your credentials private.** The wizard stores each FreshBooks login's
+> tokens in its own `profiles/<name>.env` file inside the project folder — those
+> files are the only place your tokens live. The base `.env` holds only your
+> shared app credentials, no tokens. Don't share or upload any of them; they hold
+> the keys to your accounting account. (They're already excluded from Git, so they
+> won't be committed by accident.)
 
 ---
 
@@ -242,16 +251,47 @@ Just talk to Claude in plain English. For example:
 - *"Create an invoice for Acme Corp for 10 hours of consulting at $150/hour."*
 - *"What were my biggest expenses this quarter?"*
 
-There are **75 tools** in total. To see what's possible, ask Claude:
+There are **76 tools** in total. To see what's possible, ask Claude:
 *"What FreshBooks tools do you have?"* or *"Show me the FreshBooks help."*
+
+> **More than one FreshBooks login?** This server can connect several. Run `npm
+> run setup` again to add another login (see [Connecting more than one FreshBooks
+> account](#connecting-more-than-one-freshbooks-account) below), then **name the
+> account** in your request — e.g. *"list recent invoices for acme."* Ask
+> *"what FreshBooks accounts are configured?"* and Claude will call
+> `freshbooks_list_accounts` to show you the names. With a single login you never
+> need to name it.
+
+---
+
+## Connecting more than one FreshBooks account
+
+One server can manage several FreshBooks logins at once — useful if you keep
+separate books for multiple companies, or have been granted access to a client's
+account. Each login is called a **profile**.
+
+- **Add a login.** Re-run `npm run setup` in the project folder. It keeps your
+  existing logins and walks you through authorizing another one (its own browser
+  "Allow", its own business selection). Each login is saved to its own
+  `profiles/<name>.env` — the name is the bit you'll use to refer to it.
+- **Name the account in your request.** With two or more logins configured, tell
+  Claude which one to use: *"list unpaid invoices for acme"*, *"add an expense to
+  beta"*. With a single login, you never need to name it.
+- **Forgot the names?** Ask *"what FreshBooks accounts are configured?"* — Claude
+  calls `freshbooks_list_accounts`, which lists each profile's name, company, and
+  token health. (If you forget to name an account when more than one exists, the
+  server replies with the list of valid names.)
+- **Keeping tokens fresh per login.** `npm run check-tokens` audits every profile;
+  `npm run refresh-tokens` refreshes each that needs it; add `-- --profile <name>`
+  to target just one.
 
 ---
 
 ## Keeping it running
 
-Your FreshBooks login token expires every so often, but the server **refreshes it
-automatically** — at startup and before every action. You should never have to
-think about it.
+Each FreshBooks login token expires every so often, but the server **refreshes
+them automatically** — at startup and before every action. You should never have
+to think about it.
 
 If FreshBooks ever stops working, run this in the project folder:
 
@@ -259,13 +299,15 @@ If FreshBooks ever stops working, run this in the project folder:
 npm run refresh-tokens
 ```
 
-If that reports `REFRESH FAILED`, your access was revoked (for example, the
-developer app was deleted, or it went unused for about a month). Just re-run
-`npm run setup` to reconnect.
+It checks every configured login and refreshes the ones that need it (add
+`-- --profile <name>` to refresh just one). If a login reports `REFRESH FAILED`,
+that login's access was revoked (for example, the developer app was deleted, or it
+went unused for about a month). Just re-run `npm run setup` to reconnect it.
 
 > **(Code)** This project also ships a small "token refresh" helper for Claude Code.
 > When the FreshBooks-MCP folder is open, you can simply ask Claude
-> *"check my FreshBooks tokens"* and it will handle the rest.
+> *"check my FreshBooks tokens"* and it will handle the rest, naming the specific
+> account/profile that needs attention.
 
 ---
 
@@ -295,7 +337,8 @@ projects, reports, and more — works on a regular FreshBooks account.
 | `invalid_grant` while refreshing | The login was revoked or expired. Re-run `npm run setup` for a fresh connection. |
 | `Cannot find module .../dist/index.js` | The server wasn't built. Run `npm run build` in the project folder. |
 | Claude has no FreshBooks tools after setup | Make sure you **fully quit and reopened** Claude. **(Desktop)** check the config path points to the real `dist/index.js`; look for the tools/hammer icon. **(Code)** make sure the project folder is open and the "freshbooks" server was enabled. |
-| I have more than one FreshBooks business | The wizard uses the first one. To use a different one, open the `.env` file and change `FRESHBOOKS_ACCOUNT_ID` and `FRESHBOOKS_BUSINESS_ID`. |
+| One login has more than one FreshBooks business | The wizard lists them and lets you pick which business that login's profile should use. To connect more than one as separate accounts, re-run `npm run setup` and add another login. |
+| Claude picked the wrong account, or asks which account | With two or more logins configured, name the account in your request (e.g. "for acme"). Ask "what FreshBooks accounts are configured?" to see the valid names. |
 
 Still stuck? Open an issue at
 [github.com/kanjidoc/FreshBooks-MCP/issues](https://github.com/kanjidoc/FreshBooks-MCP/issues).
@@ -348,9 +391,14 @@ that an `mcpServers` block in `~/.claude/settings.json` does **not** work.)
 
 ### Setting up without the wizard
 
-If you can't run `npm run setup`, you can configure everything by hand:
+If you can't run `npm run setup`, you can configure everything by hand. Tokens are
+split across two kinds of file: the base `.env` holds only your shared **app**
+credentials, and each FreshBooks login's tokens go in its own
+`profiles/<name>.env`.
 
-1. `cp .env.example .env` and fill in all seven values.
+1. `cp .env.example .env` and fill in the three app values
+   (`FRESHBOOKS_CLIENT_ID`, `FRESHBOOKS_CLIENT_SECRET`, `FRESHBOOKS_REDIRECT_URI`).
+   Do **not** put tokens here.
 2. **Client ID / Client Secret** come from the Developer Portal app (Step 5).
 3. **Access Token / Refresh Token** — complete the OAuth flow:
    - Visit (with your real Client ID):
@@ -375,13 +423,26 @@ If you can't run `npm run setup`, you can configure everything by hand:
    ```
    Use `business_memberships[0].business.account_id` and
    `business_memberships[0].business.id`.
-5. Run `npm run build`, then add the server to Claude using one of the blocks above.
+5. Create `profiles/<name>.env` (pick a short lowercase `<name>`, e.g.
+   `profiles/default.env`) containing the four per-login values:
+
+   ```
+   FRESHBOOKS_ACCESS_TOKEN=...
+   FRESHBOOKS_REFRESH_TOKEN=...
+   FRESHBOOKS_ACCOUNT_ID=...
+   FRESHBOOKS_BUSINESS_ID=...
+   ```
+
+   Repeat for each additional login (one file per login). All `profiles/*.env`
+   files are already excluded from Git.
+6. Run `npm run build`, then add the server to Claude using one of the blocks above.
 
 ### Other ways to use the server
 
 - **claude.ai/code (web):** the web environment reads a project-scoped `.mcp.json`,
-  but that file holds your FreshBooks tokens and must not be committed to a
-  repository — so this server is best run locally, via Claude Desktop or Claude Code.
+  but your FreshBooks tokens live in local `profiles/<name>.env` files that must
+  not be committed to a repository — so this server is best run locally, via Claude
+  Desktop or Claude Code.
 - **Claude Agent SDK (for developers):** import `freshbooksServer` from
   `src/server.ts` and pass it to `query()` as an MCP server. See
   [README.md](README.md) for a code example.

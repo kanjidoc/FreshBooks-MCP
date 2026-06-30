@@ -29,15 +29,23 @@ SDK** (\`@anthropic-ai/claude-agent-sdk\`).
 
 - **${allTools.length} tools** covering invoices, clients, expenses, payments,
   time entries, items, bills, credit notes, projects, services, tasks, journal
-  entries, reports, and this \`freshbooks_help\` tool itself.
+  entries, reports, \`freshbooks_list_accounts\`, and this \`freshbooks_help\` tool.
 - Every credential is environment-variable driven — anyone can clone the repo,
-  run \`npm run setup\`, and connect their own FreshBooks account.
+  run \`npm run setup\`, and connect one or more of their own FreshBooks logins.
 - OAuth tokens refresh automatically: at server startup and before every tool call.
+
+**Key concept — multiple logins ("profiles").** One server can serve several
+FreshBooks logins; each is a \`profiles/<name>.env\` file. Every API tool accepts
+an optional \`account\` parameter naming the login to act on — omit it with a
+single login, required with two or more. Call \`freshbooks_list_accounts\` to see
+the configured names. \`freshbooks_list_accounts\` and \`freshbooks_help\` are the
+only account-free tools.
 
 **Key concept — accountId vs businessId.** Most accounting resources (invoices,
 clients, expenses, payments, …) use a string \`accountId\`. Project-related
 resources (time entries, projects, services) use a numeric \`businessId\`. Both
-come from your FreshBooks account and are stored in \`.env\`.
+come from your FreshBooks login and are stored in that profile's
+\`profiles/<name>.env\`.
 
 Call \`freshbooks_help\` with other topics — \`architecture\`, \`tools\`,
 \`authentication\`, \`extending\`, \`conventions\`, \`troubleshooting\`,
@@ -112,24 +120,33 @@ export const TOPIC_ARCHITECTURE = `# FreshBooks MCP — Architecture
 
 \`\`\`
 src/
-  index.ts              Entry point — refreshes the token, starts the stdio server
+  index.ts              Entry point — connects the stdio server, then refreshes every profile in the background
   server.ts             createSdkMcpServer — serves the registered tools
-  tool-registry.ts      The single list of all tools; wraps each with token refresh
-  freshbooks-client.ts  FreshBooks SDK client + OAuth token persistence/refresh
+  tool-registry.ts      The single list of all tools; wraps API tools with withAccount, account-free tools with withoutAccount
+  profiles.ts           Profile discovery (profiles/<name>.env), memoized registry, AsyncLocalStorage context
+  freshbooks-client.ts  Per-profile FreshBooks SDK client (single getOrCreateClient) + per-profile token persistence/refresh
+  atomic-write.ts       writeAtomic()/readTokenMarkers() — crash-safe token writes (client refresh + migration)
+  migrate.ts            Transactional migration of a legacy single-login .env into a profile
+  server-lock.ts        .server.lock (pid-liveness) so migration won't run while a server holds tokens
   config-paths.ts       OS-aware path to the Claude Desktop config
   query-helpers.ts      buildQueryBuilders() — turns tool args into SDK query builders
   date-helpers.ts       parseLocalDate() — avoids an off-by-one on date-only fields
   docs/                 Embedded self-documentation (this content)
   tools/                One file per FreshBooks resource domain
-    with-refresh.ts     withTokenRefresh() — wraps a handler with pre-call refresh
+    with-refresh.ts     withAccount() — injects account, resolves the profile, refreshes it; withoutAccount() for account-free tools
+    accounts.ts         The freshbooks_list_accounts tool
     help.ts             The freshbooks_help tool
     invoices.ts, clients.ts, expenses.ts, ...   (one per domain)
 \`\`\`
 
-**Request flow.** An assistant calls a tool → \`tool-registry.ts\` has wrapped the
-handler so \`refreshIfNeeded()\` runs first → the handler builds a typed payload →
-the FreshBooks SDK serializes and sends it → the handler checks \`response.ok\`,
-catches any thrown error, and returns an MCP result. Handlers never throw.
+**Request flow.** An assistant calls a tool → \`withAccount\` (in tool-registry.ts)
+resolves the named \`account\` to a profile, runs \`refreshIfNeeded(profile)\`, and
+enters that profile's \`AsyncLocalStorage\` context → the handler builds a typed
+payload (its zero-arg \`getFreshBooksClient()\`/\`getAccountId()\` read the active
+profile) → the FreshBooks SDK serializes and sends it → the handler checks
+\`response.ok\`, catches any thrown error, and returns an MCP result. Handlers
+never throw; on an unknown or missing \`account\` the wrapper returns an error
+result rather than throwing.
 
 **The SDK is the contract.** The wrapper hands the SDK camelCase model objects;
 the SDK's \`transform*Request\` functions translate them to the API's snake_case
@@ -140,25 +157,35 @@ export const TOPIC_AUTHENTICATION = `# FreshBooks MCP — Authentication
 FreshBooks uses **OAuth2 with rotating refresh tokens**: every refresh mints a
 new access+refresh pair and revokes the old one. Access tokens last ~12 hours.
 
-**The token store.** \`.env\`, sitting next to the server, is the *one* place
-tokens live. The server loads it by absolute path (so its working directory
-does not matter) and treats it as authoritative. Launcher configs
-(\`.mcp.json\`, the Claude Desktop config, \`~/.claude.json\`) hold only the start
-command, never tokens. Writes to \`.env\` are atomic (tmp + rename), keep a
+**The token store.** Tokens live only in dotenv files — one \`profiles/<name>.env\`
+per FreshBooks login (a legacy single-login base \`.env\` still works as the
+implicit \`default\` profile). The base \`.env\` holds only the shared OAuth **app**
+credentials plus a \`FRESHBOOKS_MIGRATED=1\` marker, never a token. The server
+discovers profile files into a registry and treats each as authoritative for its
+login. Launcher configs (\`.mcp.json\`, the Claude Desktop config, \`~/.claude.json\`)
+hold only the start command, never tokens. A \`Client\` is built in exactly one
+place — \`getOrCreateClient(profile)\` — so each login's rotating token state lives
+on one object. Writes to a profile file are atomic (tmp + fsync + rename), keep a
 \`.bak\` backup, and are verified.
 
-**Auto-refresh.** The token is refreshed automatically:
-- at server startup (\`ensureFreshToken()\` in index.ts), and
-- before every tool call (\`refreshIfNeeded()\`, wired in tool-registry.ts).
-\`refreshIfNeeded()\` is a cheap no-op unless the token is within 10 minutes of
-expiry; concurrent calls share one refresh via a single-flight guard.
+**Auto-refresh.** Tokens refresh automatically:
+- at server startup (\`ensureFreshTokens()\` in index.ts refreshes every profile in
+  the background, with per-profile isolation), and
+- before every tool call (\`refreshIfNeeded(profile)\`, wired via \`withAccount\` in
+  tool-registry.ts).
+\`refreshIfNeeded()\` is a cheap no-op unless that profile's token is within 10
+minutes of expiry; concurrent calls on one profile share one refresh via a
+per-profile single-flight guard.
 
 **Manual control.**
-- \`npm run refresh-tokens\` — refresh now if needed.
-- \`npm run refresh-tokens -- --check-only\` — audit \`.env\`, no refresh.
+- \`npm run refresh-tokens\` — refresh every profile that needs it.
+- \`npm run refresh-tokens -- --profile <name>\` — refresh just one login.
+- \`npm run refresh-tokens -- --check-only\` (a.k.a. \`npm run check-tokens\`) — audit
+  every profile, no refresh. Exits \`2\` when no profiles are configured.
 
-**Recovery.** If the refresh token is rejected (used elsewhere, or the FreshBooks
-app was deleted), run \`npm run setup\` to re-authorize through the browser.`;
+**Recovery.** If a login's refresh token is rejected (used elsewhere, or the
+FreshBooks app was deleted), run \`npm run setup\` to re-authorize it through the
+browser.`;
 
 export const TOPIC_EXTENDING = `# FreshBooks MCP — Adding a Tool
 
@@ -187,6 +214,11 @@ export const TOPIC_EXTENDING = `# FreshBooks MCP — Adding a Tool
 
 export const TOPIC_CONVENTIONS = `# FreshBooks MCP — Conventions
 
+- **The \`account\` parameter:** every API tool accepts an optional \`account\`
+  naming which configured FreshBooks login to act on. Omit it with one login;
+  required with two or more. \`withAccount\` injects this field and resolves the
+  profile — individual tools don't declare it. \`freshbooks_list_accounts\` shows
+  the valid names; it and \`freshbooks_help\` are the only account-free tools.
 - **Tool naming:** \`freshbooks_<action>_<resource>\` — e.g. \`freshbooks_list_invoices\`.
 - **Annotations:** \`readOnlyHint\` on list/get/report tools (enables parallel calls);
   \`destructiveHint\` on delete tools; \`idempotentHint\` on update tools.
@@ -210,8 +242,17 @@ revoked. Run \`npm run refresh-tokens\`. If that reports REFRESH FAILED, run
 registered. Confirm the server process is alive and the \`freshbooks\` entry
 exists in your Claude config; reload the app.
 
-**"FRESHBOOKS_ACCOUNT_ID is not set" (or CLIENT_ID / BUSINESS_ID).** The \`.env\`
-file is missing or incomplete. Run \`npm run setup\`.
+**"FRESHBOOKS_CLIENT_ID is not set."** The base \`.env\` (shared app credentials)
+is missing or incomplete. Run \`npm run setup\`.
+
+**"account id is not set for the active profile" (or business id).** That
+profile's \`profiles/<name>.env\` is missing its \`FRESHBOOKS_ACCOUNT_ID\` /
+\`FRESHBOOKS_BUSINESS_ID\`. Re-run \`npm run setup\` for that login.
+
+**"multiple FreshBooks accounts configured … pass account=<name>".** Two or more
+logins are configured and the tool was called without an \`account\`. Call
+\`freshbooks_list_accounts\` for the valid names and pass one. **"Unknown
+account"** means the name didn't match a configured profile.
 
 **A tool reports "not found".** The record ID does not exist or belongs to a
 different account — list the resource first to get a valid ID.

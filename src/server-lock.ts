@@ -21,7 +21,8 @@ export function removeLock(path: string): void {
  * must never be judged "stale" while its PID is alive, or migration could run
  * concurrently with it and burn a token (the A2 CRITICAL race). A reused PID
  * after an uncleaned crash fails CLOSED (migration refuses; recover via the
- * hardened `--force` path), which is the correct bias for a token-safety lock.
+ * `confirmNoServer` override on `runMigration`), which is the correct bias for a
+ * token-safety lock.
  */
 export function isServerLockFresh(path: string): boolean {
   if (!existsSync(path)) return false;
