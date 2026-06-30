@@ -295,8 +295,145 @@ its own ALS context and its own profile client. No shared mutable selection.
 7. Docs + doc-tool-count file updates.
 8. Tests throughout; `npm run build` + `npm test` green.
 
+## Audit-Driven Amendments (binding — supersede the sections above)
+
+A 38-agent adversarial audit (2026-06-30) verified this design against the real
+codebase. **The core approach is validated** — `tool()` does not eagerly compile
+the zod shape, so wrapper-time `inputSchema` injection IS exposed to MCP clients,
+and an `AsyncLocalStorage` value set around the awaited handler IS visible inside
+it (both proven via a real `listTools()`/`callTool()` round-trip on
+`@anthropic-ai/claude-agent-sdk@0.2.141`). All 74 API handlers read the IDs
+synchronously at the top of their bodies, so ALS covers the whole surface; the
+exempt set (`help`, `list_accounts`) is exactly right. The feared shared
+`.tmp`/`.bak` collision is NOT real as long as `writeAtomic` keeps deriving those
+names from its path argument.
+
+The following amendments are **required before implementation** and override the
+corresponding sections above where they conflict.
+
+### A1 — Single Client per profile (HIGH; correctness)
+There must be exactly one `getOrCreateClient(profile: ProfileState)` that BOTH
+the refresh path and `getFreshBooksClient()` call; a `Client` is constructed
+nowhere else. The SDK `Client` mutates its own `accessToken`/`refreshToken`
+(`@freshbooks/api/.../APIClient.js:515-516`), so two `Client` objects for one
+profile diverge: a refresh rotates token state on one while the handler keeps the
+other holding the now-revoked refresh token → permanent lockout. `profile.client`
+identity must be stable across refresh and handler within a call. Note the
+ordering bug this fixes: the wrapper refreshes *before* the handler, but
+`profile.client` is built lazily *inside* the handler — so `persistTokens`
+updating `profile.client.*` would dereference null on first refresh. Refresh must
+go through `getOrCreateClient(profile)`, not a lazily-null field.
+
+### A2 — Migration is the highest-risk operation; make it transactional (CRITICAL + HIGH)
+- **Atomic ordering (CRITICAL):** `mkdir profiles/` and verify → write
+  `profiles/<name>.env` via the existing atomic tmp+rename+post-write-verify path
+  and re-read to confirm → **only then** strip the token lines from base `.env`
+  (also atomically). Never strip first; never write the profile file
+  non-atomically. An interrupt at any point must leave at least one usable copy
+  of the (un-rotated) refresh token.
+- **Quiesce (HIGH):** the running server is itself a writer of `.env`. Migration
+  must require the server stopped (detect a lock file / instruct quiesce) and
+  re-read the freshest token pair from `.env` immediately before the move. A
+  concurrent rotation otherwise copies a just-revoked token into the profile.
+- **Durable idempotency marker (HIGH):** do not infer "already migrated" from the
+  presence of tokens in `.env` (that is identical to the partial-failure
+  residue). Write an explicit marker (e.g. `FRESHBOOKS_MIGRATED=1` /
+  `FRESHBOOKS_DEFAULT_PROFILE`) as the last step and key the skip on it. Refuse to
+  overwrite an existing profile file, and never overwrite a profile whose on-disk
+  token is newer than the source.
+- **Build/dist order (HIGH):** the launcher runs compiled `dist/`, but migration
+  runs from `ts-node` source. Setup must print and enforce: stop client →
+  `npm run build` → migrate → restart. A1-style version/capability check should
+  refuse migration unless the new code is what will run.
+- **Backup secrecy (HIGH):** any pre-migration backup of the token-bearing
+  `.env` must use an already-ignored name (`.bak`/`.tmp`) or live inside the
+  ignored `profiles/` dir; shred it after the profile file verifies.
+
+### A3 — Backward compatibility: implicit legacy profile + never-throw (HIGH)
+- When `profiles/` is empty but base `.env` still carries tokens+IDs (an
+  un-migrated in-place upgrade, or a stale `dist/` reading a stripped `.env`),
+  the server must **auto-adopt the legacy base `.env` as an implicit default
+  profile** so existing single-login installs keep working unchanged. This single
+  fix also neutralizes the dist-skew outage in A2.
+- The wrapper must wrap the **entire** account-resolution + `runInProfile`
+  invocation in try/catch and return `isError` on any thrown resolution error
+  (unknown name, zero profiles, bad `FRESHBOOKS_DEFAULT_PROFILE`). Today only
+  `refreshIfNeeded` is guarded and the handler call is unguarded — a resolution
+  throw from the wrapper level would escape the per-tool try/catch and kill the
+  agent loop. Resolve+validate the name in step 2 (before `runInProfile`).
+
+### A4 — Do not gate startup on N refreshes (HIGH)
+`ensureFreshToken()` is awaited before `transport.connect()`. Iterating N
+profiles serially can exceed the MCP client's init timeout (one slow/hung/
+rate-limited refresh fails the whole server and removes all ~76 tools); a naive
+`Promise.all` instead bursts N concurrent OAuth POSTs into rate limits. Connect
+first, then refresh profiles in the background with a per-profile try/catch (lazy
+pre-call refresh already covers correctness), or cap startup with a hard
+per-profile timeout well under the init budget. Sequential, isolated, non-blocking.
+
+### A5 — Discovery must validate, not just glob (MEDIUM)
+`profileCount()` gates the "account required when ≥2" rule, so a leftover/corrupt
+`*.env` (an empty stub, `acme copy.env`, an editor backup) silently flips a
+healthy single-profile server into account-required mode and advertises a dead
+profile. Discovery must validate each candidate (all four markers present +
+parses) before admitting it to the registry/count; malformed files are logged and
+excluded (or surfaced by `list_accounts` as "broken"), never counted.
+
+### A6 — Profile-name normalization is required, not an open question (MEDIUM)
+The owner's macOS filesystem (APFS) is case-insensitive: `Acme.env` and
+`acme.env` are the **same file**, so adding both silently clobbers one login's
+tokens → lockout. Enforce one normalization (lowercase stems + restricted
+charset) at **write time** (reject/normalize, detect case-insensitive collision
+before writing) and **resolution time** (case-insensitive lookup).
+
+### A7 — Detect duplicate logins across profiles (MEDIUM)
+Two profile files carrying the same refresh token (a copied file, or the same
+login added twice) guarantee that one gets permanently locked out on the other's
+next rotation. Setup and registry discovery must detect duplicate refresh tokens
+/ duplicate `accountId` and refuse or warn loudly.
+
+### A8 — Per-profile maintenance entry points + bundled skill (MEDIUM)
+`refreshTokensNow()`, `ensureFreshToken()`, and `inspectTokenHealth()` are the
+real callers behind the `refresh-tokens`/`check-tokens` CLIs and the bundled
+`freshbooks-token-refresh` skill, and they currently bind to base `.env` via the
+zero-arg, ALS-less path. After this change they would crash (calling the
+ALS-backed `getFreshBooksClient()` with no context) or misreport "no tokens"
+(inspecting the stripped base `.env`) — triggered by the exact per-profile 401
+symptom this design creates. Rewrite them to take an explicit `ProfileState` /
+iterate the registry, and update/version-gate the bundled skill to target
+`profiles/` and a named profile. (`scripts/refresh-tokens.ts`,
+`scripts/setup.ts`, the `freshbooks-token-refresh` skill.)
+
+### A9 — `list_accounts` acquires clients explicitly (MEDIUM)
+`freshbooks_list_accounts` is wrapped account-free (no ALS context) yet must build
+a per-profile `Client` and refresh to fetch `users.me()`/health. It must iterate
+the registry and call `getOrCreateClient(profile)` directly — never the ALS-backed
+`getFreshBooksClient()`.
+
+### A10 — JWT read source + process.env backstop (LOW/MEDIUM)
+- `profile.config.accessToken` must be the single authoritative read/write target
+  and must be updated even on the persist-failure path, or the expiry decode
+  desyncs from the SDK-mutated client token and churns extra rotations.
+- `load-env.ts` uses `override: true`; after migration, base `.env` must contain
+  **no** residual token/ID lines, or `process.env` silently repopulates and any
+  un-converted reader gets a stale value instead of a loud failure.
+
+### A11 — Tests that lock these invariants in
+- Real `listTools()` asserts `account` is in the exposed JSON schema (not just
+  `Object.keys(def.inputSchema)`); concurrent `callTool()` for two profiles each
+  observes its own ALS profile.
+- Two profiles return different `accountId`/`businessId` under their respective
+  ALS contexts (proves A1/process.env conversion).
+- Zero-profile and bad-default tool calls return `isError` and never reject (A3).
+- `git check-ignore profiles/<name>.env` succeeds; no migration backup name
+  escapes ignore (A2/secrets).
+- `writeAtomic` tmp/bak paths are always profile-file-relative, never a shared
+  constant.
+- Discovery excludes malformed/duplicate/case-colliding files (A5/A6/A7).
+
 ## Open Questions
 
-None blocking. Profile-name validation (allowed characters, case sensitivity)
-and the exact `users.me()` company-name caching strategy are implementation
-details to settle in the plan.
+- `users.me()` company-name caching strategy for `list_accounts` (TTL vs.
+  per-process memo) — implementation detail, settle in the plan.
+- Whether the implicit-legacy-profile (A3) should auto-name itself `default` or
+  prompt — settle in the plan; default to `default`.
