@@ -142,8 +142,8 @@ export async function run(argv: string[]): Promise<number> {
         printHealth(health);
         if (quarantined)
           console.error(
-            `  quarantined: yes — same-accountId collision; bulk auto-refresh SKIPS this (R2). ` +
-              `Rotate only with --profile ${profile.name} if it is a genuinely distinct login.`,
+            `  quarantined: yes — same-accountId collision; auto-refresh SKIPS this (R2), even with --profile. ` +
+              `If it is a genuinely distinct login, add "# freshbooks-distinct-login" to ${profile.filePath} to opt in; otherwise remove the stale file.`,
           );
         console.error(unhealthy ? `[${profile.name}] NEEDS ATTENTION` : `[${profile.name}] healthy`);
       }
