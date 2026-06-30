@@ -30,7 +30,7 @@
 - `src/tools/accounts.ts` — the `freshbooks_list_accounts` tool.
 - `src/migrate.ts` — transactional migration of legacy `.env` into `profiles/<name>.env`.
 - `src/server-lock.ts` — best-effort lock file so migration refuses to run while a server holds tokens.
-- Tests: `test/profiles.test.ts`, `test/atomic-write.test.ts`, `test/freshbooks-client-profiles.test.ts`, `test/with-account.test.ts`, `test/accounts-tool.test.ts`, `test/migrate.test.ts`, `test/gitignore.test.ts`.
+- Tests: `test/profiles.test.ts`, `test/atomic-write.test.ts`, `test/freshbooks-client-profiles.test.ts`, `test/with-account.test.ts`, `test/accounts-tool.test.ts`, `test/mcp-roundtrip.test.ts`, `test/server-lock.test.ts`, `test/migrate.test.ts`, `test/gitignore.test.ts`.
 
 **Modify:**
 - `src/freshbooks-client.ts` — `getOrCreateClient`, per-profile refresh/persist/single-flight, ALS-backed helpers, `inspectTokenHealth(profile)`, `ensureFreshTokens()`; drop the module-level singleton + `process.env` token coupling.
@@ -312,8 +312,11 @@ function readLegacyBaseEnv(baseEnvFile: string): ProfileConfig | null {
 }
 
 export function discoverProfiles(
-  dir: string = PROFILES_DIR,
-  baseEnvFile: string = BASE_ENV_FILE,
+  // Defaults read env overrides at CALL time so tests can point at a temp dir
+  // (set FRESHBOOKS_PROFILES_DIR + FRESHBOOKS_BASE_ENV, then resetRegistry()) and
+  // NEVER touch the developer's real .env during the suite.
+  dir: string = process.env.FRESHBOOKS_PROFILES_DIR?.trim() || PROFILES_DIR,
+  baseEnvFile: string = process.env.FRESHBOOKS_BASE_ENV?.trim() || BASE_ENV_FILE,
 ): DiscoveryResult {
   const profiles = new Map<string, ProfileState>();
   const broken: string[] = [];
@@ -604,12 +607,12 @@ export function getBusinessId(): number {
 }
 ```
 
-Also delete the now-unused `ENV_FILE` constant and `writeAtomic`/`readEnvTokens` definitions in this file (they move to Task 3 / are reworked in Task 5); import `writeAtomic`, `readTokenMarkers` from `./atomic-write` where needed.
+**Do NOT delete anything else in this commit.** Leave the old `ENV_FILE`, `readEnvTokens`, local `writeAtomic`, and the entire old refresh/persist/health block (lines 62–271) in place — they still compile and the old `refreshAndPersist(client)` path is unused-but-valid. Task 5 removes them wholesale. (This keeps the tree compiling at the Task 4 commit boundary; the overseer flagged that deleting them here breaks the per-task build.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npx vitest run test/freshbooks-client-profiles.test.ts`
-Expected: PASS. (Type errors about removed refresh functions are fixed in Task 5; if blocking, do Tasks 4 and 5 as one commit.)
+Run: `npx vitest run test/freshbooks-client-profiles.test.ts && npm run build`
+Expected: tests PASS and `npm run build` is clean — Task 4 deletes nothing the old block references, so there is no intermediate broken state.
 
 - [ ] **Step 5: Commit**
 
@@ -729,9 +732,13 @@ async function refreshAndPersist(profile: ProfileState): Promise<void> {
       const client = getOrCreateClient(profile); // SAME object the handler uses (A1)
       const result = await client.refreshAccessToken();
       if (!result) throw new Error("FreshBooks refreshAccessToken returned no data");
-      persistTokens(profile, result.accessToken, result.refreshToken);
+      // Update the shared client BEFORE the (throwing) persist so a .env-write
+      // failure can never leave the live client on the just-revoked token. This
+      // does not depend on the SDK also mutating these internally (it does — that
+      // is defense-in-depth). Overseer A1-finding.
       client.accessToken = result.accessToken;
       client.refreshToken = result.refreshToken;
+      persistTokens(profile, result.accessToken, result.refreshToken);
       console.error(`[freshbooks] access token refreshed for profile "${profile.name}"`);
     } finally {
       profile.refreshInFlight = null;
@@ -798,7 +805,7 @@ export function inspectTokenHealth(
 }
 ```
 
-Delete the old `ensureFreshToken`, `refreshInFlight` module global, old `inspectTokenHealth`, old `preflightEnvFile`, old `persistTokens`, old `readEnvTokens`.
+Delete (now, in this commit) everything the old single-`.env` path used: the `ENV_FILE` constant, the module-global `refreshInFlight`, the local `writeAtomic`, `readEnvTokens`, and the old `ensureFreshToken`, `refreshAndPersist`, `refreshIfNeeded`, `refreshTokensNow`, `inspectTokenHealth`, `preflightEnvFile`, `persistTokens` — they are wholly replaced above. Add the imports `import { writeAtomic, readTokenMarkers } from "./atomic-write";` and `import { getRegistry } from "./profiles";`. After this commit no `process.env.FRESHBOOKS_ACCESS_TOKEN/REFRESH_TOKEN/ACCOUNT_ID/BUSINESS_ID` read or write remains in this file.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -835,89 +842,74 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resetRegistry } from "../src/profiles";
+import { withAccount } from "../src/tools/with-refresh";
 
-// Build a registry the wrapper will read, then import the wrapper fresh.
-import { discoverProfiles, resetRegistry } from "../src/profiles";
-
-const cfg = (a: string, acc: string) =>
-  `FRESHBOOKS_ACCESS_TOKEN=${jwt()}\nFRESHBOOKS_REFRESH_TOKEN=rt-${a}\nFRESHBOOKS_ACCOUNT_ID=${acc}\nFRESHBOOKS_BUSINESS_ID=1\n`;
 function jwt(): string {
   const enc = (o: any) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  return `${enc({})}.${enc({ exp: Math.floor(Date.now() / 1000) + 3600 })}.s`;
+  return `${enc({})}.${enc({ exp: Math.floor(Date.now() / 1000) + 3600 })}.s`; // far-future -> refresh no-ops, no network
+}
+const cfg = (a: string, acc: string) =>
+  `FRESHBOOKS_ACCESS_TOKEN=${jwt()}\nFRESHBOOKS_REFRESH_TOKEN=rt-${a}\nFRESHBOOKS_ACCOUNT_ID=${acc}\nFRESHBOOKS_BUSINESS_ID=1\n`;
+
+// Point the registry at a fresh temp dir via the real discovery path — no spies.
+// Also override the base .env so the legacy fallback can't read the dev's real .env.
+function useProfiles(files: Record<string, string>): void {
+  const root = mkdtempSync(join(tmpdir(), "fb-wa-"));
+  const dir = join(root, "profiles");
+  mkdirSync(dir);
+  for (const [n, body] of Object.entries(files)) writeFileSync(join(dir, n), body);
+  process.env.FRESHBOOKS_PROFILES_DIR = dir;
+  process.env.FRESHBOOKS_BASE_ENV = join(root, ".env"); // does not exist -> empty => zero profiles
+  resetRegistry();
 }
 
-// A fake tool def matching the SDK shape.
+// A fake tool def matching the SDK shape (name/description/inputSchema/handler).
 const makeTool = (): any => ({
   name: "freshbooks_demo",
   description: "demo",
-  inputSchema: { page: { _def: { typeName: "ZodNumber" } } },
+  inputSchema: {},
   handler: async (args: any) => ({ content: [{ type: "text", text: JSON.stringify(args) }] }),
 });
 
 describe("withAccount", () => {
-  let withAccount: any;
-  beforeEach(async () => {
+  beforeEach(() => {
     process.env.FRESHBOOKS_CLIENT_ID = "cid";
-    ({ withAccount } = await import("../src/tools/with-refresh"));
   });
 
   it("injects an `account` field into inputSchema", () => {
-    const wrapped = withAccount(makeTool());
-    expect(Object.keys(wrapped.inputSchema)).toContain("account");
+    useProfiles({ "acme.env": cfg("a", "A") });
+    expect(Object.keys(withAccount(makeTool()).inputSchema)).toContain("account");
   });
 
   it("returns isError (never throws) when account omitted and >=2 profiles", async () => {
-    // Two profiles via a monkeypatched registry.
-    const mod = await import("../src/profiles");
-    (mod as any).resetRegistry?.();
-    const root = mkdtempSync(join(tmpdir(), "fb-wa-")); const dir = join(root, "profiles"); mkdirSync(dir);
-    writeFileSync(join(dir, "acme.env"), cfg("a", "A")); writeFileSync(join(dir, "beta.env"), cfg("b", "B"));
-    // Replace registry with this dir's discovery.
-    const disc = discoverProfiles(dir, join(root, ".env"));
-    viSpyRegistry(mod, disc);
-    const wrapped = withAccount(makeTool());
-    const res = await wrapped.handler({ page: 1 }, {});
+    useProfiles({ "acme.env": cfg("a", "A"), "beta.env": cfg("b", "B") });
+    const res = await withAccount(makeTool()).handler({ page: 1 }, {});
     expect(res.isError).toBe(true);
-    expect(res.content[0].text).toMatch(/acme.*beta|multiple/);
+    expect(res.content[0].text).toMatch(/acme|beta|multiple/);
   });
 
-  it("resolves the named profile, strips `account`, runs the handler", async () => {
-    const mod = await import("../src/profiles");
-    const root = mkdtempSync(join(tmpdir(), "fb-wa2-")); const dir = join(root, "profiles"); mkdirSync(dir);
-    writeFileSync(join(dir, "acme.env"), cfg("a", "A"));
-    viSpyRegistry(mod, discoverProfiles(dir, join(root, ".env")));
-    const wrapped = withAccount(makeTool());
-    const res = await wrapped.handler({ page: 7, account: "acme" }, {});
+  it("uses the lone profile as default when account omitted and exactly one exists", async () => {
+    useProfiles({ "acme.env": cfg("a", "A") });
+    const res = await withAccount(makeTool()).handler({ page: 1 }, {});
     expect(res.isError).toBeUndefined();
+  });
+
+  it("resolves the named profile and strips `account` before the handler", async () => {
+    useProfiles({ "acme.env": cfg("a", "A") });
+    const res = await withAccount(makeTool()).handler({ page: 7, account: "acme" }, {});
     expect(JSON.parse(res.content[0].text)).toEqual({ page: 7 }); // account stripped
   });
 
-  it("zero profiles -> isError, not a throw (never-throw contract)", async () => {
-    const mod = await import("../src/profiles");
-    const root = mkdtempSync(join(tmpdir(), "fb-wa0-"));
-    viSpyRegistry(mod, discoverProfiles(join(root, "profiles"), join(root, ".env")));
-    const wrapped = withAccount(makeTool());
-    const res = await wrapped.handler({ account: "ghost" }, {});
+  it("zero profiles / unknown name -> isError, never a throw (never-throw contract)", async () => {
+    useProfiles({}); // empty dir + non-existent base .env -> zero profiles
+    const res = await withAccount(makeTool()).handler({ account: "ghost" }, {});
     expect(res.isError).toBe(true);
   });
 });
-
-// helper: force getRegistry() to return a given DiscoveryResult
-import { vi } from "vitest";
-function viSpyRegistry(mod: any, disc: any) {
-  vi.spyOn(mod, "getRegistry").mockReturnValue(disc);
-  vi.spyOn(mod, "profileCount").mockReturnValue(disc.profiles.size);
-  vi.spyOn(mod, "profileNames").mockReturnValue([...disc.profiles.keys()]);
-  vi.spyOn(mod, "defaultProfileName").mockReturnValue(disc.profiles.size === 1 ? [...disc.profiles.keys()][0] : null);
-  vi.spyOn(mod, "resolveProfile").mockImplementation((n: any) => {
-    const p = disc.profiles.get(String(n).toLowerCase());
-    if (!p) { const { UnknownProfileError } = mod; throw new UnknownProfileError(n, [...disc.profiles.keys()]); }
-    return p;
-  });
-}
 ```
 
-> Note for the implementer: if `vi.spyOn` on module exports is awkward under the project's ESM/CJS setup, instead pass an explicit `profiles` dir via an env var the wrapper reads in tests, or test through the real registry by writing files into a temp `profiles/` and calling `resetRegistry()`. The behavioral assertions (schema has `account`; omitted+≥2 → isError; named → strips+runs; zero/unknown → isError) are what matter.
+> Note: this uses the REAL discovery path through the `FRESHBOOKS_PROFILES_DIR`/`FRESHBOOKS_BASE_ENV` overrides + `resetRegistry()` rather than `vi.spyOn` on module exports (which is brittle under this repo's module setup). Task 7b proves the same behavior end-to-end through the actual SDK `callTool()`.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -1160,6 +1152,128 @@ git commit -m "feat: freshbooks_list_accounts tool + per-tool account wiring"
 
 ---
 
+### Task 7b: Real-MCP round-trip — exposed schema + concurrent ALS isolation (Amendment A11)
+
+**Files:**
+- Test: `test/mcp-roundtrip.test.ts`
+
+**Why this is its own task:** `Object.keys(def.inputSchema)` (Task 6/7) inspects the raw Zod shape we mutate — it would stay green even if a future SDK stopped exposing the injected field to clients, silently breaking every API call when ≥2 profiles exist. The audit *proved* the design only via a real `listTools()`/`callTool()` round-trip; A11 makes that test binding. This task locks in (a) the exposed JSON schema actually carries `account`, and (b) two concurrent `callTool()`s for different profiles each resolve their OWN account end-to-end through wrapper → ALS → `getAccountId()`.
+
+**Interfaces:**
+- Consumes: `createSdkMcpServer`, `tool` (SDK); `InMemoryTransport` + `Client` (`@modelcontextprotocol/sdk`); `withAccount`/`withoutAccount` (Task 6); `currentProfile` (Task 2), `getAccountId` (Task 4); `resetRegistry` (Task 2); `freshbooksServer` (existing).
+
+- [ ] **Step 1: Write the failing test**
+
+```ts
+// test/mcp-roundtrip.test.ts
+import { describe, it, expect, beforeAll } from "vitest";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { z } from "zod";
+import { tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { withAccount, withoutAccount } from "../src/tools/with-refresh";
+import { currentProfile, resetRegistry } from "../src/profiles";
+import { getAccountId } from "../src/freshbooks-client";
+
+function jwt(): string {
+  const enc = (o: any) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${enc({})}.${enc({ exp: Math.floor(Date.now() / 1000) + 3600 })}.s`; // far-future -> refresh no-ops, no network
+}
+const cfg = (acc: string) =>
+  `FRESHBOOKS_ACCESS_TOKEN=${jwt()}\nFRESHBOOKS_REFRESH_TOKEN=rt-${acc}\nFRESHBOOKS_ACCOUNT_ID=${acc}\nFRESHBOOKS_BUSINESS_ID=1\n`;
+
+async function connect(server: any) {
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverT);
+  const client = new McpClient({ name: "test", version: "0.0.0" });
+  await client.connect(clientT);
+  return client;
+}
+
+beforeAll(() => {
+  process.env.FRESHBOOKS_CLIENT_ID = "cid";
+  const root = mkdtempSync(join(tmpdir(), "fb-rt-"));
+  const dir = join(root, "profiles");
+  mkdirSync(dir);
+  writeFileSync(join(dir, "acme.env"), cfg("ACC_A"));
+  writeFileSync(join(dir, "beta.env"), cfg("ACC_B"));
+  process.env.FRESHBOOKS_PROFILES_DIR = dir;
+  process.env.FRESHBOOKS_BASE_ENV = join(root, ".env"); // never read the dev's real .env
+  resetRegistry();
+});
+
+describe("real MCP round-trip (Amendment A11)", () => {
+  // A withAccount-wrapped echo tool that reports the profile it actually resolved to.
+  const echo = withAccount(
+    tool("freshbooks_echo", "echo", { ping: z.string().optional() }, async () => ({
+      content: [{ type: "text" as const, text: JSON.stringify({ profile: currentProfile().name, accountId: getAccountId() }) }],
+    })) as any,
+  );
+  const helpLike = withoutAccount(
+    tool("freshbooks_help", "help", {}, async () => ({ content: [{ type: "text" as const, text: "ok" }] })) as any,
+  );
+
+  it("exposes `account` in the SERVED schema of an API tool, but not on account-free tools", async () => {
+    const client = await connect(createSdkMcpServer({ name: "t", version: "0.0.0", tools: [echo, helpLike] }));
+    const { tools } = await client.listTools();
+    const e = tools.find((t: any) => t.name === "freshbooks_echo")!;
+    expect((e.inputSchema as any).properties.account.type).toBe("string");
+    const h = tools.find((t: any) => t.name === "freshbooks_help")!;
+    expect((h.inputSchema as any).properties?.account).toBeUndefined();
+  });
+
+  it("two concurrent callTool()s each resolve their OWN profile end-to-end", async () => {
+    const client = await connect(createSdkMcpServer({ name: "t", version: "0.0.0", tools: [echo] }));
+    const [ra, rb] = await Promise.all([
+      client.callTool({ name: "freshbooks_echo", arguments: { account: "acme" } }),
+      client.callTool({ name: "freshbooks_echo", arguments: { account: "beta" } }),
+    ]);
+    expect(JSON.parse((ra.content as any)[0].text)).toEqual({ profile: "acme", accountId: "ACC_A" });
+    expect(JSON.parse((rb.content as any)[0].text)).toEqual({ profile: "beta", accountId: "ACC_B" });
+  });
+
+  it("an unknown account returns isError through the SDK (never a rejected promise)", async () => {
+    const client = await connect(createSdkMcpServer({ name: "t", version: "0.0.0", tools: [echo] }));
+    const bad = await client.callTool({ name: "freshbooks_echo", arguments: { account: "ghost" } });
+    expect(bad.isError).toBe(true);
+  });
+});
+
+describe("real server exposes account correctly", () => {
+  it("freshbooks_list_invoices has `account`; help and list_accounts do not", async () => {
+    const { freshbooksServer } = await import("../src/server");
+    const client = await connect(freshbooksServer);
+    const { tools } = await client.listTools();
+    const inv = tools.find((t: any) => t.name === "freshbooks_list_invoices")!;
+    expect((inv.inputSchema as any).properties.account.type).toBe("string");
+    expect((tools.find((t: any) => t.name === "freshbooks_help")!.inputSchema as any).properties?.account).toBeUndefined();
+    expect((tools.find((t: any) => t.name === "freshbooks_list_accounts")!.inputSchema as any).properties?.account).toBeUndefined();
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/mcp-roundtrip.test.ts`
+Expected: FAIL initially if run before Tasks 6/7 land (wrapper/registry not present). After Tasks 6 + 7, it must PASS. (If your `@modelcontextprotocol/sdk` version exposes `InMemoryTransport` at a different path, find it with `node -e "console.log(require.resolve('@modelcontextprotocol/sdk/inMemory.js'))"` and adjust the import; the round-trip assertions are what matter.)
+
+- [ ] **Step 3: Run test to verify it passes**
+
+Run: `npx vitest run test/mcp-roundtrip.test.ts`
+Expected: PASS — all four assertions.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add test/mcp-roundtrip.test.ts
+git commit -m "test: real MCP round-trip locks in account-schema exposure + concurrent ALS isolation (A11)"
+```
+
+---
+
 ### Task 8: Startup — connect first, refresh in the background, server lock
 
 **Files:**
@@ -1169,27 +1283,36 @@ git commit -m "feat: freshbooks_list_accounts tool + per-tool account wiring"
 
 **Interfaces:**
 - Produces:
-  - `function acquireServerLock(): void` (writes `${PROFILES_DIR}/../.server.lock` with pid+timestamp; registers `process.on("exit")` cleanup)
-  - `function releaseServerLock(): void`
-  - `function isServerLockFresh(maxAgeMs?: number): boolean`
+  - `function lockPathFor(rootDir: string): string`
+  - `function writeLock(path: string): void` (records `{ pid, at }`)
+  - `function removeLock(path: string): void`
+  - `function isServerLockFresh(path: string, maxAgeMs?: number): boolean` — held iff the recorded pid is a **live process** (`process.kill(pid, 0)`), NOT a fixed time window. (Overseer CRITICAL: an age-based lock looks stale after 60s, so a normally-running server would be seen as "not running" and migration would proceed concurrently → token-burn race.)
 
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 // test/server-lock.test.ts
 import { describe, it, expect } from "vitest";
-import { lockPathFor, writeLock, isLockFresh } from "../src/server-lock";
-import { mkdtempSync } from "node:fs";
+import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { lockPathFor, writeLock, removeLock, isServerLockFresh } from "../src/server-lock";
 
-describe("server lock", () => {
-  it("reports a just-written lock as fresh and an absent one as stale", () => {
+describe("server lock (pid-liveness, not age)", () => {
+  it("absent -> not fresh; live-pid lock -> fresh; removed -> not fresh", () => {
     const dir = mkdtempSync(join(tmpdir(), "fb-lock-"));
     const p = lockPathFor(dir);
-    expect(isLockFresh(p, 60_000)).toBe(false);
-    writeLock(p);
-    expect(isLockFresh(p, 60_000)).toBe(true);
+    expect(isServerLockFresh(p)).toBe(false);
+    writeLock(p); // records THIS test process's pid, which is alive
+    expect(isServerLockFresh(p)).toBe(true);
+    removeLock(p);
+    expect(isServerLockFresh(p)).toBe(false);
+  });
+  it("a dead/never-used pid is treated as stale (the bug the overseer caught)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fb-lock2-"));
+    const p = lockPathFor(dir);
+    writeFileSync(p, JSON.stringify({ pid: 0x3fffffff, at: Date.now() })); // not a live pid
+    expect(isServerLockFresh(p)).toBe(false);
   });
 });
 ```
@@ -1203,7 +1326,7 @@ Expected: FAIL — module not found.
 
 ```ts
 // src/server-lock.ts
-import { writeFileSync, existsSync, statSync, rmSync } from "node:fs";
+import { writeFileSync, existsSync, statSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 export function lockPathFor(rootDir: string): string {
@@ -1212,13 +1335,33 @@ export function lockPathFor(rootDir: string): string {
 export function writeLock(path: string): void {
   writeFileSync(path, JSON.stringify({ pid: process.pid, at: Date.now() }));
 }
-export function isLockFresh(path: string, maxAgeMs = 60_000): boolean {
+export function removeLock(path: string): void {
+  try { if (existsSync(path)) rmSync(path); } catch { /* best effort */ }
+}
+
+/**
+ * A lock means "a server is alive" — judged by PID LIVENESS, not file age. A
+ * write-once + mtime-window lock would look stale after the window and let
+ * migration run concurrently with a long-running server (Amendment A2 token-burn
+ * race). `maxAgeMs` is only a secondary guard so a PID reused after an uncleaned
+ * crash can't masquerade as the old server forever.
+ */
+export function isServerLockFresh(path: string, maxAgeMs = 24 * 60 * 60 * 1000): boolean {
   if (!existsSync(path)) return false;
-  return Date.now() - statSync(path).mtimeMs < maxAgeMs;
+  let pid: unknown;
+  try { pid = JSON.parse(readFileSync(path, "utf8")).pid; } catch { return false; }
+  if (typeof pid !== "number") return false;
+  if (Date.now() - statSync(path).mtimeMs > maxAgeMs) return false;
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe (sends nothing)
+    return true;
+  } catch (err: any) {
+    return err?.code === "EPERM"; // EPERM => alive but not ours; ESRCH => dead
+  }
 }
 ```
 
-(`index.ts` writes the lock at the package root and removes it on exit; migration in Task 9 refuses if `isLockFresh` unless `--force`.)
+(`index.ts` writes the lock at the package root and removes it on exit; migration in Task 9 refuses when `isServerLockFresh` is true unless `--force`.)
 
 Rewrite `src/index.ts`:
 
@@ -1228,13 +1371,12 @@ import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { freshbooksServer } from "./server";
 import { ensureFreshTokens } from "./freshbooks-client";
-import { lockPathFor, writeLock } from "./server-lock";
-import { existsSync, rmSync } from "node:fs";
+import { lockPathFor, writeLock, removeLock } from "./server-lock";
 
 async function main() {
   const lock = lockPathFor(join(__dirname, ".."));
   writeLock(lock);
-  const cleanup = () => { try { if (existsSync(lock)) rmSync(lock); } catch { /* ignore */ } };
+  const cleanup = () => removeLock(lock);
   process.on("exit", cleanup);
   process.on("SIGINT", () => { cleanup(); process.exit(0); });
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });
@@ -1277,12 +1419,13 @@ git commit -m "feat: connect-first startup with background per-profile refresh +
 - Test: `test/migrate.test.ts`
 
 **Interfaces:**
-- Consumes: `ProfileConfig`, `parseProfileConfig`, `normalizeProfileName` (Task 1), `writeAtomic`, `readTokenMarkers` (Task 3), `isLockFresh`/`lockPathFor` (Task 8).
+- Consumes: `ProfileConfig`, `parseProfileConfig`, `normalizeProfileName` (Task 1), `writeAtomic`, `readTokenMarkers` (Task 3), `isServerLockFresh`/`lockPathFor` (Task 8).
 - Produces:
   - `const MIGRATED_MARKER = "FRESHBOOKS_MIGRATED"`
   - `function isMigrated(baseEnvContent: string): boolean`
   - `function buildProfileFileContent(config: ProfileConfig): string`
   - `function stripTokensFromBaseEnv(content: string): string`
+  - `function writeNewProfile(profilesDir: string, rawName: string, config: ProfileConfig): string` — atomic create that REFUSES to overwrite an existing profile (the case-collision guard, shared by migration and setup add-login).
   - `function runMigration(opts: { name: string; rootDir: string; force?: boolean }): { profilePath: string }`
 
 - [ ] **Step 1: Write the failing test**
@@ -1294,9 +1437,10 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  isMigrated, buildProfileFileContent, stripTokensFromBaseEnv, runMigration,
+  isMigrated, buildProfileFileContent, stripTokensFromBaseEnv, runMigration, writeNewProfile,
 } from "../src/migrate";
 import { parseProfileConfig } from "../src/profiles";
+import { lockPathFor, writeLock } from "../src/server-lock";
 
 const legacy =
   "FRESHBOOKS_CLIENT_ID=cid\nFRESHBOOKS_CLIENT_SECRET=sec\nFRESHBOOKS_REDIRECT_URI=u\n" +
@@ -1344,6 +1488,26 @@ describe("runMigration (transactional ordering)", () => {
     writeFileSync(join(root, ".env"), "FRESHBOOKS_CLIENT_ID=cid\nFRESHBOOKS_MIGRATED=1\n");
     expect(() => runMigration({ name: "x", rootDir: root })).toThrow(/already migrated/i);
   });
+  it("refuses while a live server lock is present, but --force bypasses", () => {
+    const root = mkdtempSync(join(tmpdir(), "fb-mig4-"));
+    writeFileSync(join(root, ".env"), legacy);
+    writeLock(lockPathFor(root)); // records this live test pid
+    expect(() => runMigration({ name: "acme", rootDir: root })).toThrow(/running/i);
+    expect(() => runMigration({ name: "acme", rootDir: root, force: true })).not.toThrow();
+  });
+});
+
+describe("writeNewProfile collision guard (Amendments A6/A7)", () => {
+  const cfg = { accessToken: "at", refreshToken: "rt", accountId: "ACC", businessId: "9" };
+  it("refuses to overwrite an existing profile (case-insensitive name)", () => {
+    const root = mkdtempSync(join(tmpdir(), "fb-wnp-"));
+    const dir = join(root, "profiles");
+    const p = writeNewProfile(dir, "acme", cfg);
+    expect(p.endsWith("/profiles/acme.env")).toBe(true);
+    // "Acme" normalizes to "acme" -> same file -> must refuse, not clobber.
+    expect(() => writeNewProfile(dir, "Acme", { ...cfg, refreshToken: "OTHER" })).toThrow(/already exists/i);
+    expect(parseProfileConfig(readFileSync(p, "utf8"))!.refreshToken).toBe("rt"); // unchanged
+  });
 });
 ```
 
@@ -1360,7 +1524,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeAtomic, readTokenMarkers } from "./atomic-write";
 import { parseProfileConfig, normalizeProfileName, type ProfileConfig } from "./profiles";
-import { lockPathFor, isLockFresh } from "./server-lock";
+import { lockPathFor, isServerLockFresh } from "./server-lock";
 
 export const MIGRATED_MARKER = "FRESHBOOKS_MIGRATED";
 
@@ -1402,12 +1566,11 @@ export function runMigration(opts: { name: string; rootDir: string; force?: bool
   const name = normalizeProfileName(opts.name);
   const baseEnv = join(rootDir, ".env");
   const profilesDir = join(rootDir, "profiles");
-  const profilePath = join(profilesDir, `${name}.env`);
 
   if (!existsSync(baseEnv)) throw new Error(`No .env at ${baseEnv} — nothing to migrate.`);
 
-  if (!opts.force && isLockFresh(lockPathFor(rootDir))) {
-    throw new Error("A FreshBooks MCP server appears to be running (fresh .server.lock). Stop it first, then migrate (or pass --force).");
+  if (!opts.force && isServerLockFresh(lockPathFor(rootDir))) {
+    throw new Error("A FreshBooks MCP server appears to be running (live .server.lock). Stop it first, then migrate (or pass --force).");
   }
 
   // Re-read the freshest pair from disk immediately before the move.
@@ -1417,24 +1580,36 @@ export function runMigration(opts: { name: string; rootDir: string; force?: bool
   const config = parseProfileConfig(baseContent);
   if (!config) throw new Error("Base .env has no complete token set to migrate.");
 
-  if (existsSync(profilePath)) {
-    throw new Error(`profiles/${name}.env already exists — refusing to overwrite. Choose a different name.`);
-  }
+  // 1) write + verify the profile file FIRST (writeNewProfile refuses to overwrite).
+  const profilePath = writeNewProfile(profilesDir, name, config);
 
-  mkdirSync(profilesDir, { recursive: true });
-  if (!existsSync(profilesDir)) throw new Error(`Failed to create ${profilesDir}.`);
-
-  // 1) write + verify the profile file FIRST.
-  writeAtomic(profilePath, buildProfileFileContent(config));
-  const check = readTokenMarkers(profilePath);
-  if (check.access !== config.accessToken || check.refresh !== config.refreshToken) {
-    throw new Error("Profile file failed post-write verification — base .env left intact.");
-  }
-
-  // 2) only now strip + mark base .env (atomic; .bak is *.bak -> gitignored).
+  // 2) only now strip + mark base .env (atomic; the .bak is *.bak -> gitignored).
   writeAtomic(baseEnv, stripTokensFromBaseEnv(baseContent));
 
   return { profilePath };
+}
+
+/**
+ * Atomically create profiles/<name>.env, REFUSING to overwrite an existing file.
+ * On case-insensitive filesystems (macOS APFS) existsSync catches an "Acme" vs
+ * "acme" collision before it can clobber a login's tokens (Amendments A6/A7).
+ * Shared by runMigration AND the setup add-login loop (Task 10) so neither path
+ * can silently destroy another login's refresh token.
+ */
+export function writeNewProfile(profilesDir: string, rawName: string, config: ProfileConfig): string {
+  const name = normalizeProfileName(rawName);
+  const profilePath = join(profilesDir, `${name}.env`);
+  if (existsSync(profilePath)) {
+    throw new Error(`profiles/${name}.env already exists — refusing to overwrite. Choose a different name.`);
+  }
+  mkdirSync(profilesDir, { recursive: true });
+  if (!existsSync(profilesDir)) throw new Error(`Failed to create ${profilesDir}.`);
+  writeAtomic(profilePath, buildProfileFileContent(config));
+  const check = readTokenMarkers(profilePath);
+  if (check.access !== config.accessToken || check.refresh !== config.refreshToken) {
+    throw new Error(`profiles/${name}.env failed post-write verification.`);
+  }
+  return profilePath;
 }
 ```
 
@@ -1467,9 +1642,9 @@ Edit `scripts/setup.ts`:
 1. After loading existing config, if base `.env` has tokens and is not yet migrated, offer migration:
 
 ```ts
-import { runMigration } from "../src/migrate";
-import { normalizeProfileName, buildProfileFileContent } from "../src/profiles";
-import { isMigrated } from "../src/migrate";
+import { join } from "node:path";
+import { runMigration, isMigrated, writeNewProfile } from "../src/migrate";
+import { normalizeProfileName } from "../src/profiles";
 // ...
 const baseHasTokens = existsSync(envPath) && /FRESHBOOKS_REFRESH_TOKEN=.+/.test(readFileSync(envPath, "utf8"));
 if (baseHasTokens && !isMigrated(readFileSync(envPath, "utf8"))) {
@@ -1485,7 +1660,7 @@ if (baseHasTokens && !isMigrated(readFileSync(envPath, "utf8"))) {
 
 2. Fix the `businessMemberships[0]` limitation (`scripts/setup.ts:287-293`): when more than one membership exists, list them and let the user pick which business this profile maps to; write the chosen `accountId`/`businessId`.
 
-3. After a successful OAuth add, write `profiles/<name>.env` via `buildProfileFileContent(config)` + `writeAtomic`, and loop: "Add another login? (y/N)".
+3. After a successful OAuth add, persist the login with the SHARED guarded writer — `writeNewProfile(join(__dirname, "..", "profiles"), name, config)` (Task 9). It normalizes the name and **refuses to overwrite an existing profile**, so adding "Acme" when "acme" already exists throws instead of silently clobbering that login's tokens (Amendments A6/A7 — the overseer-caught lockout). Catch that error, tell the user, and re-prompt for a different name. Then loop: "Add another login? (y/N)". **Never call `writeAtomic` directly here** — the collision guard must not be bypassed.
 
 4. Ensure the wizard never writes tokens into base `.env` anymore — base `.env` holds only `FRESHBOOKS_CLIENT_ID`/`SECRET`/`REDIRECT_URI` (+ `FRESHBOOKS_MIGRATED=1`).
 
@@ -1701,15 +1876,16 @@ git commit -m "docs: document multi-account profiles; sync tool count to 76; upd
 - A3 implicit legacy profile + never-throw resolution → Task 2 (legacy fallback) + Task 6 (try/catch). ✓
 - A4 non-blocking startup → Task 8. ✓
 - A5 validated discovery → Task 2 (broken/duplicate exclusion). ✓
-- A6 name normalization → Task 1 + Task 2 (case detection). ✓
-- A7 duplicate-login detection → Task 2. ✓
+- A6 name normalization → Task 1 + Task 2 (discovery case detection) + Task 9 `writeNewProfile` write-time collision guard, used by migration AND Task 10 add-login. ✓ (overseer fix)
+- A7 duplicate-login detection → Task 2 (discovery) + Task 9 `writeNewProfile`. ✓
 - A8 per-profile CLIs + skill → Tasks 11 + 13. ✓
 - A9 `list_accounts` explicit client → Task 7. ✓
-- A10 authoritative `config` + no residual `process.env` → Task 5 (persist updates config on both paths) + Task 12 (`.env.example`/strip). ✓
-- A11 lock-in tests → Tasks 1,2,3,5,6,7,9,12 each ship the named tests. ✓
+- A10 authoritative `config` + no residual `process.env` → Task 5 (client updated BEFORE persist; config updated on both paths) + Task 12 (`.env.example`/strip). ✓
+- A11 lock-in tests → real `listTools()`/`callTool()` round-trip + concurrent ALS isolation in **Task 7b** (`test/mcp-roundtrip.test.ts`), plus unit tests in Tasks 1,2,3,5,6,9,12. ✓ (overseer fix)
+- Server-lock quiesce (A2) is **pid-liveness**, not age-based → Task 8 (`isServerLockFresh` via `process.kill(pid,0)`) + Task 9 test. ✓ (overseer CRITICAL fix)
 
 **Placeholder scan:** No TBD/TODO; every code step has real code; doc tasks name exact files and counts.
 
 **Type consistency:** `ProfileState`/`ProfileConfig` defined in Task 1 and used unchanged in 2/4/5/6/7/9. `getOrCreateClient(profile)` (Task 4) is the only constructor and is called by refresh (Task 5) and `list_accounts` (Task 7). `refreshIfNeeded(profile)`/`refreshTokensNow(profile)`/`inspectTokenHealth(profile)` (Task 5) take a `ProfileState` everywhere they're called (Tasks 6, 7, 8, 11). `withAccount`/`withoutAccount` (Task 6) are imported by Task 7. `runMigration` (Task 9) consumed by Task 10.
 
-**Known cross-task build gaps (called out in-task):** removing zero-arg `ensureFreshToken`/`refreshTokensNow`/`inspectTokenHealth` in Tasks 4–5 leaves `index.ts`/`refresh-tokens.ts` non-compiling until Tasks 8/11; this is intentional and flagged in each affected task's Step 4.
+**Known cross-task build gaps (called out in-task):** Task 4 deletes nothing, so its tree compiles. Task 5 removes the zero-arg `ensureFreshToken`/`refreshTokensNow`/`inspectTokenHealth`, which leaves `index.ts`/`refresh-tokens.ts` non-compiling until Tasks 8/11; this is intentional and flagged in those tasks. No other intermediate broken state exists.
