@@ -59,6 +59,26 @@ export function parseArgs(argv: string[]): CliArgs {
   return { checkOnly, json, bufferMinutes, only };
 }
 
+/**
+ * R2 — pure bulk-refresh skip decision. A quarantined profile is a same-`accountId`
+ * collision whose on-disk refresh token may be a SUPERSEDED snapshot of another
+ * login's token family. Rotating it triggers FreshBooks refresh-token-reuse
+ * revocation, which revokes the WHOLE family (including the live sibling) →
+ * permanent lockout. So a no-arg `npm run refresh-tokens` (bulk mode) must NEVER
+ * auto-rotate a quarantined profile — exactly as the startup `ensureFreshTokens()`
+ * already skips them.
+ *
+ * Returns true when this profile must be SKIPPED for auto-refresh in this run.
+ * When the operator explicitly targets one profile with `--profile <name>`
+ * (`only` is set), that is a deliberate opt-in and the rotation is allowed.
+ */
+export function shouldSkipQuarantinedRefresh(
+  profile: Pick<ProfileState, "quarantined">,
+  only: string | undefined,
+): boolean {
+  return Boolean(profile.quarantined) && !only;
+}
+
 /** Human-readable report for one profile — written to stderr so --json keeps stdout clean. */
 function printHealth(health: TokenHealth): void {
   const access = health.access ? `...${health.access.slice(-10)}` : "(none)";
@@ -75,8 +95,14 @@ function printHealth(health: TokenHealth): void {
   for (const issue of health.issues) console.error(`  issue: ${issue}`);
 }
 
-async function main(): Promise<void> {
-  const { checkOnly, json, bufferMinutes, only } = parseArgs(process.argv.slice(2));
+/**
+ * Core CLI logic. Returns the intended process exit code instead of calling
+ * `process.exit` itself, so it can be driven from a test (network-free) that
+ * inspects which profiles were refreshed. Exit codes: 0 healthy/refreshed ·
+ * 1 a refresh failed or a profile is unhealthy (--check-only) · 2 config error.
+ */
+export async function run(argv: string[]): Promise<number> {
+  const { checkOnly, json, bufferMinutes, only } = parseArgs(argv);
   const bufferSeconds = bufferMinutes * 60;
 
   const reg = getRegistry();
@@ -92,7 +118,7 @@ async function main(): Promise<void> {
       : "No FreshBooks accounts configured. Run `npm run setup`.";
     if (json) console.log(JSON.stringify({ status: "config_error", error: message }));
     else console.error(message);
-    process.exit(2);
+    return 2;
   }
 
   let anyUnhealthy = false;
@@ -101,19 +127,44 @@ async function main(): Promise<void> {
   for (const profile of profiles) {
     const health = inspectTokenHealth(profile, bufferSeconds);
     const unhealthy = health.needsRefresh || health.issues.length > 0;
+    // TokenHealth (src/freshbooks-client.ts) deliberately knows nothing about
+    // quarantine — that is a registry concern — so the CLI surfaces it here.
+    const quarantined = profile.quarantined ?? false;
 
     if (checkOnly) {
-      if (json) console.log(JSON.stringify({ profile: profile.name, health }));
+      if (json) console.log(JSON.stringify({ profile: profile.name, quarantined, health }));
       else {
         printHealth(health);
+        if (quarantined)
+          console.error(
+            `  quarantined: yes — same-accountId collision; bulk auto-refresh SKIPS this (R2). ` +
+              `Rotate only with --profile ${profile.name} if it is a genuinely distinct login.`,
+          );
         console.error(unhealthy ? `[${profile.name}] NEEDS ATTENTION` : `[${profile.name}] healthy`);
       }
       anyUnhealthy ||= unhealthy;
       continue;
     }
 
+    // R2: bulk refresh must NOT rotate a quarantined profile (token-family
+    // lockout vector). Skip BEFORE any needsRefresh/refresh logic, unless the
+    // operator explicitly targeted this profile with --profile (opt-in).
+    if (shouldSkipQuarantinedRefresh(profile, only)) {
+      if (json)
+        console.log(
+          JSON.stringify({ profile: profile.name, status: "skipped_quarantined", refreshed: false, quarantined: true }),
+        );
+      else
+        console.error(
+          `[${profile.name}] quarantined — skipping auto-refresh (R2); ` +
+            `if this is a genuinely distinct login, refresh it explicitly with --profile ${profile.name}`,
+        );
+      continue;
+    }
+
     if (!unhealthy) {
-      if (json) console.log(JSON.stringify({ profile: profile.name, status: "healthy", refreshed: false }));
+      if (json)
+        console.log(JSON.stringify({ profile: profile.name, status: "healthy", refreshed: false, quarantined }));
       else console.error(`[${profile.name}] healthy — no refresh needed`);
       continue;
     }
@@ -124,7 +175,9 @@ async function main(): Promise<void> {
       await refreshTokensNow(profile);
       const after = inspectTokenHealth(profile, bufferSeconds);
       if (json) {
-        console.log(JSON.stringify({ profile: profile.name, status: "refreshed", refreshed: true, health: after }));
+        console.log(
+          JSON.stringify({ profile: profile.name, status: "refreshed", refreshed: true, quarantined, health: after }),
+        );
       } else {
         printHealth(after);
         console.error(`[${profile.name}] refreshed`);
@@ -132,7 +185,8 @@ async function main(): Promise<void> {
     } catch (err) {
       anyFailed = true;
       const message = err instanceof Error ? err.message : String(err);
-      if (json) console.log(JSON.stringify({ profile: profile.name, status: "refresh_failed", error: message }));
+      if (json)
+        console.log(JSON.stringify({ profile: profile.name, status: "refresh_failed", quarantined, error: message }));
       else {
         console.error(`[${profile.name}] REFRESH FAILED: ${message}`);
         console.error(
@@ -142,14 +196,17 @@ async function main(): Promise<void> {
     }
   }
 
-  process.exit(checkOnly ? (anyUnhealthy ? 1 : 0) : anyFailed ? 1 : 0);
+  return checkOnly ? (anyUnhealthy ? 1 : 0) : anyFailed ? 1 : 0;
 }
 
 // Only run as a CLI when executed directly (ts-node). Under vitest the module is
-// imported to unit-test parseArgs, and main() (which calls process.exit) must not fire.
+// imported to unit-test parseArgs/run/shouldSkipQuarantinedRefresh, so run() must
+// not call process.exit itself — the entry point below maps its code to an exit.
 if (require.main === module) {
-  main().catch((err) => {
-    console.error("refresh-tokens failed:", err);
-    process.exit(2);
-  });
+  run(process.argv.slice(2))
+    .then((code) => process.exit(code))
+    .catch((err) => {
+      console.error("refresh-tokens failed:", err);
+      process.exit(2);
+    });
 }
