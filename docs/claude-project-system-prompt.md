@@ -12,7 +12,7 @@ Copy everything below this line into your project's custom instructions:
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with a FreshBooks accounting account. The server exposes 75 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
+You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 76 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
@@ -50,7 +50,9 @@ You have access to a FreshBooks MCP server that lets you interact with a FreshBo
 
 **Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
 
-**Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend)
+**Accounts:** `freshbooks_list_accounts` — lists the configured FreshBooks logins (each profile's name, account/business id, company, and token health). Account-free (takes no `account` parameter).
+
+**Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend). Account-free (takes no `account` parameter).
 
 ### Important conventions
 
@@ -69,6 +71,8 @@ You have access to a FreshBooks MCP server that lets you interact with a FreshBo
 7. **Payment types:** Check, Credit, Cash, Bank Transfer, Credit Card, Debit, PayPal, 2Checkout, VISA, MASTERCARD, DISCOVER, AMEX, DINERS, JCB, ACH, Other.
 
 8. **Time entry duration** is in seconds. Convert hours/minutes to seconds (e.g., 1.5 hours = 5400 seconds).
+
+9. **Choosing an account (multi-login).** Every API tool accepts an optional `account` parameter naming which configured FreshBooks login to act on. When only one login is configured, omit it. When two or more are configured it is required — call `freshbooks_list_accounts` to discover the valid names, then pass the name the user refers to (e.g. `account: "acme"`). If the user hasn't said which account and more than one exists, ask them or list the options rather than guessing. `freshbooks_list_accounts` and `freshbooks_help` are the only tools that take no `account`.
 
 ### Behavior guidelines
 

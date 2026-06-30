@@ -1,4 +1,5 @@
-import { withTokenRefresh } from "./tools/with-refresh";
+import { withAccount, withoutAccount } from "./tools/with-refresh";
+import { listAccounts } from "./tools/accounts";
 import { listInvoices, getInvoice, createInvoice, updateInvoice, deleteInvoice } from "./tools/invoices";
 import { listClients, getClient, createClient, updateClient, deleteClient } from "./tools/clients";
 import { listExpenses, getExpense, createExpense, updateExpense, deleteExpense } from "./tools/expenses";
@@ -21,11 +22,15 @@ import { freshbooksHelp } from "./tools/help";
 /**
  * Every FreshBooks MCP tool, in display order.
  *
- * Each tool is wrapped with `withTokenRefresh` so the OAuth access token is
- * refreshed-if-needed before any handler runs. server.ts serves this list, and
- * the `freshbooks_help` tool introspects it to keep its tool inventory in sync.
+ * The 74 API tools are wrapped with `withAccount`: each gains an injected
+ * `account` field, resolves the named FreshBooks login ("profile"), refreshes
+ * that profile's OAuth token if needed, and runs inside the profile's
+ * AsyncLocalStorage context. The two account-free tools (`freshbooks_help` and
+ * `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity — no
+ * `account` field, no profile context). server.ts serves this list, and the
+ * `freshbooks_help` tool introspects it to keep its tool inventory in sync.
  */
-export const allTools = [
+const accountScoped = [
   // Invoices
   listInvoices, getInvoice, createInvoice, updateInvoice, deleteInvoice,
   // Clients
@@ -60,6 +65,9 @@ export const allTools = [
   listExpenseCategories, getExpenseCategory,
   // Journal entries
   createJournalEntry, listJournalEntryAccounts, listJournalEntryDetails,
-  // Self-documentation
-  freshbooksHelp,
-].map(withTokenRefresh);
+].map(withAccount);
+
+// Account-free tools: no injected `account` field, no profile context.
+const accountFree = [freshbooksHelp, listAccounts].map(withoutAccount);
+
+export const allTools = [...accountScoped, ...accountFree];
