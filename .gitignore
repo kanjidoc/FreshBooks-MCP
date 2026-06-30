@@ -1,6 +1,10 @@
 node_modules/
 dist/
 .env
+# Per-login OAuth token stores (one file per FreshBooks login) — never commit.
+profiles/
+# Advisory server lock (pid + start time), written at startup.
+.server.lock
 .mcp.json
 *.bak
 *.tmp
