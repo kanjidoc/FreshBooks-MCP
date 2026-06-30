@@ -44,7 +44,7 @@ FreshBooks-MCP/
 │   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
 │   │   ├── content.ts          # Static help topic content (overview, architecture, etc.)
 │   │   └── render-tools.ts     # Renders the live tool inventory from the registry
-│   ├── tools/                  # Account wrapper, freshbooks_help, freshbooks_list_accounts, + one file per resource domain (18 files)
+│   ├── tools/                  # Account wrapper, freshbooks_help, freshbooks_list_accounts, + one file per resource domain (17 files)
 │   │   ├── with-refresh.ts     # withAccount() (account injection + per-profile pre-call refresh) and withoutAccount()
 │   │   ├── help.ts             # The freshbooks_help self-documentation tool (1 tool, account-free)
 │   │   ├── accounts.ts         # The freshbooks_list_accounts tool (1 tool, account-free)

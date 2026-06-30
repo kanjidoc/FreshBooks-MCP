@@ -37,10 +37,13 @@ const errorResult = (text: string) => ({
  * to a generic phrase if the entry can't be found.
  */
 function collidingProfileName(profile: ProfileState): string {
+  // `profile.name` is lowercased; `collision.file` is the raw on-disk filename.
+  // Compare case-insensitively so a mixed-case file (e.g. `Copy.env`) still
+  // matches its own collision entry instead of falling back to generic wording.
   const hit = getRegistry().collisions.find(
-    (c) => c.file === `${profile.name}.env` && c.kind === "same-account",
+    (c) => c.file.toLowerCase() === `${profile.name}.env` && c.kind === "same-account",
   );
-  return hit ? hit.collidesWith.replace(/\.env$/, "") : "another configured account";
+  return hit ? hit.collidesWith.replace(/\.env$/i, "") : "another configured account";
 }
 
 /**

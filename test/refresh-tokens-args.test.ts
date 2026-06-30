@@ -70,8 +70,8 @@ describe("shouldSkipQuarantinedRefresh (R2 predicate)", () => {
     expect(shouldSkipQuarantinedRefresh({ quarantined: true }, undefined)).toBe(true);
   });
 
-  it("ALLOWS a quarantined profile when explicitly targeted with --profile", () => {
-    expect(shouldSkipQuarantinedRefresh({ quarantined: true }, "bbb")).toBe(false);
+  it("SKIPS a quarantined profile even when explicitly targeted (marker is the only opt-in)", () => {
+    expect(shouldSkipQuarantinedRefresh({ quarantined: true }, "bbb")).toBe(true);
   });
 
   it("never skips a non-quarantined profile", () => {
@@ -101,10 +101,11 @@ describe("R2 refresh-tokens CLI skips quarantined profiles in bulk", () => {
     dir = join(root, "profiles");
     mkdirSync(dir);
     // Both NEED a refresh (near-expiry) and share accountId ACC with DISTINCT
-    // refresh tokens and no opt-in marker → the second (bbb) is quarantined.
+    // refresh tokens. aaa carries the `# freshbooks-distinct-login` marker →
+    // un-quarantined (item A); bbb has no marker → quarantined.
     writeFileSync(
       join(dir, "aaa.env"),
-      `FRESHBOOKS_ACCESS_TOKEN=${jwt(60)}\nFRESHBOOKS_REFRESH_TOKEN=rt-1\nFRESHBOOKS_ACCOUNT_ID=ACC\nFRESHBOOKS_BUSINESS_ID=1\n`,
+      `# freshbooks-distinct-login\nFRESHBOOKS_ACCESS_TOKEN=${jwt(60)}\nFRESHBOOKS_REFRESH_TOKEN=rt-1\nFRESHBOOKS_ACCOUNT_ID=ACC\nFRESHBOOKS_BUSINESS_ID=1\n`,
     );
     writeFileSync(
       join(dir, "bbb.env"),
@@ -137,13 +138,29 @@ describe("R2 refresh-tokens CLI skips quarantined profiles in bulk", () => {
     expect(code).toBe(0); // a skip is benign, not a failure
   });
 
-  it("(b) --profile <quarantined> opts in and DOES rotate it", async () => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
+  it("(b) --profile <quarantined> REFUSES to rotate it and exits non-zero", async () => {
+    const errs: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((m?: unknown) => {
+      errs.push(String(m));
+    });
 
     const code = await run(["--profile", "bbb"]);
 
+    // Marker is the ONLY opt-in: --profile no longer rotates a quarantined login.
+    expect(refreshTokensNow).not.toHaveBeenCalled();
+    expect(code).toBe(1); // explicit target → non-zero so a script notices
+    const out = errs.join("\n");
+    expect(out).toMatch(/quarantined/);
+    expect(out).toMatch(/freshbooks-distinct-login/);
+  });
+
+  it("(b2) --profile <non-quarantined, marker-opted-in> still rotates normally", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const code = await run(["--profile", "aaa"]);
+
     expect(refreshTokensNow).toHaveBeenCalledTimes(1);
-    expect(refreshTokensNow).toHaveBeenCalledWith(expect.objectContaining({ name: "bbb" }));
+    expect(refreshTokensNow).toHaveBeenCalledWith(expect.objectContaining({ name: "aaa" }));
     expect(code).toBe(0);
   });
 

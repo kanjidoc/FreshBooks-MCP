@@ -313,6 +313,56 @@ describe("single-flight handle is never wedged", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Item C: the most safety-critical invariant — no double-rotation under IN-PROCESS
+// concurrency. The sequential wedge tests above prove the handle resets; this
+// proves two callers racing a near-expiry token share ONE rotation rather than
+// each rotating the refresh token (only the first rotation is valid; a second
+// would reuse a just-revoked token and burn the family). Network-free.
+// ---------------------------------------------------------------------------
+
+describe("single-flight: concurrent refreshes rotate exactly once", () => {
+  it("two concurrent refreshIfNeeded calls share ONE rotation, and the handle resets", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fb-sf-"));
+    const filePath = join(root, "x.env");
+    const memNear = jwt(60); // near expiry → a refresh is due
+    // On-disk token EQUALS in-memory, so the U3 cross-process adopt does NOT fire
+    // — both callers must funnel into one REAL rotation.
+    writeFileSync(
+      filePath,
+      `FRESHBOOKS_ACCESS_TOKEN=${memNear}\nFRESHBOOKS_REFRESH_TOKEN=rt-mem\nFRESHBOOKS_ACCOUNT_ID=A\nFRESHBOOKS_BUSINESS_ID=1\n`,
+    );
+
+    let rotateCalls = 0;
+    const rotated = jwt(7200);
+    const profile: any = {
+      name: "x",
+      filePath,
+      config: { accessToken: memNear, refreshToken: "rt-mem", accountId: "A", businessId: "1" },
+      client: {
+        accessToken: memNear,
+        refreshToken: "rt-mem",
+        refreshAccessToken: async () => {
+          rotateCalls++;
+          // Yield so a SECOND concurrent caller would have its chance to rotate
+          // too if the single-flight guard were broken.
+          await new Promise((r) => setTimeout(r, 5));
+          return { accessToken: rotated, refreshToken: "rt-rotated" };
+        },
+      },
+      refreshInFlight: null,
+    };
+
+    const [a, b] = await Promise.all([refreshIfNeeded(profile), refreshIfNeeded(profile)]);
+
+    expect(rotateCalls).toBe(1); // single-flight coalesced the two callers
+    expect(a.refreshed).toBe(true);
+    expect(b.refreshed).toBe(true);
+    expect(profile.config.accessToken).toBe(rotated); // rotation landed once
+    expect(profile.refreshInFlight).toBeNull(); // handle reset to null afterwards
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R2: ensureFreshTokens skips quarantined profiles
 // ---------------------------------------------------------------------------
 

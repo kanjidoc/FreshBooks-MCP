@@ -51,6 +51,20 @@ export function stripTokensFromBaseEnv(content: string): string {
     .replace(/^FRESHBOOKS_REFRESH_TOKEN=.*$\n?/gm, "")
     .replace(/^FRESHBOOKS_ACCOUNT_ID=.*$\n?/gm, "")
     .replace(/^FRESHBOOKS_BUSINESS_ID=.*$\n?/gm, "");
+  // (U5/A10) Enforce — not just promise — that NO token/ID line survives. With the
+  // `/gm` global flag this holds even for a doubled line; were `/g` ever dropped in
+  // a refactor, a residual duplicate would slip through and `load-env`'s
+  // `override:true` would silently re-inject it. Fail loudly here rather than write
+  // a base `.env` that still carries a login's secrets.
+  const residual = out.match(
+    /^FRESHBOOKS_(?:ACCESS_TOKEN|REFRESH_TOKEN|ACCOUNT_ID|BUSINESS_ID)=.*$/m,
+  );
+  if (residual) {
+    throw new Error(
+      `stripTokensFromBaseEnv left a residual token/ID line ("${residual[0]}") — ` +
+        "the base .env is malformed; refusing to write a still-leaky base .env.",
+    );
+  }
   if (!isMigrated(out)) {
     if (out.length > 0 && !out.endsWith("\n")) out += "\n";
     out += `${MIGRATED_MARKER}=1\n`;

@@ -103,13 +103,24 @@ export function discoverProfiles(
   const collisions: Collision[] = [];
   const seenName = new Set<string>();
   const seenRefresh = new Map<string, string>(); // refreshToken -> first file
-  const seenAccount = new Map<string, string>(); // accountId    -> first file
 
   const files = existsSync(dir)
     ? readdirSync(dir)
         .filter((f) => f.endsWith(".env"))
         .sort()
     : [];
+
+  // PASS 1 — parse every candidate once. Apply the name/case dedup and the
+  // identical-refresh-token dedup here; carry each survivor's raw-text opt-in
+  // marker flag for the same-account grouping in pass 2. After this pass every
+  // surviving candidate has a DISTINCT refresh token.
+  interface Candidate {
+    file: string;
+    lower: string;
+    config: ProfileConfig;
+    optIn: boolean; // raw `# freshbooks-distinct-login` marker present
+  }
+  const candidates: Candidate[] = [];
 
   for (const file of files) {
     const stem = file.slice(0, -".env".length);
@@ -136,30 +147,55 @@ export function discoverProfiles(
       continue;
     }
 
-    // (b) same accountId, DIFFERENT token => legit distinct login OR diverged copy.
-    //     Fail closed: load but quarantine (out of rotation, refuse on explicit use)
-    //     unless the file carries the opt-in marker.
-    let quarantined = false;
-    if (config.accountId && seenAccount.has(config.accountId)) {
-      const optIn = /^#\s*freshbooks-distinct-login\b/m.test(raw); // raw scan: dotenv ignores comments
-      quarantined = !optIn;
-      collisions.push({
-        file,
-        collidesWith: seenAccount.get(config.accountId)!,
-        kind: optIn ? "same-account-optin" : "same-account",
-      });
-    }
-
     seenName.add(lower);
     seenRefresh.set(config.refreshToken, file);
-    if (config.accountId) seenAccount.set(config.accountId, file);
-    profiles.set(lower, {
-      name: lower,
-      filePath: join(dir, file),
+    candidates.push({
+      file,
+      lower,
       config,
+      optIn: /^#\s*freshbooks-distinct-login\b/m.test(raw), // raw scan: dotenv ignores comments
+    });
+  }
+
+  // PASS 2 — group surviving candidates by non-empty accountId. An accountId with
+  // >=2 members is an unresolved same-account group (distinct tokens, per pass 1):
+  // FAIL CLOSED — quarantine EVERY member that is NOT individually opted-in via the
+  // `# freshbooks-distinct-login` marker. This closes the diverged-copy burn vector
+  // where the alphabetically-FIRST file is the stale copy: admitting it as
+  // "canonical" and auto-rotating its superseded token would revoke the live
+  // sibling's whole refresh-token family. A marked file is the user vouching it is a
+  // genuinely distinct live login, so it stays admitted; identical-refresh-token
+  // copies were already excluded as `duplicates` in pass 1; single-file accountIds
+  // are unaffected.
+  const byAccount = new Map<string, Candidate[]>();
+  for (const c of candidates) {
+    if (!c.config.accountId) continue;
+    const group = byAccount.get(c.config.accountId);
+    if (group) group.push(c);
+    else byAccount.set(c.config.accountId, [c]);
+  }
+  const quarantinedFiles = new Set<string>();
+  for (const group of byAccount.values()) {
+    if (group.length < 2) continue;
+    for (const member of group) {
+      if (!member.optIn) quarantinedFiles.add(member.file);
+      const sibling = group.find((g) => g.file !== member.file)!;
+      collisions.push({
+        file: member.file,
+        collidesWith: sibling.file,
+        kind: member.optIn ? "same-account-optin" : "same-account",
+      });
+    }
+  }
+
+  for (const c of candidates) {
+    profiles.set(c.lower, {
+      name: c.lower,
+      filePath: join(dir, c.file),
+      config: c.config,
       client: null,
       refreshInFlight: null,
-      quarantined,
+      quarantined: quarantinedFiles.has(c.file),
     });
   }
 

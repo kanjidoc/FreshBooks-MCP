@@ -526,13 +526,31 @@ STEP 2: Authorize your FreshBooks login(s)
 
   // A fresh install needs at least one login; right after a migration adding
   // another is optional (the migrated login is already a profile).
+  // (H) Track whether >=1 login exists. A migration already produced a profile;
+  // a fresh install must not finish with zero — we warn and re-offer add-login
+  // rather than writing a base .env with no usable profile.
+  let savedAny = migrated;
   let again = true;
   if (migrated) {
     again = isYes(await ask("   Add another FreshBooks login now? [y/N]: "));
   }
   while (again) {
-    await addLogin(clientId, clientSecret);
-    again = isYes(await ask("   Add another login? [y/N]: "));
+    if (await addLogin(clientId, clientSecret)) savedAny = true;
+    if (!savedAny) {
+      console.log(
+        "\n   No login has been saved yet — the server needs at least one to work.\n",
+      );
+      again = isYes(await ask("   Add a login now? [Y/n]: "), true);
+    } else {
+      again = isYes(await ask("   Add another login? [y/N]: "));
+    }
+  }
+
+  if (!savedAny) {
+    console.log(
+      "\n   Warning: no FreshBooks login was configured. The server will start, but\n" +
+        "   every tool reports no account until you re-run `npm run setup` and add one.\n",
+    );
   }
 
   // --- Save base .env (app credentials only) + launcher config ---

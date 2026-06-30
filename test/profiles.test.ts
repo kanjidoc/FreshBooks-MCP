@@ -162,31 +162,58 @@ describe("discoverProfiles", () => {
     expect(r.collisions).toEqual([{ file: "copy.env", collidesWith: "acme.env", kind: "same-token" }]);
   });
 
-  // R2 (b): same accountId, DIFFERENT tokens, no opt-in marker => load BUT
-  // quarantine the second; profiles.size stays 2 (account-required mode).
-  it("quarantines a same-accountId / different-token profile without the marker", () => {
+  // R2 (b) / Item A: same accountId, DISTINCT tokens, NO opt-in marker on either
+  // => FAIL CLOSED. Quarantine EVERY member of the group, not just the second:
+  // if the alphabetically-first file were the STALE diverged copy, auto-rotating
+  // it would burn the live sibling's token family. profiles.size stays 2
+  // (account-required mode). One same-account collision entry per member.
+  it("quarantines ALL members of a same-account group when none is marked (fail closed)", () => {
     const { dir, base } = tmpRoot({
       "acme.env": cfg("a", "SAME"),
-      "copy.env": cfg("b", "SAME"), // distinct tokens, same account
+      "copy.env": cfg("b", "SAME"), // distinct tokens, same account, neither marked
     });
     const r = discoverProfiles(dir, base);
     expect(r.profiles.size).toBe(2);
     expect(r.duplicates).toEqual([]);
-    expect(r.profiles.get("acme")!.quarantined).toBe(false);
+    expect(r.profiles.get("acme")!.quarantined).toBe(true);
     expect(r.profiles.get("copy")!.quarantined).toBe(true);
-    expect(r.collisions).toEqual([{ file: "copy.env", collidesWith: "acme.env", kind: "same-account" }]);
+    expect(r.collisions).toEqual([
+      { file: "acme.env", collidesWith: "copy.env", kind: "same-account" },
+      { file: "copy.env", collidesWith: "acme.env", kind: "same-account" },
+    ]);
   });
 
-  // R2 (b) opt-in: the marker line de-quarantines the second login.
-  it("admits a same-accountId profile that opts in with the distinct-login marker", () => {
+  // Item A: marking ONE member un-quarantines ONLY that member; the unmarked
+  // sibling stays quarantined. Marking the SECOND file proves the first is no
+  // longer silently admitted as "canonical".
+  it("un-quarantines only the marked member of a same-account group", () => {
     const { dir, base } = tmpRoot({
-      "acme.env": cfg("a", "SAME"),
+      "acme.env": cfg("a", "SAME"), // unmarked → still quarantined
+      "copy.env": cfg("b", "SAME", "1", "# freshbooks-distinct-login\n"), // marked → admitted
+    });
+    const r = discoverProfiles(dir, base);
+    expect(r.profiles.size).toBe(2);
+    expect(r.profiles.get("acme")!.quarantined).toBe(true);
+    expect(r.profiles.get("copy")!.quarantined).toBe(false);
+    expect(r.collisions).toEqual([
+      { file: "acme.env", collidesWith: "copy.env", kind: "same-account" },
+      { file: "copy.env", collidesWith: "acme.env", kind: "same-account-optin" },
+    ]);
+  });
+
+  // Item A opt-in: when EVERY member carries the marker the user has vouched for
+  // all of them as distinct live logins => all admitted, none quarantined.
+  it("admits all members of a same-account group when every member is marked", () => {
+    const { dir, base } = tmpRoot({
+      "acme.env": cfg("a", "SAME", "1", "# freshbooks-distinct-login\n"),
       "copy.env": cfg("b", "SAME", "1", "# freshbooks-distinct-login\n"),
     });
     const r = discoverProfiles(dir, base);
     expect(r.profiles.size).toBe(2);
+    expect(r.profiles.get("acme")!.quarantined).toBe(false);
     expect(r.profiles.get("copy")!.quarantined).toBe(false);
     expect(r.collisions).toEqual([
+      { file: "acme.env", collidesWith: "copy.env", kind: "same-account-optin" },
       { file: "copy.env", collidesWith: "acme.env", kind: "same-account-optin" },
     ]);
   });
@@ -239,6 +266,31 @@ describe("discoverProfiles", () => {
     created.push(root);
     const r = discoverProfiles(join(root, "profiles"), join(root, ".env"));
     expect(r.profiles.size).toBe(0);
+  });
+
+  // Item D: discovery parses token material entirely in memory (dotenv.parse,
+  // never dotenv.config) — it must NEVER inject a profile's secrets into
+  // process.env, or one profile's tokens could leak into another's client.
+  it("never injects any profile token/ID into process.env (in-memory-only parse)", () => {
+    const LEAK_KEYS = [
+      "FRESHBOOKS_ACCESS_TOKEN",
+      "FRESHBOOKS_REFRESH_TOKEN",
+      "FRESHBOOKS_ACCOUNT_ID",
+      "FRESHBOOKS_BUSINESS_ID",
+    ];
+    for (const k of LEAK_KEYS) delete process.env[k];
+    const before = new Set(Object.keys(process.env));
+
+    const { dir, base } = tmpRoot({
+      "acme.env": cfg("a", "A1"),
+      "copy.env": cfg("b", "SAME"),
+      "beta.env": cfg("c", "SAME"), // same-account group exercises both passes
+    });
+    discoverProfiles(dir, base);
+
+    for (const k of LEAK_KEYS) expect(process.env[k]).toBeUndefined();
+    // Discovery introduced no NEW env keys at all.
+    expect(Object.keys(process.env).filter((k) => !before.has(k))).toEqual([]);
   });
 });
 

@@ -88,7 +88,9 @@ describe("freshbooks_list_accounts (R2 collision surfacing, network-free)", () =
 
     const copy = out.accounts.find((a: any) => a.account === "copy");
     const acme = out.accounts.find((a: any) => a.account === "acme");
-    expect(acme.quarantined).toBe(false);
+    // Item A (fail closed): neither member is marked, so EVERY member of the
+    // same-account group is quarantined — not just the second one.
+    expect(acme.quarantined).toBe(true);
     expect(copy.quarantined).toBe(true);
 
     // The collision is surfaced so the user can see WHY copy won't refresh.

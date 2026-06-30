@@ -60,23 +60,27 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 /**
- * R2 — pure bulk-refresh skip decision. A quarantined profile is a same-`accountId`
+ * R2 — pure refresh skip decision. A quarantined profile is a same-`accountId`
  * collision whose on-disk refresh token may be a SUPERSEDED snapshot of another
  * login's token family. Rotating it triggers FreshBooks refresh-token-reuse
  * revocation, which revokes the WHOLE family (including the live sibling) →
- * permanent lockout. So a no-arg `npm run refresh-tokens` (bulk mode) must NEVER
- * auto-rotate a quarantined profile — exactly as the startup `ensureFreshTokens()`
- * already skips them.
+ * permanent lockout. So a quarantined profile is NEVER auto-rotated — not in a
+ * no-arg `npm run refresh-tokens` (bulk mode) AND not even when explicitly named
+ * with `--profile`. The ONLY opt-in is the on-disk `# freshbooks-distinct-login`
+ * marker, which un-quarantines the profile during discovery (so it never reaches
+ * here quarantined). This matches `withAccount`, which also hard-refuses a
+ * quarantined profile, and the startup `ensureFreshTokens()`, which skips them.
  *
- * Returns true when this profile must be SKIPPED for auto-refresh in this run.
- * When the operator explicitly targets one profile with `--profile <name>`
- * (`only` is set), that is a deliberate opt-in and the rotation is allowed.
+ * Returns true when this profile must be SKIPPED for refresh in this run. `only`
+ * (the `--profile` target, if any) is irrelevant to the decision — it is the
+ * caller's job to distinguish an explicit-target refusal (exit 1) from a benign
+ * bulk skip (exit 0).
  */
 export function shouldSkipQuarantinedRefresh(
   profile: Pick<ProfileState, "quarantined">,
-  only: string | undefined,
+  _only: string | undefined,
 ): boolean {
-  return Boolean(profile.quarantined) && !only;
+  return Boolean(profile.quarantined);
 }
 
 /** Human-readable report for one profile — written to stderr so --json keeps stdout clean. */
@@ -123,6 +127,7 @@ export async function run(argv: string[]): Promise<number> {
 
   let anyUnhealthy = false;
   let anyFailed = false;
+  let anyRefused = false; // an explicit --profile target was quarantined (exit 1)
 
   for (const profile of profiles) {
     const health = inspectTokenHealth(profile, bufferSeconds);
@@ -146,19 +151,30 @@ export async function run(argv: string[]): Promise<number> {
       continue;
     }
 
-    // R2: bulk refresh must NOT rotate a quarantined profile (token-family
-    // lockout vector). Skip BEFORE any needsRefresh/refresh logic, unless the
-    // operator explicitly targeted this profile with --profile (opt-in).
+    // R2: a quarantined profile is NEVER rotated (token-family lockout vector) —
+    // not in bulk mode and NOT even with an explicit --profile. The only opt-in is
+    // the on-disk `# freshbooks-distinct-login` marker, which un-quarantines the
+    // profile in discovery (so a non-quarantined one never reaches here). An
+    // explicit --profile target gets a non-zero exit so a script notices the
+    // refusal; a benign bulk skip stays exit 0. Same warning either way.
     if (shouldSkipQuarantinedRefresh(profile, only)) {
+      const explicit = Boolean(only); // operator named THIS profile via --profile
+      if (explicit) anyRefused = true;
+      const warning =
+        `[${profile.name}] quarantined (shares account_id with another login); not refreshing. ` +
+        `If it is a genuinely separate login, add "# freshbooks-distinct-login" to profiles/${profile.name}.env ` +
+        `(which un-quarantines it), then retry.`;
       if (json)
         console.log(
-          JSON.stringify({ profile: profile.name, status: "skipped_quarantined", refreshed: false, quarantined: true }),
+          JSON.stringify({
+            profile: profile.name,
+            status: "skipped_quarantined",
+            refreshed: false,
+            quarantined: true,
+            refused: explicit,
+          }),
         );
-      else
-        console.error(
-          `[${profile.name}] quarantined — skipping auto-refresh (R2); ` +
-            `if this is a genuinely distinct login, refresh it explicitly with --profile ${profile.name}`,
-        );
+      else console.error(warning);
       continue;
     }
 
@@ -196,7 +212,7 @@ export async function run(argv: string[]): Promise<number> {
     }
   }
 
-  return checkOnly ? (anyUnhealthy ? 1 : 0) : anyFailed ? 1 : 0;
+  return checkOnly ? (anyUnhealthy ? 1 : 0) : anyFailed || anyRefused ? 1 : 0;
 }
 
 // Only run as a CLI when executed directly (ts-node). Under vitest the module is
