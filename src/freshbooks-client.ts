@@ -1,16 +1,7 @@
 import { Client } from "@freshbooks/api";
-import {
-  readFileSync,
-  writeFileSync,
-  existsSync,
-  accessSync,
-  copyFileSync,
-  renameSync,
-  constants as fsConstants,
-} from "node:fs";
-import { join } from "node:path";
-
-let fbClient: Client | null = null;
+import { existsSync, accessSync, readFileSync, constants as fsConstants } from "node:fs";
+import { writeAtomic, readTokenMarkers } from "./atomic-write";
+import { currentProfile, getRegistry, type ProfileState } from "./profiles";
 
 const REFRESH_BUFFER_SECONDS = 10 * 60;
 
@@ -37,16 +28,6 @@ const RETRY_OPTIONS = {
   },
 };
 
-/**
- * The single source of truth for OAuth tokens. `.env` lives next to this
- * package; the server loads it by absolute path (`src/load-env.ts`) and the
- * refresh logic writes rotated tokens back here. No other file holds tokens —
- * launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`)
- * carry only the command to start the server. One home for the secret means
- * there is nothing to keep in sync and nothing that can drift.
- */
-const ENV_FILE = join(__dirname, "..", ".env");
-
 /** Decode a JWT's `exp` (epoch seconds), or null if the token is opaque/invalid. */
 export function decodeJwtExp(token: string): number | null {
   try {
@@ -59,18 +40,16 @@ export function decodeJwtExp(token: string): number | null {
   }
 }
 
-/** Read the access/refresh tokens currently stored in `.env`. */
-function readEnvTokens(): { access?: string; refresh?: string } {
-  const content = readFileSync(ENV_FILE, "utf8");
-  return {
-    access: content.match(/^FRESHBOOKS_ACCESS_TOKEN=(.*)$/m)?.[1]?.trim(),
-    refresh: content.match(/^FRESHBOOKS_REFRESH_TOKEN=(.*)$/m)?.[1]?.trim(),
-  };
+/** True when `token` decodes to an `exp` at least `bufferSeconds` in the future. */
+function isTokenFresh(token: string, bufferSeconds: number): boolean {
+  const exp = decodeJwtExp(token);
+  if (exp === null) return false; // opaque / undecodable → never treat as provably fresh
+  return exp - Math.floor(Date.now() / 1000) >= bufferSeconds;
 }
 
 /**
- * Return `.env` file content with the two token lines replaced. Throws if
- * either line is absent — a failed substitution must surface loudly, never
+ * Return a profile env-file's content with the two token lines replaced. Throws
+ * if either line is absent — a failed substitution must surface loudly, never
  * silently leave the old token in place.
  */
 export function applyTokensToEnv(
@@ -91,97 +70,173 @@ export function applyTokensToEnv(
 }
 
 /**
- * Verify `.env` is present, readable, writable, and holds both token markers —
- * BEFORE any refresh API call, so a refresh token is never burned when the
- * write-back could not have completed ("no preflight, no rotation").
+ * The ONLY place a FreshBooks `Client` is constructed (Amendment A1). The client
+ * is cached on `profile.client`, so the refresh path and the tool handlers share
+ * one object — a rotated token applied to it is seen everywhere immediately.
  */
-function preflightEnvFile(): void {
-  if (!existsSync(ENV_FILE)) {
-    throw new Error(`[freshbooks] ${ENV_FILE} does not exist — run \`npm run setup\``);
+export function getOrCreateClient(profile: ProfileState): Client {
+  if (!profile.client) {
+    const clientId = process.env.FRESHBOOKS_CLIENT_ID;
+    if (!clientId) throw new Error("FRESHBOOKS_CLIENT_ID is not set");
+    profile.client = new Client(clientId, {
+      accessToken: profile.config.accessToken,
+      refreshToken: profile.config.refreshToken,
+      clientSecret: process.env.FRESHBOOKS_CLIENT_SECRET,
+      redirectUri: process.env.FRESHBOOKS_REDIRECT_URI,
+      retryOptions: RETRY_OPTIONS as any,
+    });
+    // The SDK exposes its axios instance; set a hard per-request timeout so a
+    // stalled connection fails loudly instead of hanging the MCP tool call.
+    (profile.client as any).axios.defaults.timeout = REQUEST_TIMEOUT_MS;
+  }
+  return profile.client;
+}
+
+/** The client for the active profile (ALS context). */
+export function getFreshBooksClient(): Client {
+  return getOrCreateClient(currentProfile());
+}
+
+export function getAccountId(): string {
+  const id = currentProfile().config.accountId;
+  if (!id) throw new Error("account id is not set for the active profile");
+  return id;
+}
+
+export function getBusinessId(): number {
+  const id = currentProfile().config.businessId;
+  if (!id) throw new Error("business id is not set for the active profile");
+  return parseInt(id, 10);
+}
+
+/**
+ * Verify a profile's token file is present, readable, writable, and holds both
+ * token markers — BEFORE any refresh API call, so a refresh token is never
+ * burned when the write-back could not have completed ("no preflight, no
+ * rotation").
+ */
+function preflightEnvFile(filePath: string): void {
+  if (!existsSync(filePath)) {
+    throw new Error(`[freshbooks] ${filePath} does not exist — run \`npm run setup\``);
   }
   try {
-    accessSync(ENV_FILE, fsConstants.R_OK | fsConstants.W_OK);
+    accessSync(filePath, fsConstants.R_OK | fsConstants.W_OK);
   } catch {
-    throw new Error(`[freshbooks] ${ENV_FILE} is not readable/writable`);
+    throw new Error(`[freshbooks] ${filePath} is not readable/writable`);
   }
-  const { access, refresh } = readEnvTokens();
+  const { access, refresh } = readTokenMarkers(filePath);
   const missing: string[] = [];
   if (!access) missing.push("FRESHBOOKS_ACCESS_TOKEN");
   if (!refresh) missing.push("FRESHBOOKS_REFRESH_TOKEN");
   if (missing.length > 0) {
-    throw new Error(
-      `[freshbooks] ${ENV_FILE} is missing ${missing.join(", ")} — refusing to refresh`,
-    );
+    throw new Error(`[freshbooks] ${filePath} is missing ${missing.join(", ")} — refusing to refresh`);
   }
-}
-
-function writeAtomic(path: string, content: string): void {
-  if (existsSync(path)) {
-    copyFileSync(path, `${path}.bak`);
-  }
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, content);
-  renameSync(tmp, path);
 }
 
 /**
- * Write rotated tokens into `.env` — atomically (tmp + rename), with a `.bak`
- * backup and post-write read-back verification. If the write fails, the new
- * tokens are printed to stderr: the refresh has already rotated FreshBooks-side
- * state, so losing them silently would force a full OAuth recovery.
+ * Write rotated tokens into the profile file — atomically (tmp + rename), with a
+ * `.bak` backup and post-write read-back verification. The profile `config` is
+ * updated to the rotated values on BOTH the success path AND the write-failure
+ * path (Amendment A10): the refresh has already rotated FreshBooks-side state, so
+ * the in-memory authoritative copy must agree with the (revoked-old) token either
+ * way, or this process would churn re-rotations. On write failure the new tokens
+ * are printed to stderr so they can be pasted into the file manually.
  */
-function persistTokens(accessToken: string, refreshToken: string): void {
+function persistTokens(profile: ProfileState, accessToken: string, refreshToken: string): void {
   try {
-    const next = applyTokensToEnv(readFileSync(ENV_FILE, "utf8"), accessToken, refreshToken);
-    writeAtomic(ENV_FILE, next);
-    const after = readEnvTokens();
+    const next = applyTokensToEnv(readFileSync(profile.filePath, "utf8"), accessToken, refreshToken);
+    writeAtomic(profile.filePath, next);
+    const after = readTokenMarkers(profile.filePath);
     if (after.access !== accessToken || after.refresh !== refreshToken) {
       throw new Error("post-write verification failed");
     }
   } catch (err: any) {
-    console.error("[freshbooks] CRITICAL — refresh succeeded but writing .env failed.");
+    console.error(
+      `[freshbooks] CRITICAL — refresh succeeded but writing ${profile.filePath} failed (profile "${profile.name}").`,
+    );
     console.error(`[freshbooks] NEW ACCESS TOKEN:  ${accessToken}`);
     console.error(`[freshbooks] NEW REFRESH TOKEN: ${refreshToken}`);
-    console.error(`[freshbooks]   ${ENV_FILE}: ${err?.message ?? err}`);
-    console.error("[freshbooks] Paste the two tokens above into .env NOW.");
-    throw new Error(`Token persist to .env failed: ${err?.message ?? err}`, { cause: err });
+    console.error(`[freshbooks]   ${err?.message ?? err}`);
+    console.error("[freshbooks] Paste the two tokens above into the profile file NOW.");
+    // A10: keep config authoritative even on write failure so the live (already-
+    // rotated) client and the expiry check agree, avoiding a re-rotation churn
+    // loop this process.
+    profile.config.accessToken = accessToken;
+    profile.config.refreshToken = refreshToken;
+    throw new Error(`Token persist to ${profile.filePath} failed: ${err?.message ?? err}`, { cause: err });
   }
-  process.env.FRESHBOOKS_ACCESS_TOKEN = accessToken;
-  process.env.FRESHBOOKS_REFRESH_TOKEN = refreshToken;
+  profile.config.accessToken = accessToken;
+  profile.config.refreshToken = refreshToken;
 }
 
-let refreshInFlight: Promise<void> | null = null;
-
-async function refreshAndPersist(client: Client): Promise<void> {
-  // Single-flight: if many tool calls hit a near-expiry token at once, they all
-  // await one refresh instead of each rotating the refresh token (only the first
-  // rotation is valid — the rest would use a just-revoked token and fail).
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
+async function refreshAndPersist(
+  profile: ProfileState,
+  bufferSeconds: number = REFRESH_BUFFER_SECONDS,
+): Promise<void> {
+  // Per-profile single-flight: if many tool calls hit a near-expiry token at
+  // once, they all await one refresh instead of each rotating the refresh token
+  // (only the first rotation is valid — the rest would use a just-revoked token
+  // and fail). The check-then-set is synchronous (no await before the assignment)
+  // so concurrent callers in the same process can never both pass the guard.
+  if (profile.refreshInFlight) return profile.refreshInFlight;
+  profile.refreshInFlight = (async () => {
     try {
-      preflightEnvFile();
+      preflightEnvFile(profile.filePath);
+      const client = getOrCreateClient(profile); // SAME object the handler uses (A1)
+
+      // U3 — cross-process refresh guard. The in-memory single-flight does not
+      // coordinate across separate server processes, and SETUP.md documents
+      // registering the server in multiple Claude surfaces (each its own process
+      // against one profiles/ dir). Re-read the token file immediately before
+      // rotating: if another process already rotated it to a token that DIFFERS
+      // from ours AND is itself still fresh, adopt that token and SKIP rotation.
+      // Double-rotating would burn the refresh-token family and lock the login
+      // out; this also heals stale-in-memory state after another process rotated.
+      const onDisk = readTokenMarkers(profile.filePath);
+      if (
+        onDisk.access &&
+        onDisk.access !== profile.config.accessToken &&
+        isTokenFresh(onDisk.access, bufferSeconds)
+      ) {
+        profile.config.accessToken = onDisk.access;
+        client.accessToken = onDisk.access;
+        if (onDisk.refresh) {
+          profile.config.refreshToken = onDisk.refresh;
+          client.refreshToken = onDisk.refresh;
+        }
+        console.error(
+          `[freshbooks] adopted on-disk token for profile "${profile.name}" (rotated by another process); skipping refresh`,
+        );
+        return;
+      }
+
       const result = await client.refreshAccessToken();
       if (!result) throw new Error("FreshBooks refreshAccessToken returned no data");
-      persistTokens(result.accessToken, result.refreshToken);
+      // Update the shared client BEFORE the (throwing) persist so a file-write
+      // failure can never leave the live client on the just-revoked token (A1).
+      // This does not depend on the SDK also mutating these internally (it does —
+      // that is defense-in-depth).
       client.accessToken = result.accessToken;
       client.refreshToken = result.refreshToken;
-      console.error("[freshbooks] access token refreshed");
+      persistTokens(profile, result.accessToken, result.refreshToken);
+      console.error(`[freshbooks] access token refreshed for profile "${profile.name}"`);
     } finally {
-      refreshInFlight = null;
+      profile.refreshInFlight = null;
     }
   })();
-  return refreshInFlight;
+  return profile.refreshInFlight;
 }
 
 /**
- * Refresh the access token if it cannot be decoded, is expired, or is within
- * `bufferSeconds` of expiring. A no-op (no API call) when the token is current.
- * Returns whether a refresh actually ran.
+ * Refresh a profile's access token if it cannot be decoded, is expired, or is
+ * within `bufferSeconds` of expiring. A no-op (no API call) when the token is
+ * current. Returns whether a refresh was triggered and why.
  */
 export async function refreshIfNeeded(
+  profile: ProfileState,
   bufferSeconds: number = REFRESH_BUFFER_SECONDS,
 ): Promise<{ refreshed: boolean; reason: string }> {
-  const token = process.env.FRESHBOOKS_ACCESS_TOKEN;
+  const token = profile.config.accessToken;
   if (!token) return { refreshed: false, reason: "no access token configured" };
   const exp = decodeJwtExp(token);
   const now = Math.floor(Date.now() / 1000);
@@ -194,24 +249,46 @@ export async function refreshIfNeeded(
       : exp - now <= 0
         ? "access token expired"
         : "access token near expiry";
-  await refreshAndPersist(getFreshBooksClient());
+  await refreshAndPersist(profile, bufferSeconds);
   return { refreshed: true, reason };
 }
 
-/** Force a token refresh now, regardless of current expiry. */
-export async function refreshTokensNow(): Promise<void> {
-  await refreshAndPersist(getFreshBooksClient());
+/** Force a token refresh now for one profile, regardless of current expiry. */
+export async function refreshTokensNow(profile: ProfileState): Promise<void> {
+  await refreshAndPersist(profile);
 }
 
-/** Refresh the access token at startup if it is near expiry. Called from index.ts. */
-export async function ensureFreshToken(): Promise<void> {
-  await refreshIfNeeded();
+/**
+ * Startup: refresh each configured profile sequentially with per-profile
+ * isolation (Amendment A4). Never throws — a single bad profile must not abort
+ * startup for the others. (R2) Quarantined profiles are SKIPPED entirely: a
+ * same-accountId collision may be a diverged copy whose superseded refresh token
+ * would lock the login's token family out if rotated.
+ */
+export async function ensureFreshTokens(): Promise<void> {
+  for (const profile of getRegistry().profiles.values()) {
+    if (profile.quarantined) {
+      console.error(
+        `[freshbooks] skipping quarantined profile "${profile.name}" — not auto-refreshed (R2)`,
+      );
+      continue;
+    }
+    try {
+      await refreshIfNeeded(profile);
+    } catch (err) {
+      console.error(
+        `[freshbooks] startup refresh failed for "${profile.name}":`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 }
 
 export interface TokenHealth {
-  /** Absolute path of the `.env` token store. */
-  envPath: string;
-  exists: boolean;
+  /** Profile name (registry key). */
+  name: string;
+  /** Absolute path of this profile's token file. */
+  filePath: string;
   access?: string;
   refresh?: string;
   /** Seconds until the access token expires (negative if already expired). */
@@ -222,39 +299,18 @@ export interface TokenHealth {
 }
 
 /**
- * Read `.env` and report token presence + JWT expiry. No API call, no refresh —
- * safe to run anytime. Backs the `refresh-tokens` CLI's --check-only mode.
+ * Report a profile's token presence + JWT expiry from its authoritative
+ * `config`. No API call, no refresh — safe to run anytime. Backs the
+ * `refresh-tokens` CLI's --check-only mode.
  */
-export function inspectTokenHealth(bufferSeconds: number = REFRESH_BUFFER_SECONDS): TokenHealth {
-  if (!existsSync(ENV_FILE)) {
-    return {
-      envPath: ENV_FILE,
-      exists: false,
-      expirySeconds: null,
-      expired: false,
-      issues: [`${ENV_FILE}: missing — run \`npm run setup\``],
-      needsRefresh: false,
-    };
-  }
-
-  let access: string | undefined;
-  let refresh: string | undefined;
-  try {
-    ({ access, refresh } = readEnvTokens());
-  } catch (err: any) {
-    return {
-      envPath: ENV_FILE,
-      exists: true,
-      expirySeconds: null,
-      expired: false,
-      issues: [`${ENV_FILE}: read error — ${err?.message ?? err}`],
-      needsRefresh: false,
-    };
-  }
-
+export function inspectTokenHealth(
+  profile: ProfileState,
+  bufferSeconds: number = REFRESH_BUFFER_SECONDS,
+): TokenHealth {
+  const { accessToken: access, refreshToken: refresh } = profile.config;
   const issues: string[] = [];
-  if (!access) issues.push(`${ENV_FILE}: no access token`);
-  if (!refresh) issues.push(`${ENV_FILE}: no refresh token`);
+  if (!access) issues.push("no access token");
+  if (!refresh) issues.push("no refresh token");
 
   let expirySeconds: number | null = null;
   let expired = false;
@@ -267,43 +323,14 @@ export function inspectTokenHealth(bufferSeconds: number = REFRESH_BUFFER_SECOND
   }
   const nearExpiry = expirySeconds !== null && expirySeconds < bufferSeconds;
   const needsRefresh = expired || nearExpiry || (access !== undefined && expirySeconds === null);
-  return { envPath: ENV_FILE, exists: true, access, refresh, expirySeconds, expired, issues, needsRefresh };
-}
-
-export function getFreshBooksClient(): Client {
-  if (!fbClient) {
-    const clientId = process.env.FRESHBOOKS_CLIENT_ID;
-    if (!clientId) {
-      throw new Error("FRESHBOOKS_CLIENT_ID is not set");
-    }
-
-    fbClient = new Client(clientId, {
-      accessToken: process.env.FRESHBOOKS_ACCESS_TOKEN,
-      refreshToken: process.env.FRESHBOOKS_REFRESH_TOKEN,
-      clientSecret: process.env.FRESHBOOKS_CLIENT_SECRET,
-      redirectUri: process.env.FRESHBOOKS_REDIRECT_URI,
-      retryOptions: RETRY_OPTIONS as any,
-    });
-
-    // The SDK exposes its axios instance; set a hard per-request timeout so a
-    // stalled connection fails loudly instead of hanging the MCP tool call.
-    (fbClient as any).axios.defaults.timeout = REQUEST_TIMEOUT_MS;
-  }
-  return fbClient;
-}
-
-export function getAccountId(): string {
-  const accountId = process.env.FRESHBOOKS_ACCOUNT_ID;
-  if (!accountId) {
-    throw new Error("FRESHBOOKS_ACCOUNT_ID is not set");
-  }
-  return accountId;
-}
-
-export function getBusinessId(): number {
-  const businessId = process.env.FRESHBOOKS_BUSINESS_ID;
-  if (!businessId) {
-    throw new Error("FRESHBOOKS_BUSINESS_ID is not set");
-  }
-  return parseInt(businessId, 10);
+  return {
+    name: profile.name,
+    filePath: profile.filePath,
+    access,
+    refresh,
+    expirySeconds,
+    expired,
+    issues,
+    needsRefresh,
+  };
 }
