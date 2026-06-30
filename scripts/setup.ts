@@ -3,10 +3,20 @@
  *
  * Walks you through:
  * 1. Entering your FreshBooks Developer App credentials
- * 2. Completing the OAuth2 flow (browser-based, paste-the-URL)
- * 3. Fetching your Account ID and Business ID
- * 4. Writing everything to .env (the single token store)
- * 5. Building the server and installing it into Claude Desktop and/or Claude Code
+ * 2. (Legacy installs) Migrating an existing single-login `.env` into a named
+ *    profile under `profiles/<name>.env`
+ * 3. Completing the OAuth2 flow (browser-based, paste-the-URL) for one or more
+ *    named logins
+ * 4. Fetching each login's Account ID and Business ID (you pick which business
+ *    when a login is a member of more than one)
+ * 5. Writing per-login tokens to `profiles/<name>.env` and leaving base `.env`
+ *    holding ONLY the shared app credentials (no tokens, no IDs)
+ * 6. Building the server and installing it into Claude Desktop and/or Claude Code
+ *
+ * Token model: base `.env` holds only FRESHBOOKS_CLIENT_ID/SECRET/REDIRECT_URI
+ * (plus FRESHBOOKS_MIGRATED=1 once a legacy `.env` has been migrated). Every
+ * login's tokens live ONLY in `profiles/<name>.env`, written exclusively through
+ * the collision-guarded `writeNewProfile`/`runMigration` — never by hand here.
  *
  * Usage:
  *   npx ts-node scripts/setup.ts
@@ -15,12 +25,17 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
+import * as dotenv from "dotenv";
 import { Client } from "@freshbooks/api";
 import { resolveDesktopConfigPath } from "../src/config-paths";
 import { buildClaudeServerConfig, buildClaudeCodeServerJson } from "../src/mcp-config";
+import { runMigration, isMigrated, writeNewProfile, MIGRATED_MARKER } from "../src/migrate";
+import { normalizeProfileName, type ProfileConfig } from "../src/profiles";
 
-const ENV_PATH = path.resolve(__dirname, "..", ".env");
-const MCP_JSON_PATH = path.resolve(__dirname, "..", ".mcp.json");
+const PROJECT_DIR = path.resolve(__dirname, "..");
+const ENV_PATH = path.resolve(PROJECT_DIR, ".env");
+const PROFILES_DIR = path.resolve(PROJECT_DIR, "profiles");
+const MCP_JSON_PATH = path.resolve(PROJECT_DIR, ".mcp.json");
 const CLAUDE_DESKTOP_CONFIG_PATH = resolveDesktopConfigPath();
 const REDIRECT_URI = "https://localhost/callback";
 
@@ -32,6 +47,13 @@ function ask(question: string): Promise<string> {
       resolve(answer.trim());
     });
   });
+}
+
+/** Yes/no parse. `defaultYes` decides what a bare Enter (empty input) means. */
+function isYes(answer: string, defaultYes = false): boolean {
+  const a = answer.trim().toLowerCase();
+  if (a === "") return defaultYes;
+  return a === "y" || a === "yes";
 }
 
 function openBrowser(url: string) {
@@ -59,11 +81,42 @@ function extractCodeFromUrl(urlString: string): string | null {
   }
 }
 
+/**
+ * Pure: the env-var object the wizard persists to base `.env`.
+ *
+ * (U11) base `.env` carries ONLY the shared app credentials — never the
+ * per-login token/ID set (FRESHBOOKS_ACCESS_TOKEN/REFRESH_TOKEN/ACCOUNT_ID/
+ * BUSINESS_ID). Those live exclusively in `profiles/<name>.env` via
+ * `writeNewProfile`/`runMigration`. The FRESHBOOKS_MIGRATED marker is appended
+ * only once a legacy `.env` has been migrated, so the decoupling is total.
+ * Exported (and kept side-effect free) so the decoupling can be unit-tested.
+ */
+export function buildBaseEnvVars(
+  clientId: string,
+  clientSecret: string,
+  redirectUri: string,
+  migrated: boolean,
+): Record<string, string> {
+  const vars: Record<string, string> = {
+    FRESHBOOKS_CLIENT_ID: clientId,
+    FRESHBOOKS_CLIENT_SECRET: clientSecret,
+    FRESHBOOKS_REDIRECT_URI: redirectUri,
+  };
+  if (migrated) vars[MIGRATED_MARKER] = "1";
+  return vars;
+}
+
+/** Pure: serialize an env-var object to `.env` file content. */
+export function serializeEnv(vars: Record<string, string>): string {
+  return (
+    Object.entries(vars)
+      .map(([key, value]) => `${key}=${value}`)
+      .join("\n") + "\n"
+  );
+}
+
 function writeEnvFile(vars: Record<string, string>) {
-  const lines = Object.entries(vars)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-  fs.writeFileSync(ENV_PATH, lines + "\n");
+  fs.writeFileSync(ENV_PATH, serializeEnv(vars));
 }
 
 function writeMcpJson(projectDir: string) {
@@ -144,8 +197,9 @@ ${"=".repeat(70)}
    MCP SERVER CONFIGURATION (manual)
 ${"=".repeat(70)}
 
-The server reads its credentials from .env — these config blocks only tell
-Claude how to launch it, so they contain no secrets.
+The server reads the shared app credentials from .env and each login's tokens
+from profiles/<name>.env — these config blocks only tell Claude how to launch
+it, so they contain no secrets.
 
 
 --- CLAUDE DESKTOP ---
@@ -177,48 +231,166 @@ ${"=".repeat(70)}
 `);
 }
 
-async function main() {
+/**
+ * (Legacy installs) If base `.env` still carries a single login's tokens and has
+ * not yet been migrated, offer to move them into `profiles/<name>.env`.
+ *
+ * (R1) Migrating while a live FreshBooks MCP server holds the lock can burn the
+ * only refresh token, so we INTERACTIVELY confirm no server is attached and pass
+ * that answer through as `confirmNoServer` — the ONLY override of the live-lock
+ * guard. If `runMigration` still refuses (a live lock with no confirmation), we
+ * surface the error and stop rather than loop-forcing past the one safety.
+ *
+ * Returns true once base `.env` is (or already was) migrated.
+ */
+async function maybeMigrateLegacyEnv(existingBaseEnv: string): Promise<boolean> {
+  if (isMigrated(existingBaseEnv)) return true;
+
+  const baseHasTokens = /^FRESHBOOKS_REFRESH_TOKEN=.+/m.test(existingBaseEnv);
+  if (!baseHasTokens) return false;
+
   console.log(`
-${"=".repeat(70)}
-   FreshBooks MCP Server — Setup
-${"=".repeat(70)}
+Found an existing single-login .env to migrate into a named profile.
+Before continuing, in this exact order:
+  1) Fully quit Claude / stop ANY running FreshBooks MCP server
+  2) Run \`npm run build\`
+  3) Continue this setup to migrate
 
-This script will walk you through connecting your FreshBooks account.
-
-STEP 1: Create a FreshBooks Developer App
-------------------------------------------
-  1. Log in to FreshBooks
-  2. Go to: Settings > Developer Portal
-     URL: https://my.freshbooks.com/#/developer
-  3. Click "Create an App"
-  4. Set Application Type to "Private App"
-  5. Set the Redirect URI to: ${REDIRECT_URI}
-  6. Save and copy the Client ID and Client Secret
-
+Migrating while a server is live can burn your only refresh token, so this is
+gated on you confirming nothing is attached.
 `);
 
-  const clientId = await ask("   Enter your Client ID: ");
-  const clientSecret = await ask("   Enter your Client Secret: ");
+  const stopped = isYes(
+    await ask(
+      "   Have you fully stopped Claude / any running FreshBooks MCP server? [y/N]: ",
+    ),
+  );
 
-  if (!clientId || !clientSecret) {
-    console.error("\n   Error: Client ID and Client Secret are required.\n");
-    process.exit(1);
+  let name = "";
+  while (!name) {
+    try {
+      name = normalizeProfileName(await ask("   Name for this existing login (e.g. 'acme'): "));
+    } catch (err: any) {
+      console.log(`   ${err.message}\n`);
+    }
   }
 
-  console.log(`
-STEP 2: Authorize with FreshBooks
------------------------------------
-  Opening your browser to authorize the app...
-`);
+  try {
+    const { profilePath } = runMigration({
+      name,
+      rootDir: PROJECT_DIR,
+      confirmNoServer: stopped,
+    });
+    console.log(`   Migrated existing tokens -> ${profilePath}\n`);
+    return true;
+  } catch (err: any) {
+    // (R1) Surface and stop — do NOT loop-force past the live-server guard.
+    console.error(`\n   Migration could not proceed: ${err.message}\n`);
+    console.error(
+      "   Stop the running server (fully quit Claude / any MCP process) and re-run\n" +
+        "   `npm run setup`.\n",
+    );
+    process.exit(1);
+  }
+}
 
-  const fbClient = new Client(clientId, {
-    clientSecret,
-    redirectUri: REDIRECT_URI,
-  });
+/** Prompt for a 1-based business choice and return the 0-based index. */
+async function askBusinessChoice(count: number): Promise<number> {
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const raw = await ask(`   Enter the number of the business to use [1-${count}]: `);
+    const n = Number(raw);
+    if (Number.isInteger(n) && n >= 1 && n <= count) return n - 1;
+    console.log("   Please enter a valid number from the list.\n");
+  }
+}
+
+/**
+ * Resolve the accountId/businessId for a freshly authorized login.
+ *
+ * Fixes the old `businessMemberships[0]` limitation: when a login belongs to
+ * more than one business, list them and let the user pick which one THIS profile
+ * maps to. An accounting-only login may legitimately have a blank businessId
+ * (U1) — that is accepted, not forced.
+ */
+async function discoverIds(
+  authedClient: Client,
+): Promise<{ accountId: string; businessId: string }> {
+  let accountId = "";
+  let businessId = "";
+
+  try {
+    const meResponse = await authedClient.users.me();
+    if (meResponse.ok && meResponse.data) {
+      const user = meResponse.data as any;
+      console.log(
+        `   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`,
+      );
+
+      const memberships: any[] = Array.isArray(user.businessMemberships)
+        ? user.businessMemberships
+        : [];
+
+      if (memberships.length > 0) {
+        let chosen = memberships[0];
+
+        if (memberships.length > 1) {
+          console.log("   This login is a member of multiple businesses. Choose one for");
+          console.log("   this profile:\n");
+          memberships.forEach((m, i) => {
+            const b = m?.business;
+            const label = b?.name ?? m?.business?.name ?? "(unnamed business)";
+            const acc = String(b?.accountId ?? m?.accountId ?? "");
+            const biz = String(b?.id ?? m?.businessId ?? "");
+            console.log(`     ${i + 1}) ${label}  (accountId=${acc}, businessId=${biz})`);
+          });
+          console.log("");
+          chosen = memberships[await askBusinessChoice(memberships.length)];
+        }
+
+        const business = chosen?.business;
+        accountId = String(business?.accountId ?? chosen?.accountId ?? "");
+        businessId = String(business?.id ?? chosen?.businessId ?? "");
+        console.log(`\n   Account ID:  ${accountId}`);
+        console.log(`   Business ID: ${businessId || "(none — accounting-only)"}\n`);
+      }
+    }
+  } catch (err: any) {
+    console.log(`   Warning: Could not auto-detect IDs (${err.message}).`);
+    console.log("   You can find them in FreshBooks Settings or via the API.\n");
+  }
+
+  if (!accountId) {
+    accountId = await ask("   Enter your Account ID manually: ");
+  }
+  if (!businessId) {
+    businessId = await ask(
+      "   Enter your Business ID manually (leave blank for accounting-only logins): ",
+    );
+  }
+
+  return { accountId, businessId };
+}
+
+/**
+ * Run one OAuth flow and persist the resulting login as `profiles/<name>.env`.
+ *
+ * The profile file is written ONLY through `writeNewProfile`, which normalizes
+ * the name and hard-refuses a duplicate refresh token or an existing profile
+ * name (Amendments A6/A7/R2) — so a clashing name can never silently clobber
+ * another login's tokens. On refusal we surface the message and re-prompt for a
+ * different name (blank cancels, so a genuinely unresolvable clash can't loop
+ * forever). Returns true if a login was saved.
+ */
+async function addLogin(clientId: string, clientSecret: string): Promise<boolean> {
+  const fbClient = new Client(clientId, { clientSecret, redirectUri: REDIRECT_URI });
 
   const authUrl = fbClient.getAuthRequestUrl();
-  console.log(`   Authorization URL:\n   ${authUrl}\n`);
-
+  console.log(`
+   Opening your browser to authorize this login...
+   Authorization URL:
+   ${authUrl}
+`);
   try {
     openBrowser(authUrl);
     console.log("   (Browser should open automatically. If not, copy the URL above.)\n");
@@ -257,14 +429,8 @@ STEP 2: Authorize with FreshBooks
     }
   }
 
-  console.log("\n   Access token obtained!\n");
+  console.log("\n   Access token obtained! Fetching your Account ID and Business ID...\n");
 
-  console.log(`
-STEP 3: Fetching your Account ID and Business ID
---------------------------------------------------
-`);
-
-  // Now create a client with the access token to call users.me()
   const authedClient = new Client(clientId, {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
@@ -272,92 +438,136 @@ STEP 3: Fetching your Account ID and Business ID
     redirectUri: REDIRECT_URI,
   });
 
-  let accountId = "";
-  let businessId = "";
+  const { accountId, businessId } = await discoverIds(authedClient);
 
-  try {
-    const meResponse = await authedClient.users.me();
-    if (meResponse.ok && meResponse.data) {
-      const user = meResponse.data as any;
-      console.log(
-        `   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`,
-      );
+  const config: ProfileConfig = {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    accountId,
+    businessId,
+  };
 
-      // Extract account ID and business ID from business memberships
-      if (user.businessMemberships && user.businessMemberships.length > 0) {
-        const membership = user.businessMemberships[0];
-        const business = membership.business;
-        accountId = String(business?.accountId ?? membership?.accountId ?? "");
-        businessId = String(business?.id ?? membership?.businessId ?? "");
-
-        if (user.businessMemberships.length > 1) {
-          console.log("   Multiple businesses found. Using the first one:");
-        }
-        console.log(`   Account ID:  ${accountId}`);
-        console.log(`   Business ID: ${businessId}\n`);
-      }
+  // Persist via the SHARED guarded writer only — never writeAtomic/writeEnvFile.
+  while (true) {
+    const raw = await ask("   Name for this login (e.g. 'acme'), or blank to cancel: ");
+    if (!raw) {
+      console.log("   Skipped saving this login.\n");
+      return false;
     }
-  } catch (err: any) {
-    console.log(`   Warning: Could not auto-detect IDs (${err.message}).`);
-    console.log("   You can find them in FreshBooks Settings or via the API.\n");
+    let name: string;
+    try {
+      name = normalizeProfileName(raw);
+    } catch (err: any) {
+      console.log(`   ${err.message}\n`);
+      continue;
+    }
+    try {
+      const profilePath = writeNewProfile(PROFILES_DIR, name, config);
+      console.log(`   Saved login -> ${profilePath}\n`);
+      return true;
+    } catch (err: any) {
+      // Duplicate refresh token or existing profile name (A6/A7/R2). Show it and
+      // re-prompt for a different name; blank cancels.
+      console.log(`   Could not save this login: ${err.message}`);
+      console.log("   Choose a different name (or blank to cancel).\n");
+    }
   }
+}
 
-  if (!accountId) {
-    accountId = await ask("   Enter your Account ID manually: ");
-  }
-  if (!businessId) {
-    businessId = await ask("   Enter your Business ID manually: ");
-  }
-
+async function main() {
   console.log(`
-STEP 4: Saving configuration
+${"=".repeat(70)}
+   FreshBooks MCP Server — Setup
+${"=".repeat(70)}
+
+This wizard connects one or more FreshBooks logins. Each login's tokens are
+stored in its own profiles/<name>.env; the base .env keeps only your shared
+app credentials.
+
+STEP 1: Create a FreshBooks Developer App
+------------------------------------------
+  1. Log in to FreshBooks
+  2. Go to: Settings > Developer Portal
+     URL: https://my.freshbooks.com/#/developer
+  3. Click "Create an App"
+  4. Set Application Type to "Private App"
+  5. Set the Redirect URI to: ${REDIRECT_URI}
+  6. Save and copy the Client ID and Client Secret
+
+`);
+
+  const existingBaseEnv = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, "utf8") : "";
+  const existing = dotenv.parse(existingBaseEnv);
+
+  // --- Migration phase (legacy single-login .env) ---
+  const migrated = await maybeMigrateLegacyEnv(existingBaseEnv);
+
+  // --- Shared app credentials (re-used for every login's OAuth + base .env) ---
+  const defaultId = existing.FRESHBOOKS_CLIENT_ID ?? "";
+  const defaultSecret = existing.FRESHBOOKS_CLIENT_SECRET ?? "";
+  const clientId =
+    (await ask(`   Enter your Client ID${defaultId ? " [Enter to keep existing]" : ""}: `)) ||
+    defaultId;
+  const clientSecret =
+    (await ask(
+      `   Enter your Client Secret${defaultSecret ? " [Enter to keep existing]" : ""}: `,
+    )) || defaultSecret;
+
+  if (!clientId || !clientSecret) {
+    console.error("\n   Error: Client ID and Client Secret are required.\n");
+    process.exit(1);
+  }
+
+  // --- Add-login loop ---
+  console.log(`
+STEP 2: Authorize your FreshBooks login(s)
+-------------------------------------------
+`);
+
+  // A fresh install needs at least one login; right after a migration adding
+  // another is optional (the migrated login is already a profile).
+  let again = true;
+  if (migrated) {
+    again = isYes(await ask("   Add another FreshBooks login now? [y/N]: "));
+  }
+  while (again) {
+    await addLogin(clientId, clientSecret);
+    again = isYes(await ask("   Add another login? [y/N]: "));
+  }
+
+  // --- Save base .env (app credentials only) + launcher config ---
+  console.log(`
+STEP 3: Saving configuration
 ------------------------------
 `);
 
-  const envVars: Record<string, string> = {
-    FRESHBOOKS_CLIENT_ID: clientId,
-    FRESHBOOKS_CLIENT_SECRET: clientSecret,
-    FRESHBOOKS_REDIRECT_URI: REDIRECT_URI,
-    FRESHBOOKS_ACCESS_TOKEN: tokens.accessToken,
-    FRESHBOOKS_REFRESH_TOKEN: tokens.refreshToken,
-    FRESHBOOKS_ACCOUNT_ID: accountId,
-    FRESHBOOKS_BUSINESS_ID: businessId,
-  };
+  writeEnvFile(buildBaseEnvVars(clientId, clientSecret, REDIRECT_URI, migrated));
+  console.log(`   Base .env (app credentials only — no tokens) written to: ${ENV_PATH}`);
 
-  const projectDir = path.resolve(__dirname, "..");
-
-  writeEnvFile(envVars);
-  console.log(`   .env file written to: ${ENV_PATH}`);
-
-  writeMcpJson(projectDir);
+  writeMcpJson(PROJECT_DIR);
   console.log(`   .mcp.json file written to: ${MCP_JSON_PATH}\n`);
 
   console.log(`
-STEP 5: Building the MCP server
+STEP 4: Building the MCP server
 ---------------------------------
 `);
 
   const { execSync } = require("child_process");
   try {
-    execSync("npm run build", { cwd: projectDir, stdio: "inherit" });
+    execSync("npm run build", { cwd: PROJECT_DIR, stdio: "inherit" });
     console.log("\n   Build successful!\n");
   } catch {
     console.error("\n   Build failed. Run 'npm run build' manually to see errors.\n");
   }
 
   console.log(`
-STEP 6: Connecting to Claude
+STEP 5: Connecting to Claude
 ------------------------------
 `);
 
-  const isYes = (answer: string): boolean => {
-    const a = answer.trim().toLowerCase();
-    return a === "" || a === "y" || a === "yes";
-  };
-
   let desktopInstalled = false;
-  if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "))) {
-    desktopInstalled = upsertClaudeDesktopConfig(projectDir);
+  if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "), true)) {
+    desktopInstalled = upsertClaudeDesktopConfig(PROJECT_DIR);
     if (desktopInstalled) {
       console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
     }
@@ -365,8 +575,8 @@ STEP 6: Connecting to Claude
 
   let codeInstalled = false;
   if (isClaudeCliAvailable()) {
-    if (isYes(await ask("   Add the server to Claude Code, for all your projects? [Y/n]: "))) {
-      codeInstalled = installIntoClaudeCode(projectDir);
+    if (isYes(await ask("   Add the server to Claude Code, for all your projects? [Y/n]: "), true)) {
+      codeInstalled = installIntoClaudeCode(PROJECT_DIR);
       if (codeInstalled) {
         console.log(`   Claude Code: registered the "freshbooks" server at user scope.\n`);
       }
@@ -376,24 +586,30 @@ STEP 6: Connecting to Claude
   if (!desktopInstalled && !codeInstalled) {
     console.log(`   No automatic install was done. Add the server by hand using the
    configuration below.\n`);
-    printMcpConfig(projectDir);
+    printMcpConfig(PROJECT_DIR);
   }
 
   console.log(`
 DONE! Next steps:
   1. Fully quit and reopen Claude (Desktop: quit the app entirely; Code: start
      a new session) so it picks up the new MCP server.
-  2. Try asking: "List my recent FreshBooks invoices"
+  2. With more than one login, name the account in your request, e.g.
+     "List recent invoices for acme". With a single login it is used by default.
 
-Tokens auto-refresh on every server start, so you shouldn't have to run this
-setup again unless the refresh token is revoked (e.g. the FreshBooks Developer
-app is deleted).
+Tokens auto-refresh on every server start and live in profiles/<name>.env, so
+you shouldn't have to run this setup again unless a refresh token is revoked
+(e.g. the FreshBooks Developer app is deleted). To add another login later,
+just re-run \`npm run setup\`.
 
 The full walkthrough and troubleshooting are in SETUP.md.
 `);
 }
 
-main().catch((err) => {
-  console.error("Setup failed:", err);
-  process.exit(1);
-});
+// Only auto-run when invoked as a script (ts-node scripts/setup.ts), never when
+// imported (the decoupling test imports buildBaseEnvVars/serializeEnv).
+if (require.main === module) {
+  main().catch((err) => {
+    console.error("Setup failed:", err);
+    process.exit(1);
+  });
+}
