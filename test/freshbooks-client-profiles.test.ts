@@ -206,6 +206,113 @@ describe("U3 cross-process refresh guard", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Critical: the per-profile single-flight handle must never be left pinned to an
+// already-settled promise. Any path that settles BEFORE the IIFE's first `await`
+// — the U3-adopt early return, or a synchronous throw from preflight — used to
+// run an inner `finally { refreshInFlight = null }` synchronously, before the
+// `refreshInFlight = <promise>` assignment, so the assignment re-pinned a stale
+// settled handle and wedged every later refresh on it. These two tests fail
+// against that old ordering and pass once the reset is a strict microtask.
+// ---------------------------------------------------------------------------
+
+describe("single-flight handle is never wedged", () => {
+  it("U3-adopt then a later near-expiry refresh still performs a REAL rotation", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fb-wedge-u3-"));
+    const filePath = join(root, "x.env");
+    const diskAccess = jwt(3600); // another process rotated to a FRESH token → adopt
+    writeFileSync(
+      filePath,
+      `FRESHBOOKS_ACCESS_TOKEN=${diskAccess}\nFRESHBOOKS_REFRESH_TOKEN=rt-disk\nFRESHBOOKS_ACCOUNT_ID=A\nFRESHBOOKS_BUSINESS_ID=1\n`,
+    );
+
+    let rotateCalls = 0;
+    const rotated = jwt(7200);
+    const profile: any = {
+      name: "x",
+      filePath,
+      // In-memory token near expiry → refreshIfNeeded decides a refresh is due.
+      config: { accessToken: jwt(60), refreshToken: "rt-mem", accountId: "A", businessId: "1" },
+      client: {
+        accessToken: jwt(60),
+        refreshToken: "rt-mem",
+        refreshAccessToken: async () => {
+          rotateCalls++;
+          return { accessToken: rotated, refreshToken: "rt-rotated" };
+        },
+      },
+      refreshInFlight: null,
+    };
+
+    // Call 1: U3-adopt branch returns before the first await (no rotation).
+    const r1 = await refreshIfNeeded(profile);
+    expect(r1.refreshed).toBe(true);
+    expect(rotateCalls).toBe(0);
+    expect(profile.config.accessToken).toBe(diskAccess); // adopted on-disk token
+    // The wedge: the old ordering leaves a stale SETTLED promise pinned here.
+    expect(profile.refreshInFlight).toBeNull();
+
+    // The adopted token now nears expiry, and the on-disk copy is no longer a
+    // fresher sibling (equal to in-memory) → call 2 MUST perform a real rotation.
+    const memNear = jwt(60);
+    profile.config.accessToken = memNear;
+    profile.client.accessToken = memNear;
+    writeFileSync(
+      filePath,
+      `FRESHBOOKS_ACCESS_TOKEN=${memNear}\nFRESHBOOKS_REFRESH_TOKEN=rt-disk\nFRESHBOOKS_ACCOUNT_ID=A\nFRESHBOOKS_BUSINESS_ID=1\n`,
+    );
+
+    const r2 = await refreshIfNeeded(profile);
+    expect(r2.refreshed).toBe(true);
+    expect(rotateCalls).toBe(1); // REAL rotation — not a replay of the wedged handle
+    expect(profile.config.accessToken).toBe(rotated);
+    expect(readFileSync(filePath, "utf8")).toContain(`FRESHBOOKS_ACCESS_TOKEN=${rotated}`);
+    expect(profile.refreshInFlight).toBeNull();
+  });
+
+  it("a synchronous preflight failure does NOT wedge the handle — a later valid refresh still rotates", async () => {
+    const root = mkdtempSync(join(tmpdir(), "fb-wedge-sync-"));
+    const filePath = join(root, "missing.env"); // absent → preflightEnvFile throws synchronously
+
+    let rotateCalls = 0;
+    const rotated = jwt(7200);
+    const profile: any = {
+      name: "x",
+      filePath,
+      config: { accessToken: jwt(60), refreshToken: "rt-mem", accountId: "A", businessId: "1" },
+      client: {
+        accessToken: jwt(60),
+        refreshToken: "rt-mem",
+        refreshAccessToken: async () => {
+          rotateCalls++;
+          return { accessToken: rotated, refreshToken: "rt-rotated" };
+        },
+      },
+      refreshInFlight: null,
+    };
+
+    // Call 1: preflight throws synchronously (file missing). The rejection must
+    // propagate AND the single-flight handle must reset to null afterwards.
+    await expect(refreshIfNeeded(profile)).rejects.toThrow(/does not exist/);
+    expect(rotateCalls).toBe(0);
+    expect(profile.refreshInFlight).toBeNull(); // old ordering pins a settled (rejected) promise here
+
+    // Provide a valid file so preflight passes; the same near-expiry token must
+    // now drive a REAL rotation rather than replaying the wedged settled handle.
+    const memNear = profile.config.accessToken;
+    writeFileSync(
+      filePath,
+      `FRESHBOOKS_ACCESS_TOKEN=${memNear}\nFRESHBOOKS_REFRESH_TOKEN=rt-mem\nFRESHBOOKS_ACCOUNT_ID=A\nFRESHBOOKS_BUSINESS_ID=1\n`,
+    );
+
+    const r2 = await refreshIfNeeded(profile);
+    expect(r2.refreshed).toBe(true);
+    expect(rotateCalls).toBe(1);
+    expect(profile.config.accessToken).toBe(rotated);
+    expect(profile.refreshInFlight).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R2: ensureFreshTokens skips quarantined profiles
 // ---------------------------------------------------------------------------
 

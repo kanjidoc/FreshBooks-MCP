@@ -179,52 +179,68 @@ async function refreshAndPersist(
   // and fail). The check-then-set is synchronous (no await before the assignment)
   // so concurrent callers in the same process can never both pass the guard.
   if (profile.refreshInFlight) return profile.refreshInFlight;
-  profile.refreshInFlight = (async () => {
-    try {
-      preflightEnvFile(profile.filePath);
-      const client = getOrCreateClient(profile); // SAME object the handler uses (A1)
+  const run = (async () => {
+    preflightEnvFile(profile.filePath);
+    const client = getOrCreateClient(profile); // SAME object the handler uses (A1)
 
-      // U3 — cross-process refresh guard. The in-memory single-flight does not
-      // coordinate across separate server processes, and SETUP.md documents
-      // registering the server in multiple Claude surfaces (each its own process
-      // against one profiles/ dir). Re-read the token file immediately before
-      // rotating: if another process already rotated it to a token that DIFFERS
-      // from ours AND is itself still fresh, adopt that token and SKIP rotation.
-      // Double-rotating would burn the refresh-token family and lock the login
-      // out; this also heals stale-in-memory state after another process rotated.
-      const onDisk = readTokenMarkers(profile.filePath);
-      if (
-        onDisk.access &&
-        onDisk.access !== profile.config.accessToken &&
-        isTokenFresh(onDisk.access, bufferSeconds)
-      ) {
-        profile.config.accessToken = onDisk.access;
-        client.accessToken = onDisk.access;
-        if (onDisk.refresh) {
-          profile.config.refreshToken = onDisk.refresh;
-          client.refreshToken = onDisk.refresh;
-        }
-        console.error(
-          `[freshbooks] adopted on-disk token for profile "${profile.name}" (rotated by another process); skipping refresh`,
-        );
-        return;
+    // U3 — cross-process refresh guard. The in-memory single-flight does not
+    // coordinate across separate server processes, and SETUP.md documents
+    // registering the server in multiple Claude surfaces (each its own process
+    // against one profiles/ dir). Re-read the token file immediately before
+    // rotating: if another process already rotated it to a token that DIFFERS
+    // from ours AND is itself still fresh, adopt that token and SKIP rotation.
+    // Double-rotating would burn the refresh-token family and lock the login
+    // out; this also heals stale-in-memory state after another process rotated.
+    const onDisk = readTokenMarkers(profile.filePath);
+    if (
+      onDisk.access &&
+      onDisk.access !== profile.config.accessToken &&
+      isTokenFresh(onDisk.access, bufferSeconds)
+    ) {
+      profile.config.accessToken = onDisk.access;
+      client.accessToken = onDisk.access;
+      if (onDisk.refresh) {
+        profile.config.refreshToken = onDisk.refresh;
+        client.refreshToken = onDisk.refresh;
       }
-
-      const result = await client.refreshAccessToken();
-      if (!result) throw new Error("FreshBooks refreshAccessToken returned no data");
-      // Update the shared client BEFORE the (throwing) persist so a file-write
-      // failure can never leave the live client on the just-revoked token (A1).
-      // This does not depend on the SDK also mutating these internally (it does —
-      // that is defense-in-depth).
-      client.accessToken = result.accessToken;
-      client.refreshToken = result.refreshToken;
-      persistTokens(profile, result.accessToken, result.refreshToken);
-      console.error(`[freshbooks] access token refreshed for profile "${profile.name}"`);
-    } finally {
-      profile.refreshInFlight = null;
+      console.error(
+        `[freshbooks] adopted on-disk token for profile "${profile.name}" (rotated by another process); skipping refresh`,
+      );
+      return;
     }
+
+    const result = await client.refreshAccessToken();
+    if (!result) throw new Error("FreshBooks refreshAccessToken returned no data");
+    // Update the shared client BEFORE the (throwing) persist so a file-write
+    // failure can never leave the live client on the just-revoked token (A1).
+    // This does not depend on the SDK also mutating these internally (it does —
+    // that is defense-in-depth).
+    client.accessToken = result.accessToken;
+    client.refreshToken = result.refreshToken;
+    persistTokens(profile, result.accessToken, result.refreshToken);
+    console.error(`[freshbooks] access token refreshed for profile "${profile.name}"`);
   })();
-  return profile.refreshInFlight;
+  // Reset the single-flight handle STRICTLY AFTER assigning it, as a microtask —
+  // never synchronously inside the IIFE. The IIFE body runs synchronously up to
+  // its first `await`, so any path that settles before that await (the U3-adopt
+  // early `return`, or a synchronous throw from preflightEnvFile/getOrCreateClient/
+  // readTokenMarkers) would, under an inner `finally { refreshInFlight = null }`,
+  // null the handle BEFORE this assignment ran — then the assignment would re-pin
+  // it to an already-settled promise and wedge every later refresh on the stale
+  // settled handle. Assigning first and resetting via `.finally` (which always
+  // fires as a microtask, even for an already-settled promise) keeps the
+  // guard→assign step synchronous while guaranteeing the reset overwrites a value
+  // that is definitely `run`.
+  profile.refreshInFlight = run;
+  run
+    .finally(() => {
+      profile.refreshInFlight = null;
+    })
+    // The caller awaits `run` directly, so body rejections still propagate to it;
+    // this `.catch` only suppresses an unhandled-rejection warning on the derived
+    // reset chain — it must NOT (and does not) swallow the caller's error.
+    .catch(() => {});
+  return run;
 }
 
 /**
