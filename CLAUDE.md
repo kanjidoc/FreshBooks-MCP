@@ -250,7 +250,6 @@ const created = await client.timeEntries.create(entryData, businessId);
 | `client.expenses` | Accounting | `accountId: string` |
 | `client.payments` | Accounting | `accountId: string` |
 | `client.items` | Accounting | `accountId: string` |
-| `client.taxes` | Accounting | `accountId: string` |
 | `client.bills` | Accounting | `accountId: string` |
 | `client.billPayments` | Accounting | `accountId: string` |
 | `client.billVendors` | Accounting | `accountId: string` |
@@ -265,6 +264,24 @@ const created = await client.timeEntries.create(entryData, businessId);
 | `client.services` | Projects | `businessId: number` |
 | `client.reports` | Reports | `accountId: string` |
 | `client.users` | Identity | N/A (`.me()`) |
+
+### Intentional exclusions — do not "fix" these
+
+The SDK wraps three resources this server deliberately does **not** expose as
+tools. Their absence is a scoping decision, not an oversight, so "the SDK already
+supports it, it's a free win" is not an argument for adding them. When auditing
+tool coverage against the SDK, list these as out of scope rather than as gaps:
+
+| SDK resource | What it would add |
+|---|---|
+| `client.callbacks` | Webhooks — create/single/list/update/delete/resendVerification/verify |
+| `client.paymentOptions` | Online payment options — create/single/default |
+| `client.invoices` `share_link` | Client-facing invoice share links |
+
+This applies only to resources the SDK *does* wrap. Resources the SDK never
+wrapped (Estimates, Chart of Accounts, Staff, and the General Ledger / Balance
+Sheet / Cash Flow / Account Aging / Expense Details reports) are a separate
+question and are not covered by this exclusion.
 
 ### Query builders (Pagination, Search, Sort, Includes)
 
@@ -417,6 +434,76 @@ All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 - Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+
+**Report basis and filters.** FreshBooks reports default to an **accrual** basis.
+`freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;
+`freshbooks_report_tax_summary` accepts `cash_based` only. Which optional params
+each endpoint honors is not guesswork — decode the `downloadToken` JWT in any
+report response and its `params` claim echoes the exact set the server parsed.
+**Unsupported params are silently dropped** (`ok: true`, no error), so never
+offer a param on a report whose token does not list it: the filter would appear
+to work while quietly producing wrong numbers. The current matrix is recorded in
+the comment block at the top of `src/tools/reports.ts`, and
+`test/report-params.test.ts` locks it in.
+
+Report params also serialize differently from list endpoints: the SDK builds
+reports with the `AccountingReportsResource` type, which is **not** in
+`SearchQueryBuilder`'s `isAccountingLike` list, so `equals`/`boolean` params emit
+as flat `&key=value` rather than `&search[key]=value`. Array params need a
+literal `[]` suffix (`currency_codes[]=USD`); the SDK's own `.in()` builder emits
+`search[currency_codes][]=` and is silently ignored by these endpoints.
+
+To learn what an endpoint honors, decode the token:
+
+```js
+JSON.parse(Buffer.from(downloadToken.split(".")[1], "base64url").toString()).params
+```
+
+This doubles as a free changelog: the `params` claim lists server-side options
+the frozen Node SDK never learned to send, which is how `cash_based` and
+`fiscal_year_view` were found. Verify report changes against a profile with an
+invoiced-but-unpaid invoice — cash-basis and accrual then produce genuinely
+different totals that reconcile against identifiable transactions, so you are
+testing the flag's effect rather than just that it echoes back.
+
+### Journal entries, sub-accounts, and derived balances
+
+Four verified traps for anything that reports on the chart of accounts. All
+confirmed against live data on 2026-07-28. Account identifiers and balances are
+omitted here per the redaction policy in `TOOL_AUDIT.md` — the mechanisms are what
+matter and they outlive any particular figure.
+
+**1. Custom sub-account names come back as UUIDs.** A sub-account created by the
+user has `account_sub_name` set to a UUID, not the label the FreshBooks UI shows
+("Owner's Draws"). Built-in sub-accounts ("Opening Balance Adjustments") keep real
+names. The stable join key is `sub_accountid`. The display name is **not returned
+by any endpoint** — not the accounts list, not `journal_entry_details`, and not the
+balance sheet report, which emits the same UUIDs. The `name` field on a detail row
+is that journal line's own label, not the sub-account name. Any reporting tool must
+therefore carry its own `sub_accountid` → label mapping; it cannot derive one.
+(This server deliberately ships no such map — it would be account-specific and
+would break shareability.)
+
+**2. The `balance` field is stale — do not use it.** On the accounts endpoint it
+disagreed with the ledger for **every** non-zero sub-account tested, sometimes by
+more than 2×, and reported `0` for sub-accounts with real activity. Derive
+balances by summing `debit`/`credit` from `journal_entry_details` instead. For
+equity accounts, credit is positive (`netCredit = credit - debit`).
+
+**3. Deriving balances REQUIRES pagination.** `journal_entry_details` is capped at
+100 rows per page. On a test account with 144 rows across 2 pages, summing only
+page 1 understated one equity sub-account by $2,000 and another by $1,000 — wrong,
+with no error. Always follow `response.result.pages` to the end.
+
+**4. `subAccountId` / `accountSubName` are nested one level down.** They live at
+`subAccounts[].subAccountId`, **not** on the parent `journalEntryAccount` record,
+where both read `undefined`. The SDK does map them correctly
+(`models/JournalEntryAccount.js` → `sub_accounts` → `subAccounts`, via
+`transformSubAccountParsedResponse`) — so the typed model is fine and no raw
+payload access is needed. This trap is listed because reading the parent level
+yields `undefined` rather than an error, which is easily mistaken for the SDK
+dropping the field.
+
 **Project resources (businessId):**
 - Time Entries: `freshbooks_list_time_entries`, `freshbooks_get_time_entry`, `freshbooks_create_time_entry`, `freshbooks_update_time_entry`, `freshbooks_delete_time_entry`
 - Projects: `freshbooks_list_projects`, `freshbooks_get_project`, `freshbooks_create_project`, `freshbooks_update_project`, `freshbooks_delete_project`

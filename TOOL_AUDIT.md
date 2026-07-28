@@ -483,6 +483,16 @@ const queryBuilders = buildQueryBuilders({
 });
 ```
 
+> **Correction (post-2.1.2).** The snippet above is **wrong on the wire key** and
+> should not be re-applied. The `payments_collected` endpoint parses the filter as
+> the array param `currency_codes[]`; `currency_code` is silently ignored, so this
+> "fix" replaced a declared-but-unread param with a sent-but-ignored one — still
+> `ok: true`, still unfiltered, still no error. The correct form is
+> `{ "currency_codes[]": args.currency_code }`. Verified by decoding the response's
+> `downloadToken` JWT: `currency_codes[]=USD` yields `["USD"]`, while both
+> `currency_code=USD` and the SDK's `.in()` output (`search[currency_codes][]=USD`)
+> leave it `null`. See `src/tools/reports.ts` and `test/report-params.test.ts`.
+
 Leave `buildQueryBuilders`' `dateRange` branch in place — `list_invoices` and
 `list_expenses` use it legitimately for accounting list filters.
 

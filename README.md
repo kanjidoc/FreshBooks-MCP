@@ -242,9 +242,15 @@ Every API tool below also accepts an optional **`account`** parameter naming whi
 ### Reports
 | Tool | Description |
 |---|---|
-| `freshbooks_report_profit_loss` | Generate a Profit & Loss report |
-| `freshbooks_report_payments_collected` | Generate a Payments Collected report |
-| `freshbooks_report_tax_summary` | Generate a Tax Summary report |
+| `freshbooks_report_profit_loss` | Generate a Profit & Loss report. Optional `cash_based` (cash vs. the default accrual basis) and `fiscal_year_view` (align to the account's fiscal year). |
+| `freshbooks_report_payments_collected` | Generate a Payments Collected report, optionally filtered by `currency_code` |
+| `freshbooks_report_tax_summary` | Generate a Tax Summary report. Optional `cash_based`. |
+
+> **Cash vs. accrual.** By default FreshBooks reports on an **accrual** basis —
+> income counts when invoiced, expenses when billed. Pass `cash_based: true` to
+> count them when money actually moves; an invoiced-but-unpaid invoice drops out
+> of income. `freshbooks_report_payments_collected` is inherently cash-based, so
+> it takes no such flag.
 
 ### Accounts
 | Tool | Description |
