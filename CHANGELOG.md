@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;
+  `freshbooks_report_tax_summary` accepts `cash_based`. FreshBooks reports default
+  to an accrual basis, so cash-basis figures were previously unreachable through
+  this server even though the endpoints have always supported them. Verified
+  end-to-end against live data: on an account with one invoiced-but-unpaid
+  invoice, cash-basis income is lower by exactly that invoice's outstanding
+  balance (net of a separate other-income entry), and the two bases reconcile to
+  the cent.
+- `test/report-params.test.ts` locks in which optional params each report honors,
+  and that an unset flag is omitted from the query string rather than sent as
+  `false`.
+
+### Fixed
+
+- `freshbooks_report_payments_collected`'s `currency_code` filter had no effect.
+  The endpoint parses the filter as the array param `currency_codes[]`; the
+  handler sent the singular `currency_code`, which the API silently ignores —
+  returning `ok: true` with unfiltered results and no error. The tool's own
+  argument name is unchanged; only the wire key is corrected. (The 2.0.0 audit
+  spotted that this filter was declared-but-unread and prescribed wiring it up
+  as `currency_code`; that prescription was itself wrong, which turned one
+  silent failure into another.)
+- `CLAUDE.md` listed `client.taxes` under "Available resources on Client". The
+  FreshBooks API has a Taxes resource but the Node SDK has never wrapped one, so
+  the row pointed at a method that does not exist. Nothing in `src/` referenced
+  it.
+
+### Documentation
+
+- Documented how to determine which params a FreshBooks report endpoint actually
+  honors: decode the `downloadToken` JWT in any report response and read its
+  `params` claim, which echoes the set the server parsed. Unsupported params are
+  silently dropped (`ok: true`, no error), so this is the only reliable check —
+  and it doubles as a changelog for API options the frozen Node SDK never learned
+  to send. Also records that report params serialize flat (`&key=value`) rather
+  than `&search[key]=`, and that array params need a literal `[]` suffix.
+- Documented four verified traps around journal entries and sub-accounts: custom
+  sub-account names are returned as UUIDs with no endpoint exposing the display
+  label; the `balance` field on the accounts endpoint is stale and must not be
+  used (derive from `journal_entry_details` instead); deriving balances requires
+  following pagination to the end, since a single page silently understates
+  totals; and `subAccountId`/`accountSubName` are nested at `subAccounts[]`
+  rather than on the parent record, where they read `undefined`.
+- Recorded that webhooks (`client.callbacks`), online payment options
+  (`client.paymentOptions`), and invoice share links are intentional exclusions
+  rather than gaps, so tool-coverage audits stop re-proposing them.
+- Added `docs/superpowers/specs/2026-07-28-tier2-sdk-unwrapped-endpoints-design.md`
+  — the design for exposing FreshBooks endpoints the Node SDK never wrapped
+  (estimates, staff, taxes, invoice profiles, and six ledger reports) via a single
+  narrow `src/raw-call.ts` layer. Includes a live-probed endpoint truth table
+  recording envelope keys and, critically, which params each endpoint accepts and
+  silently ignores.
+
 ## [2.1.2] - 2026-05-23
 
 ### Security

@@ -50,6 +50,13 @@ You have access to a FreshBooks MCP server that lets you interact with one or mo
 
 **Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
 
+Reports default to an **accrual** basis (income when invoiced, expenses when
+billed). Pass `cash_based: true` to `freshbooks_report_profit_loss` or
+`freshbooks_report_tax_summary` to report on a cash basis instead. Say which
+basis a figure came from whenever it could change the answer — an unpaid invoice
+counts as income under accrual but not under cash. `freshbooks_report_profit_loss`
+also takes `fiscal_year_view` to align to the account's fiscal year.
+
 **Accounts:** `freshbooks_list_accounts` — lists the configured FreshBooks logins (each profile's name, account/business id, company, and token health). Account-free (takes no `account` parameter).
 
 **Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend). Account-free (takes no `account` parameter).
