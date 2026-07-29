@@ -192,7 +192,7 @@ export const updatePayment = tool(
 
 export const deletePayment = tool(
   "freshbooks_delete_payment",
-  "Delete a payment by ID. This action is permanent and cannot be undone.",
+  "Delete a payment by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     payment_id: z.string().describe("The payment ID to delete"),
   },

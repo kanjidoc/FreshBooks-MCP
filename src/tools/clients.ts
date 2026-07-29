@@ -214,7 +214,7 @@ export const updateClient = tool(
 
 export const deleteClient = tool(
   "freshbooks_delete_client",
-  "Delete a client by ID. This action is permanent and cannot be undone.",
+  "Delete a client by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     client_id: z.string().describe("The client ID to delete"),
   },

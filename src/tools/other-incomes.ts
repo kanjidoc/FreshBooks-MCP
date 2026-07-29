@@ -200,7 +200,7 @@ export const updateOtherIncome = tool(
 
 export const deleteOtherIncome = tool(
   "freshbooks_delete_other_income",
-  "Delete an other income record by ID. This action is permanent and cannot be undone.",
+  "Delete an other income record by ID. This is a hard delete: permanent and cannot be undone.",
   {
     other_income_id: z.string().describe("The other income ID to delete"),
   },

@@ -191,7 +191,7 @@ export const updateProject = tool(
 
 export const deleteProject = tool(
   "freshbooks_delete_project",
-  "Delete a project by ID. This action is permanent and cannot be undone.",
+  "Delete a project by ID. This is a hard delete: permanent and cannot be undone.",
   {
     project_id: z.number().int().describe("The project ID to delete"),
   },

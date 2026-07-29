@@ -204,7 +204,7 @@ export const updateBillVendor = tool(
 
 export const deleteBillVendor = tool(
   "freshbooks_delete_bill_vendor",
-  "Delete a bill vendor by ID. This action is permanent and cannot be undone.",
+  "Delete a bill vendor by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     vendor_id: z.number().int().describe("The bill vendor ID to delete"),
   },

@@ -172,7 +172,7 @@ export const updateTask = tool(
 
 export const deleteTask = tool(
   "freshbooks_delete_task",
-  "Delete a task by ID. This action is permanent and cannot be undone.",
+  "Delete a task by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     task_id: z.number().int().describe("The task ID to delete"),
   },

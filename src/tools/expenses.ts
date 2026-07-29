@@ -215,7 +215,7 @@ export const updateExpense = tool(
 
 export const deleteExpense = tool(
   "freshbooks_delete_expense",
-  "Delete an expense by ID. This action is permanent and cannot be undone.",
+  "Delete an expense by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     expense_id: z.string().describe("The expense ID to delete"),
   },

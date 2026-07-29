@@ -198,7 +198,7 @@ export const updateInvoice = tool(
 
 export const deleteInvoice = tool(
   "freshbooks_delete_invoice",
-  "Delete an invoice by ID. This action is permanent and cannot be undone.",
+  "Delete an invoice by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     invoice_id: z.string().describe("The invoice ID to delete"),
   },

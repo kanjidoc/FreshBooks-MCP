@@ -191,7 +191,7 @@ export const updateTimeEntry = tool(
 
 export const deleteTimeEntry = tool(
   "freshbooks_delete_time_entry",
-  "Delete a time entry by ID. This action is permanent and cannot be undone.",
+  "Delete a time entry by ID. This is a hard delete: permanent and cannot be undone.",
   {
     time_entry_id: z.number().int().describe("The time entry ID to delete"),
   },

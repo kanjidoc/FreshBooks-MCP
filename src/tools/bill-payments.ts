@@ -176,7 +176,7 @@ export const updateBillPayment = tool(
 
 export const deleteBillPayment = tool(
   "freshbooks_delete_bill_payment",
-  "Delete a bill payment by ID. This action is permanent and cannot be undone.",
+  "Delete a bill payment by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     bill_payment_id: z.string().describe("The bill payment ID to delete"),
   },

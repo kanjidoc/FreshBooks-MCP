@@ -196,7 +196,7 @@ export const updateCreditNote = tool(
 
 export const deleteCreditNote = tool(
   "freshbooks_delete_credit_note",
-  "Delete a credit note by ID. This action is permanent and cannot be undone.",
+  "Delete a credit note by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     credit_note_id: z.string().describe("The credit note ID to delete"),
   },
