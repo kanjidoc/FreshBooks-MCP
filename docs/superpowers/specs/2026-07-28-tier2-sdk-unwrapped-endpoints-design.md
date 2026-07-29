@@ -45,7 +45,7 @@ internals cited (`APIClient.js` line numbers) are pinned to `@freshbooks/api@4.1
 - [x] **Phase 4** — taxes writes → 93 *(done 2026-07-29; live CRUD via production tools 8/8: merge PUT held, hard delete confirmed 404, empty diff)*
 - [x] **Phase 5** — estimates writes + send → 97 *(done 2026-07-29; live CRUD 9/9: draft-only create, merge PUT held with lines surviving, soft delete, and the ONE live send to the owner's own address — status transitioned to "sent"; send refuses without explicit email_recipients, tested to never reach the API)*
 - [x] **Phase 6** — invoice-profile writes: **NO-GO, does not ship** *(gate exercised as designed — see 2026-07-29-tier2-write-go-no-go.md: a create probe could auto-invoice a real client, and no record exists on any profile to verify even the single-item read contract; final total is 97, not 100)*
-- [ ] **Release** — bump to 2.2.0 once, at the end
+- [x] **Release** — bump to 2.2.0 once, at the end *(shipped 2026-07-29 as v2.2.0 — merged via PR #10, tagged and published by release.yml)*
 - [ ] *Deferred, revisit only with new evidence:* chart-of-accounts writes, staff writes, `report_invoice_details`
 
 **Per-phase exit gate (all five, in order):** clean tree → `npm run build && npm run lint && npm test`
