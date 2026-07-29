@@ -288,6 +288,34 @@ every `chart_of_accounts` path variant returns 404. The chart of accounts **is**
 `journal_entry_accounts`, already exposed as
 `freshbooks_list_journal_entry_accounts` — do not add a duplicate tool for it.
 
+### Raw endpoints (SDK-unwrapped, reached via `src/raw-call.ts`)
+
+The truth table below was probed live (2026-07-28, every configured profile).
+It is the spec for `unwrapEnvelope`'s arguments — the envelope key column is
+load-bearing. Report params live in `src/report-params.ts`; entity endpoints
+are listed here as they ship.
+
+| Endpoint (under `/accounting/account/<id>/`) | Envelope key | Paginates | Notes |
+|---|---|---|---|
+| `estimates/estimates` | `estimates` | yes | |
+| `users/staffs` | **`staff`** (not `staffs`) | yes | read-only by decision (`create_staff` emails a real human) |
+| `taxes/taxes` | `taxes` | yes | |
+| `invoice_profiles/invoice_profiles` | `invoice_profiles` | yes | writes gated: can auto-generate real invoices |
+| `reports/accounting/balance_sheet` | `balance_sheet` | no | takes repeatable `dates[]`, ignores `start_date`/`end_date` |
+| `reports/accounting/general_ledger` | `general_ledger` | no | |
+| `reports/accounting/cash_flow` | `cash_flow` | no | ignores `cash_based` (inherently cash) |
+| `reports/accounting/accounts_aging` | `accounts_aging` | no | honors only `end_date` (+ `group_by=outstanding`); ignores `start_date`, `clientids[]` |
+| `reports/accounting/expense_details` | `expense_details` | no | ignores `summary_only` |
+| `reports/accounting/trial_balance` | `trial_balance` | no | |
+
+**Probed negative results (account-class, not profile-specific):**
+
+| Path | Result | Meaning |
+|---|---|---|
+| `reports/accounting/accounts_payable_aging` | **403** | Endpoint exists; needs an entitlement (AP add-on / plan) the probed account class lacks. Out of scope — do not ship without a profile that can verify it. |
+| `reports/accounting/revenue_by_client` | **422** | Endpoint exists but its contract is unknown — do not ship. |
+| any `chart_of_accounts` path | **404** | Does not exist (see above). |
+
 ### Query builders (Pagination, Search, Sort, Includes)
 
 All list endpoints accept an optional array of query builders. Import from `@freshbooks/api/dist/models/builders`.
@@ -418,11 +446,11 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-All 76 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 74 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
+All 82 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 80 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
 
 ### Tool naming convention
 
-All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+All 82 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
 
 **Accounting resources (accountId):**
 - Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
@@ -438,7 +466,8 @@ All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Other Incomes: `freshbooks_list_other_incomes`, `freshbooks_get_other_income`, `freshbooks_create_other_income`, `freshbooks_update_other_income`, `freshbooks_delete_other_income`
 - Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
-- Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+- Reports (SDK-backed): `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+- Reports (raw-backed, `src/tools/raw/reports.ts` — snake_case fields): `freshbooks_report_balance_sheet`, `freshbooks_report_general_ledger`, `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`, `freshbooks_report_expense_details`, `freshbooks_report_trial_balance`
 
 **Report basis and filters.** FreshBooks reports default to an **accrual** basis.
 `freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;

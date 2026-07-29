@@ -17,6 +17,14 @@ import { reportPaymentsCollected, reportProfitLoss, reportTaxSummary } from "./t
 import { listTasks, getTask, createTask, updateTask, deleteTask } from "./tools/tasks";
 import { listExpenseCategories, getExpenseCategory } from "./tools/expense-categories";
 import { createJournalEntry, listJournalEntryAccounts, listJournalEntryDetails } from "./tools/journal-entries";
+import {
+  reportBalanceSheet,
+  reportGeneralLedger,
+  reportCashFlow,
+  reportAccountsAging,
+  reportExpenseDetails,
+  reportTrialBalance,
+} from "./tools/raw/reports";
 import { freshbooksHelp } from "./tools/help";
 
 /**
@@ -57,8 +65,11 @@ const accountScoped = [
   listProjects, getProject, createProject, updateProject, deleteProject,
   // Services
   listServices, getService, createService,
-  // Reports
+  // Reports (SDK-backed)
   reportPaymentsCollected, reportProfitLoss, reportTaxSummary,
+  // Reports (raw-backed — src/tools/raw/, direct API access via src/raw-call.ts)
+  reportBalanceSheet, reportGeneralLedger, reportCashFlow,
+  reportAccountsAging, reportExpenseDetails, reportTrialBalance,
   // Tasks
   listTasks, getTask, createTask, updateTask, deleteTask,
   // Expense categories (read-only)

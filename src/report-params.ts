@@ -86,4 +86,87 @@ export const REPORT_PARAMS: Record<string, ReportParamSpec> = {
     artifact: "downloadToken.params",
     verified: "2026-07-28",
   },
+  balance_sheet: {
+    tool: "freshbooks_report_balance_sheet",
+    path: "balance_sheet",
+    envelope_key: "balance_sheet",
+    paginates: false,
+    // dates[] is a REPEATABLE key — each occurrence adds a statement column.
+    // The tool reshapes it as as_of_date + compare_to so a bare two-element
+    // array can't silently mean "two comparative columns" when the caller
+    // intended "a range".
+    honored: ["dates[]", "currency_code", "cash_based"],
+    ignored: ["start_date", "end_date"],
+    argToWire: { as_of_date: "dates[]", compare_to: "dates[]" },
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
+  general_ledger: {
+    tool: "freshbooks_report_general_ledger",
+    path: "general_ledger",
+    envelope_key: "general_ledger",
+    paginates: false,
+    honored: ["start_date", "end_date", "accountid", "subaccountid", "categoryid", "group_by_category_id"],
+    ignored: [],
+    argToWire: {},
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
+  cash_flow: {
+    tool: "freshbooks_report_cash_flow",
+    path: "cash_flow",
+    envelope_key: "cash_flow",
+    paginates: false,
+    honored: ["start_date", "end_date", "currency_code", "group_by_category_id"],
+    // Cash flow is inherently cash-based; the endpoint drops the flag.
+    ignored: ["cash_based"],
+    argToWire: {},
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
+  accounts_aging: {
+    tool: "freshbooks_report_accounts_aging",
+    path: "accounts_aging",
+    envelope_key: "accounts_aging",
+    paginates: false,
+    // group_by is parsed but only the value "outstanding" was verified; it is
+    // not offered on the tool until an artifact for other values exists.
+    honored: ["end_date", "group_by"],
+    ignored: ["start_date", "clientids[]"],
+    argToWire: {},
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
+  expense_details: {
+    tool: "freshbooks_report_expense_details",
+    path: "expense_details",
+    envelope_key: "expense_details",
+    paginates: false,
+    // group_by is parsed but its accepted values are unverified — recorded
+    // here as honored (the artifact lists it) but not offered on the tool.
+    honored: [
+      "start_date",
+      "end_date",
+      "group_by",
+      "exclude_personal",
+      "include_project",
+      "client_id",
+      "project_id",
+    ],
+    ignored: ["summary_only"],
+    argToWire: {},
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
+  trial_balance: {
+    tool: "freshbooks_report_trial_balance",
+    path: "trial_balance",
+    envelope_key: "trial_balance",
+    paginates: false,
+    honored: ["start_date", "end_date", "currency_code", "group_by_category_id"],
+    ignored: [],
+    argToWire: {},
+    artifact: "downloadToken.params",
+    verified: "2026-07-28",
+  },
 };

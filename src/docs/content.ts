@@ -280,6 +280,30 @@ flag — the FreshBooks SDK's transformServiceRequest serializes only the servic
 name, so any billable value would be silently dropped. Change it in the
 FreshBooks web UI if a service must be non-billable.
 
+**A listing starts with \`WARNING_INCOMPLETE\`.** A raw exhaustive listing hit a
+safety budget (page cap, time budget, or size ceiling) and stopped early —
+\`stopped_by\` says which. Every total, sum, or count computed from that payload
+WILL be wrong. Narrow the query (a tighter date range or filter) and rerun; do
+not aggregate the partial rows.
+
+**A raw report/tool returns 403.** A permanent capability gap: the FreshBooks
+plan or role behind that account profile does not include the feature (e.g.
+accounts-payable aging needs the AP add-on). Retrying cannot help — name the
+profile to the user. This differs from 401 (an expired/revoked token, which
+\`npm run refresh-tokens\` fixes).
+
+**"My date range did nothing" on a report.** Two common causes. (1) The balance
+sheet is a point-in-time statement: it ignores \`start_date\`/\`end_date\`
+entirely and takes \`as_of_date\` (plus \`compare_to\` columns). (2) A filter the
+endpoint doesn't parse is silently dropped — check the
+\`params_the_server_actually_parsed\` echo in the response, and
+\`freshbooks_help topic=reports\` for what each report honors.
+
+**Claude keeps asking permission for every FreshBooks tool.** Deliberate: the
+recommended allowlist names each tool exactly rather than wildcarding
+\`mcp__freshbooks__*\`, so each write keeps a human gate. Allow individual tools
+you trust rather than the wildcard.
+
 **Build errors after editing a tool.** Payloads are typed against SDK model
 interfaces — a compile error usually means a wrong property name. Fix the name;
 do not cast \`as any\`.

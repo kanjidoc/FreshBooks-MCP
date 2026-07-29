@@ -21,7 +21,7 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 - Work across **multiple FreshBooks logins** from one server — each tool takes an `account` parameter, and `freshbooks_list_accounts` lists the configured logins
 - Ask the server **how it works** — the `freshbooks_help` tool returns its own architecture, conventions, and live tool inventory
 
-All 76 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
+All 82 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
 
 ## 🚀 Getting Started
 
@@ -100,7 +100,7 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 - **[big.js](https://github.com/MikeMcl/big.js/)** — Decimal arithmetic for monetary values (FreshBooks returns amounts as strings to avoid floating-point precision issues)
 - **TypeScript** — Strict mode, compiled to ES2022
 
-## Available Tools (76 total)
+## Available Tools (82 total)
 
 Every API tool below also accepts an optional **`account`** parameter naming which configured FreshBooks login to act on. With a single login it can be omitted; with two or more it is required. Run `freshbooks_list_accounts` to see the configured names. See [Multiple FreshBooks accounts](#multiple-freshbooks-accounts) for the full model.
 
@@ -245,12 +245,27 @@ Every API tool below also accepts an optional **`account`** parameter naming whi
 | `freshbooks_report_profit_loss` | Generate a Profit & Loss report. Optional `cash_based` (cash vs. the default accrual basis) and `fiscal_year_view` (align to the account's fiscal year). |
 | `freshbooks_report_payments_collected` | Generate a Payments Collected report, optionally filtered by `currency_code` |
 | `freshbooks_report_tax_summary` | Generate a Tax Summary report. Optional `cash_based`. |
+| `freshbooks_report_balance_sheet` | Balance sheet as of a date (`as_of_date`, up to 3 `compare_to` columns). Optional `cash_based`, `currency_code`. Point-in-time — no start/end range. |
+| `freshbooks_report_general_ledger` | Full transaction-level general ledger for a date range; filter by account/sub-account/category id |
+| `freshbooks_report_cash_flow` | Cash flow for a date range (inherently cash-based — no flag) |
+| `freshbooks_report_accounts_aging` | A/R aging buckets as of `end_date` — who owes, and how overdue |
+| `freshbooks_report_expense_details` | Line-level expense detail for a date range; filter by client/project |
+| `freshbooks_report_trial_balance` | Trial balance for a date range — every account's debit and credit totals |
 
 > **Cash vs. accrual.** By default FreshBooks reports on an **accrual** basis —
 > income counts when invoiced, expenses when billed. Pass `cash_based: true` to
 > count them when money actually moves; an invoiced-but-unpaid invoice drops out
 > of income. `freshbooks_report_payments_collected` is inherently cash-based, so
 > it takes no such flag.
+
+> **Raw-backed reports.** The six ledger reports above (balance sheet through
+> trial balance) reach endpoints the frozen FreshBooks Node SDK never wrapped,
+> via direct API access. Their fields are **raw API names (snake_case)**, they
+> default to a pruned `detail: "summary"` view (pass `detail: "full"` for every
+> sub-account row), and each response echoes
+> `params_the_server_actually_parsed` — the API's own record of which filters
+> it honored. Ask `freshbooks_help topic=reports` for the per-endpoint
+> parameter matrix.
 
 ### Accounts
 | Tool | Description |
@@ -312,7 +327,7 @@ Setup problems are covered in the [SETUP.md troubleshooting table](SETUP.md#trou
 
 ## Using FreshBooks MCP inside a Claude Project
 
-If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 76 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
+If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 82 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
 
 ## Contributing
 

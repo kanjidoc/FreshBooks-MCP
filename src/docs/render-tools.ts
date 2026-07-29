@@ -22,13 +22,17 @@ interface ToolMeta {
 export function renderToolsTopic(): string {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { allTools } = require("../tool-registry") as typeof import("../tool-registry");
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { RAW_TIER_DESC } = require("../raw-call") as typeof import("../raw-call");
   const tools = allTools as unknown as ToolMeta[];
   const lines: string[] = [
     "# FreshBooks MCP — Tool Inventory",
     "",
     `${tools.length} tools are registered. Every name is prefixed \`freshbooks_\`.`,
     "Annotations: read-only tools may run in parallel; destructive tools delete data;",
-    "idempotent tools can be safely repeated.",
+    "idempotent tools can be safely repeated. Tools tagged _raw_ reach endpoints",
+    "the FreshBooks Node SDK never wrapped and return raw API field names",
+    "(snake_case), unlike the camelCase of SDK-backed tools.",
     "",
   ];
   for (const tool of tools) {
@@ -36,6 +40,7 @@ export function renderToolsTopic(): string {
     if (tool.annotations?.readOnlyHint) tags.push("read-only");
     if (tool.annotations?.destructiveHint) tags.push("destructive");
     if (tool.annotations?.idempotentHint) tags.push("idempotent");
+    if (tool.description.includes(RAW_TIER_DESC)) tags.push("raw");
     const suffix = tags.length > 0 ? ` _(${tags.join(", ")})_` : "";
     lines.push(`- **${tool.name}**${suffix} — ${tool.description}`);
   }

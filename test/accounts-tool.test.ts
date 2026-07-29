@@ -7,8 +7,8 @@ import { listAccounts } from "../src/tools/accounts";
 import { resetRegistry } from "../src/profiles";
 
 describe("registry wiring", () => {
-  it("registers exactly 76 tools", () => {
-    expect(allTools.length).toBe(76);
+  it("registers exactly 82 tools", () => {
+    expect(allTools.length).toBe(82);
   });
   it("includes freshbooks_list_accounts and it has no `account` field", () => {
     const la = allTools.find((t: any) => t.name === "freshbooks_list_accounts");

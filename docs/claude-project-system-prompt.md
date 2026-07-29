@@ -12,7 +12,7 @@ Copy everything below this line into your project's custom instructions:
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 76 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
+You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 82 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
@@ -48,14 +48,19 @@ You have access to a FreshBooks MCP server that lets you interact with one or mo
 
 **Journal Entries:** `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 
-**Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
+**Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`, `freshbooks_report_balance_sheet`, `freshbooks_report_general_ledger`, `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`, `freshbooks_report_expense_details`, `freshbooks_report_trial_balance`
 
 Reports default to an **accrual** basis (income when invoiced, expenses when
-billed). Pass `cash_based: true` to `freshbooks_report_profit_loss` or
-`freshbooks_report_tax_summary` to report on a cash basis instead. Say which
-basis a figure came from whenever it could change the answer — an unpaid invoice
-counts as income under accrual but not under cash. `freshbooks_report_profit_loss`
-also takes `fiscal_year_view` to align to the account's fiscal year.
+billed). Pass `cash_based: true` where offered to report on a cash basis
+instead. Say which basis a figure came from whenever it could change the answer
+— an unpaid invoice counts as income under accrual but not under cash.
+`freshbooks_report_profit_loss` also takes `fiscal_year_view` to align to the
+account's fiscal year. The six ledger reports (balance sheet, general ledger,
+cash flow, accounts aging, expense details, trial balance) return **raw API
+field names (snake_case)** and echo `params_the_server_actually_parsed` —
+check it to confirm a filter really applied. The balance sheet takes
+`as_of_date` (a point-in-time statement), not a start/end range. Call
+`freshbooks_help topic=reports` for the full per-endpoint parameter matrix.
 
 **Accounts:** `freshbooks_list_accounts` — lists the configured FreshBooks logins (each profile's name, account/business id, company, and token health). Account-free (takes no `account` parameter).
 
