@@ -43,6 +43,12 @@ import { getFreshBooksClient } from "./freshbooks-client";
  * outside `als.run`, so `getFreshBooksClient()` inside it resolves the WRONG
  * profile and returns another company's ledger with `ok: true`). Per-profile
  * throttles belong on `ProfileState`, like `refreshInFlight`.
+ *
+ * KNOWN GAP (accepted): `detectErrorEnvelope` checks only the endpoint's own
+ * namespace dialect, so a cross-dialect 200 error body (auth-style `{error}`
+ * on an accounting path) returns `ok: true` — it is caught the moment the
+ * tool's shape calls `unwrapEnvelope` (→ drift, body echoed). A raw tool that
+ * renders WITHOUT a shape must know unwrapping is its only error net.
  */
 
 /** Appended to every raw-backed tool description — the two-tier seam marker. */
@@ -66,9 +72,14 @@ export type RawFailureKind =
    * may be fine; it is THIS server that has drifted from the API contract. */
   | "envelope_drift"
   /** A multi-page read that cannot be trusted end-to-end (page echo mismatch,
-   * zero progress, mid-read failure). No partial data is returned — in an
-   * accounting tool, silent wrong numbers are worse than a crash. */
+   * zero progress, mid-read failure, totals drifting between pages). No
+   * partial data is returned — in an accounting tool, silent wrong numbers
+   * are worse than a crash. */
   | "integrity"
+  /** A bug in THIS server (contract gate, query-builder misuse, missing
+   * profile context, a broken shape callback) — deterministic, retry is
+   * guaranteed waste, and it must never masquerade as an API problem. */
+  | "internal"
   /** Network/timeout/SDK-internal failure before any API verdict. */
   | "transport";
 
@@ -250,7 +261,18 @@ const CLASSIFIERS: Record<
   project: { is: isProjectErrorResponse, transform: transformProjectErrorResponse },
 };
 
-/** Detect a 200-with-error-body response for the endpoint's namespace. */
+/** The SDK transforms' own we-extracted-nothing sentinel. */
+const SDK_GENERIC_MESSAGE = "Returned an unexpected response";
+
+/**
+ * Detect a 200-with-error-body response for the endpoint's namespace. The SDK
+ * classifiers FIRE on more dialects than their transforms can extract a
+ * message from (accounting's singular `response.error`, auth's `error` without
+ * `error_description`, project's bare `errno`), so when the transform yields
+ * only its generic sentinel, the dialect fields are read directly — the API's
+ * actual verdict ("account suspended", "invalid_grant") must never degrade to
+ * "unexpected response".
+ */
 function detectErrorEnvelope(namespace: RawNamespace, body: unknown): RawFailure | null {
   if (typeof body !== "object" || body === null) return null; // handled as drift by callers
   const { is, transform } = CLASSIFIERS[namespace];
@@ -259,15 +281,26 @@ function detectErrorEnvelope(namespace: RawNamespace, body: unknown): RawFailure
   // throw out of call()).
   if (!is("200", body)) return null;
   const t = transform(body);
-  const message =
-    t.errors?.[0]?.message ??
-    t.message ??
-    "FreshBooks returned an error body with HTTP 200";
+  let message = t.errors?.[0]?.message ?? (t.message !== SDK_GENERIC_MESSAGE ? t.message : undefined);
+  if (!message) {
+    const b = body as {
+      response?: { error?: unknown };
+      error?: unknown;
+      error_description?: unknown;
+      message?: unknown;
+    };
+    message =
+      (typeof b.response?.error === "string" && b.response.error) ||
+      (typeof b.error_description === "string" && b.error_description) ||
+      (typeof b.error === "string" && b.error) ||
+      (typeof b.message === "string" && b.message) ||
+      "FreshBooks returned an error body with HTTP 200";
+  }
   return {
     ok: false,
     kind: "api_error",
     statusCode: "200",
-    message: message || "FreshBooks returned an error body with HTTP 200",
+    message,
     errors: t.errors,
     rawBody: body,
   };
@@ -317,22 +350,36 @@ export interface RawRequestOptions {
 function failureFromThrown(err: unknown): RawFailure {
   // The SDK's call() throws APIClientError { name, message, statusCode, errors }
   // for HTTP errors, and re-throws raw axios/network errors (no .response) as-is.
+  // NOTE (SDK limitation, verified at 4.1.0): call()'s own catch reads only the
+  // TOP-LEVEL errData.errors/message, while accounting bodies nest detail under
+  // response.errors — so a thrown accounting 4xx arrives here already stripped
+  // to its HTTP statusText. Only the 200-with-error-body path preserves
+  // per-field detail. Nothing here can recover what the SDK discarded.
   if (typeof err === "object" && err !== null) {
     const e = err as { message?: unknown; statusCode?: unknown; errors?: unknown };
     const statusCode = typeof e.statusCode === "string" ? e.statusCode : undefined;
     const message =
       (typeof e.message === "string" && e.message.trim()) ||
       `FreshBooks request failed${statusCode ? ` (HTTP ${statusCode})` : ""}`;
-    return {
-      ok: false,
-      kind: statusCode ? "api_error" : "transport",
-      statusCode,
-      message,
-      errors: Array.isArray(e.errors) ? (e.errors as RawErrorDetail[]) : undefined,
-    };
+    const errors = Array.isArray(e.errors)
+      ? (e.errors.filter(
+          (x) => typeof x === "object" && x !== null && typeof (x as { message?: unknown }).message === "string",
+        ) as RawErrorDetail[])
+      : undefined;
+    return { ok: false, kind: statusCode ? "api_error" : "transport", statusCode, message, errors };
   }
   const text = typeof err === "string" && err.trim() ? err.trim() : String(err ?? "unknown error");
   return { ok: false, kind: "transport", message: `FreshBooks request failed: ${text}` };
+}
+
+/** A deterministic bug in THIS server — never an API condition. */
+function internalFailure(err: unknown): RawFailure {
+  const text = err instanceof Error ? err.message : String(err ?? "unknown internal error");
+  return {
+    ok: false,
+    kind: "internal",
+    message: `Internal error in this MCP server (not the FreshBooks API): ${text}`,
+  };
 }
 
 function driftFailure(message: string, rawBody: unknown): RawFailure {
@@ -352,14 +399,24 @@ function driftFailure(message: string, rawBody: unknown): RawFailure {
  */
 export async function rawRequest(opts: RawRequestOptions): Promise<RawResult> {
   const namespace = opts.namespace ?? "accounting";
+  // Setup phase: nothing here touches the network, so any throw (missing
+  // profile context, SDK contract gate, buildRawQuery misuse) is OUR bug —
+  // classified `internal`, whose imperative forbids retrying.
+  let raw: RawCallable;
+  let url: string;
   try {
-    const client = getFreshBooksClient();
-    const raw = asRawCallable(client);
-    const url = opts.path + buildRawQuery(opts.query ?? {});
+    raw = asRawCallable(getFreshBooksClient());
+    url = opts.path + buildRawQuery(opts.query ?? {});
+  } catch (err) {
+    return internalFailure(err);
+  }
+  try {
     const res = await raw.call(opts.method, url, {}, opts.body ?? null, opts.name);
     const data = (res as { data?: unknown } | null | undefined)?.data;
     if (data === undefined || data === null) {
-      return driftFailure(`call() resolved with no response body for ${opts.name}`, data);
+      // Echo the whole resolution, not just its missing .data — never discard
+      // a body we failed to parse.
+      return driftFailure(`call() resolved with no response body for ${opts.name}`, res);
     }
     if (typeof data !== "object") {
       return driftFailure(`non-JSON response body for ${opts.name}`, data);
@@ -397,13 +454,18 @@ export interface RawListOptions {
   sizeCeilingBytes?: number;
 }
 
-function integrityFailure(message: string): RawFailure {
+function integrityFailure(message: string, cause?: RawFailure): RawFailure {
   return {
     ok: false,
     kind: "integrity",
+    // The underlying failure's status/details ride along so errorImperative
+    // can give the RIGHT instruction — a mid-read 403 must say "do not retry",
+    // not the generic integrity retry advice.
+    statusCode: cause?.statusCode,
+    errors: cause?.errors,
     // A partially-authenticated or self-inconsistent ledger is not a warning
     // condition: no partial data leaves this function.
-    message: `${message} No partial data returned — any total computed from an incomplete listing would be silently wrong. Retry the call once; if it fails again, tell the user the listing could not be completed.`,
+    message: `${message} No partial data returned — any total computed from an incomplete listing would be silently wrong.`,
   };
 }
 
@@ -431,7 +493,12 @@ export async function rawList(opts: RawListOptions): Promise<RawListResult> {
   let page = 1;
   // Written every page (before any read) — grouped so the declarations carry no
   // dead initializers of their own.
-  const seen = { pagesTotal: 0, total: 0, approxBytes: 0 };
+  const seen: {
+    pagesTotal: number;
+    total: number;
+    approxBytes: number;
+    prevFirstRow: string | null;
+  } = { pagesTotal: 0, total: 0, approxBytes: 0, prevFirstRow: null };
 
   for (;;) {
     const res = await rawRequest({
@@ -445,6 +512,7 @@ export async function rawList(opts: RawListOptions): Promise<RawListResult> {
       if (page === 1) return res; // nothing fetched yet — the failure stands on its own
       return integrityFailure(
         `Listing failed mid-read on page ${page} of ${seen.pagesTotal} (${res.kind}: ${res.message}).`,
+        res, // status/details ride along so a mid-read 401/403 gets the right imperative
       );
     }
 
@@ -468,6 +536,24 @@ export async function rawList(opts: RawListOptions): Promise<RawListResult> {
         `Page echo mismatch: requested page ${page}, API answered page ${meta.page}.`,
       );
     }
+    // The API's own totals must hold still across the read. Page 1 says
+    // total=144 and page 2 says total=143 → a row was deleted mid-read and the
+    // offsets have shifted under us: rows were skipped or duplicated even if
+    // the FINAL count happens to match the final total.
+    if (page > 1 && (meta.total !== seen.total || meta.pages !== seen.pagesTotal)) {
+      return integrityFailure(
+        `Books changed mid-read: the API's total went ${seen.total} → ${meta.total} (pages ${seen.pagesTotal} → ${meta.pages}) between pages.`,
+      );
+    }
+    // A server that ignores `page` but echoes the requested number back
+    // defeats the echo guard; two consecutive pages starting with the same
+    // row is the cheap tell.
+    const firstRow = value.length > 0 ? JSON.stringify(value[0]) : null;
+    if (page > 1 && firstRow !== null && firstRow === seen.prevFirstRow) {
+      return integrityFailure(
+        `Duplicate page detected: page ${page} begins with the same row as page ${page - 1} — the server appears to be ignoring the page parameter.`,
+      );
+    }
     if (value.length === 0 && meta.total > rows.length) {
       return integrityFailure(
         `Zero-progress page: page ${page} returned no rows while ${meta.total - rows.length} of ${meta.total} remain.`,
@@ -477,6 +563,7 @@ export async function rawList(opts: RawListOptions): Promise<RawListResult> {
     for (const v of value) seen.approxBytes += JSON.stringify(v)?.length ?? 0;
     seen.pagesTotal = meta.pages;
     seen.total = meta.total;
+    seen.prevFirstRow = firstRow;
 
     if (page >= meta.pages) break; // done (also the empty-collection case: pages 0)
 
@@ -513,13 +600,14 @@ export interface McpToolResult {
 
 /** Imperative suffixes (Part G): without one, a model's default reaction to
  * any error is to permute arguments and retry — a write-safety problem against
- * real books. */
+ * real books. Status-code imperatives run FIRST so a mid-read 401/403 inside
+ * an integrity failure still gets the right instruction. */
 function errorImperative(f: RawFailure): string {
   if (f.statusCode === "403") {
     return "Do not retry: this is a permanent capability gap — the FreshBooks plan or role behind this profile does not include this feature. Tell the user which account profile lacks it.";
   }
   if (f.statusCode === "422") {
-    return "DO NOT guess additional or alternative fields and retry: this API drops unknown keys silently, so a lucky retry can appear to succeed while writing wrong data. Tell the user exactly which field the API rejected.";
+    return "DO NOT guess additional or alternative fields and retry: this API drops unknown keys silently, so a lucky retry can appear to succeed while writing wrong data. Tell the user which field the API rejected (if it reported one).";
   }
   if (f.statusCode === "401") {
     return "Do not immediately retry: the token was rejected. Call freshbooks_list_accounts to check this profile's token health first.";
@@ -528,7 +616,9 @@ function errorImperative(f: RawFailure): string {
     case "envelope_drift":
       return "Do not retry: this server no longer understands the API's response shape for this endpoint. Show the user the raw payload below and tell them to report it as a bug.";
     case "integrity":
-      return ""; // integrityFailure() already ends with its imperative
+      return "Retry the call once; if it fails again, tell the user the listing could not be completed.";
+    case "internal":
+      return "Do not retry — this is a bug in this MCP server, not the FreshBooks API. Tell the user to report it.";
     case "transport":
       return "Retry once; if it fails again, tell the user the FreshBooks API is unreachable.";
     default:
@@ -545,8 +635,11 @@ const INCOMPLETE_WARNING =
  * WARNING_INCOMPLETE, drift echoing, and error imperatives cannot be
  * reimplemented 23 slightly-different ways.
  *
- * `shape` maps successful data to the payload to render (e.g. envelope
- * unwrapping, summary pruning, params echo). It runs only on success.
+ * `shape` runs only on success. For a single result it maps `data` to the
+ * payload to render (envelope unwrapping, summary pruning, params echo). For
+ * a LIST result it receives the ROWS ARRAY ONLY — the completeness envelope
+ * (WARNING_INCOMPLETE, stopped_by, counts) is assembled here afterwards, so
+ * no shape callback can strip the incompleteness warning off a listing.
  */
 export function renderRaw(
   result: RawResult | RawListResult,
@@ -559,7 +652,12 @@ export function renderRaw(
     }
     const imperative = errorImperative(result);
     if (imperative) parts.push(imperative);
-    if (result.kind === "envelope_drift" && result.rawBody !== undefined) {
+    // Echo the body on drift always, and on an api_error whose structured
+    // detail came back empty — the API's own words are the only evidence left.
+    const echoBody =
+      result.rawBody !== undefined &&
+      (result.kind === "envelope_drift" || (result.kind === "api_error" && !result.errors?.length));
+    if (echoBody) {
       let echo: string;
       try {
         echo = JSON.stringify(result.rawBody);
@@ -577,8 +675,9 @@ export function renderRaw(
   try {
     let payload: unknown;
     if ("rows" in result) {
+      const rows = shape ? shape(result.rows) : result.rows;
       const base = {
-        rows: result.rows,
+        rows,
         pages_fetched: result.pages_fetched,
         pages_total: result.pages_total,
         total: result.total,
@@ -586,18 +685,20 @@ export function renderRaw(
       payload = result.complete
         ? { complete: true, ...base }
         : // WARNING_INCOMPLETE is deliberately the FIRST key so it is the first
-          // thing in the rendered JSON.
+          // thing in the rendered JSON — and it is attached AFTER shape ran.
           { WARNING_INCOMPLETE: INCOMPLETE_WARNING, stopped_by: result.stopped_by, complete: false, ...base };
-      if (shape) payload = shape(payload);
     } else {
       payload = shape ? shape(result.data) : result.data;
     }
-    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    // JSON.stringify(undefined) is undefined — a forgotten `return` in a shape
+    // must not produce malformed MCP content.
+    const text = JSON.stringify(payload, null, 2) ?? "null";
+    return { content: [{ type: "text", text }] };
   } catch (err) {
     const failure =
       err instanceof EnvelopeDriftError
         ? driftFailure(err.message, err.rawBody)
-        : failureFromThrown(err);
+        : internalFailure(err); // a broken shape is OUR bug, not a transport fault
     return renderRaw(failure); // failure branch above — cannot recurse again
   }
 }

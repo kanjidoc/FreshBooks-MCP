@@ -3,7 +3,9 @@ import type { Client } from "@freshbooks/api";
 import { runInProfile, type ProfileState } from "../src/profiles";
 import { pruneSubAccounts, reportBalanceSheet, reportAccountsAging, reportTrialBalance } from "../src/tools/raw/reports";
 
-/** T2 fake: capture the URL, serve a canned raw report envelope. */
+/** T2 fake: capture the URL, serve a canned raw report envelope. The download
+ * token rides INSIDE the report payload, as the live API does (verified
+ * 2026-07-29). */
 function reportProfile(envelopeKey: string, report: unknown, urls: string[], downloadToken?: string): ProfileState {
   const call = async (_m: string, url: string, _c: object, _d: unknown, _n: string) => {
     urls.push(url);
@@ -12,8 +14,10 @@ function reportProfile(envelopeKey: string, report: unknown, urls: string[], dow
       data: {
         response: {
           result: {
-            [envelopeKey]: report,
-            ...(downloadToken ? { download_token: downloadToken } : {}),
+            [envelopeKey]: {
+              ...(report as Record<string, unknown>),
+              ...(downloadToken ? { download_token: downloadToken } : {}),
+            },
           },
         },
       },
@@ -100,7 +104,7 @@ describe("raw report wire format (T1 — the historically shipped bug class)", (
 });
 
 describe("raw report output shaping", () => {
-  it("echoes params_the_server_actually_parsed from the download token", async () => {
+  it("echoes params_the_server_actually_parsed from the download token, and strips the raw JWT", async () => {
     const urls: string[] = [];
     const res = await runInProfile(
       reportProfile("trial_balance", { rows: [] }, urls, token({ start_date: "2026-01-01", cash_based: null })),
@@ -108,7 +112,7 @@ describe("raw report output shaping", () => {
     );
     const parsed = JSON.parse(textOf(res as any));
     expect(parsed.params_the_server_actually_parsed).toEqual({ start_date: "2026-01-01", cash_based: null });
-    expect(parsed.report).toEqual({ rows: [] });
+    expect(parsed.report).toEqual({ rows: [] }); // download_token stripped, not rendered
   });
 
   it("detail=summary prunes sub_accounts; detail=full keeps them", async () => {

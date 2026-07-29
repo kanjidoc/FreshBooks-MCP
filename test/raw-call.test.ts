@@ -217,16 +217,31 @@ describe("rawRequest never rejects", () => {
     const f = expectFailure(r, "api_error");
     expect(f.statusCode).toBe("401");
   });
-  it("a fake client with the wrong call arity is refused (contract gate)", async () => {
+  it("a fake client with the wrong call arity is refused (contract gate) as an INTERNAL bug", async () => {
     const r = await inProfile(((_m: string) => Promise.resolve({})) as unknown as CallFn, () =>
       rawRequest({ method: "GET", path: "/x", name: "T" }),
     );
-    const f = expectFailure(r, "transport");
+    const f = expectFailure(r, "internal");
     expect(f.message).toMatch(/contract changed/);
   });
-  it("outside any profile context: failure, not a throw", async () => {
+  it("outside any profile context: internal failure, not a throw", async () => {
     const r = await rawRequest({ method: "GET", path: "/x", name: "T" });
-    expectFailure(r, "transport");
+    expectFailure(r, "internal");
+  });
+  it("H3: dialects the SDK transform can't extract still surface the API's own words", async () => {
+    // accounting singular error
+    const acc = await inProfile(
+      ((_m, _u, _c, _d, _n) =>
+        Promise.resolve({ ok: true, data: { response: { error: "This account has been suspended" } } })) as CallFn,
+      () => rawRequest({ method: "GET", path: "/x", name: "T" }),
+    );
+    expect(expectFailure(acc, "api_error").message).toBe("This account has been suspended");
+    // auth error without error_description
+    const auth = await inProfile(
+      ((_m, _u, _c, _d, _n) => Promise.resolve({ ok: true, data: { error: "invalid_grant" } })) as CallFn,
+      () => rawRequest({ method: "GET", path: "/x", name: "T", namespace: "auth" }),
+    );
+    expect(expectFailure(auth, "api_error").message).toBe("invalid_grant");
   });
 });
 
@@ -256,7 +271,7 @@ const list = (call: CallFn, opts: Partial<Parameters<typeof rawList>[0]> = {}) =
 
 describe("rawList", () => {
   it("REGRESSION (144 rows / 2 pages): exhausts every page, completeness computed", async () => {
-    const r = (await list(pagedCall([listOf(100), listOf(44)]))) as Extract<RawListResult, { ok: true }>;
+    const r = (await list(pagedCall([listOf(100, "p1"), listOf(44, "p2")]))) as Extract<RawListResult, { ok: true }>;
     expect(r.ok).toBe(true);
     expect(r.complete).toBe(true);
     expect(r.rows).toHaveLength(144);
@@ -276,7 +291,7 @@ describe("rawList", () => {
     expect(r.rows).toEqual([]);
   });
   it("page-echo mismatch → integrity failure, no partial data", async () => {
-    const r = await list(pagedCall([listOf(100), listOf(44)], { echoPage: () => 1 }));
+    const r = await list(pagedCall([listOf(100, "p1"), listOf(44, "p2")], { echoPage: () => 1 }));
     const f = expectFailure(r, "integrity");
     expect(f).not.toHaveProperty("rows");
   });
@@ -289,7 +304,7 @@ describe("rawList", () => {
     const flaky: CallFn = async (m, u, c, d, name) => {
       n++;
       if (n === 2) throw Object.assign(new Error("boom"), { statusCode: "500" });
-      return pagedCall([listOf(100), listOf(44)])(m, u, c, d, name);
+      return pagedCall([listOf(100, "p1"), listOf(44, "p2")])(m, u, c, d, name);
     };
     expectFailure(await list(flaky), "integrity");
     const immediate: CallFn = (_m, _u, _c, _d, _n) =>
@@ -297,11 +312,66 @@ describe("rawList", () => {
     expectFailure(await list(immediate), "api_error");
   });
   it("row-count mismatch after a full read → integrity failure", async () => {
-    const r = await list(pagedCall([listOf(100), listOf(43)], { total: 144 }));
+    const r = await list(pagedCall([listOf(100, "p1"), listOf(43, "p2")], { total: 144 }));
     expectFailure(r, "integrity");
   });
+  it("H1: totals drifting BETWEEN pages → integrity failure, even when the final count matches", async () => {
+    // Page 1 says total=144; a row is deleted; page 2 says total=143 and the
+    // final count (100+43=143) MATCHES the final total — the old end-check
+    // alone would have blessed a listing with a skipped row.
+    let calls = 0;
+    const drifting: CallFn = async (_m, url, _c, _d, _n) => {
+      calls++;
+      const page = Number(new URL(`http://x${url}`).searchParams.get("page"));
+      const total = calls === 1 ? 144 : 143;
+      return {
+        ok: true,
+        data: {
+          response: {
+            result: { things: listOf(page === 1 ? 100 : 43, `p${page}`), page, pages: 2, per_page: 100, total },
+          },
+        },
+      };
+    };
+    const r = await list(drifting);
+    const f = expectFailure(r, "integrity");
+    expect(f.message).toMatch(/Books changed mid-read/);
+  });
+  it("M4: a server ignoring `page` but echoing it back is caught by the duplicate-page fingerprint", async () => {
+    // Same 100 rows served for every page, page number echoed as requested,
+    // total an exact multiple of per_page — every other guard is blind here.
+    const sameRows = listOf(100, "dup");
+    const echoing: CallFn = async (_m, url, _c, _d, _n) => {
+      const page = Number(new URL(`http://x${url}`).searchParams.get("page"));
+      return {
+        ok: true,
+        data: { response: { result: { things: sameRows, page, pages: 2, per_page: 100, total: 200 } } },
+      };
+    };
+    const r = await list(echoing);
+    const f = expectFailure(r, "integrity");
+    expect(f.message).toMatch(/Duplicate page/);
+  });
+  it("M1: a mid-read 401/403 keeps its status so the RIGHT imperative fires", async () => {
+    const failWith = (statusCode: string): CallFn => {
+      let n = 0;
+      return async (m, u, c, d, name) => {
+        n++;
+        if (n === 2) throw Object.assign(new Error("denied"), { statusCode });
+        return pagedCall([listOf(100, "p1"), listOf(44, "p2")])(m, u, c, d, name);
+      };
+    };
+    const r401 = await list(failWith("401"));
+    const f401 = expectFailure(r401, "integrity");
+    expect(f401.statusCode).toBe("401");
+    expect(renderRaw(f401).content[0].text).toMatch(/freshbooks_list_accounts/);
+    const r403 = await list(failWith("403"));
+    const rendered403 = renderRaw(expectFailure(r403, "integrity")).content[0].text;
+    expect(rendered403).toMatch(/Do not retry/);
+    expect(rendered403).not.toMatch(/Retry the call once/);
+  });
   it("page cap → ok but incomplete, stopped_by page_cap", async () => {
-    const r = (await list(pagedCall([listOf(100), listOf(100), listOf(100)]), {
+    const r = (await list(pagedCall([listOf(100, "p1"), listOf(100, "p2"), listOf(100, "p3")]), {
       pageCap: 2,
     })) as Extract<RawListResult, { ok: true }>;
     expect(r.ok).toBe(true);
@@ -310,7 +380,7 @@ describe("rawList", () => {
     expect(r.rows).toHaveLength(200);
   });
   it("time budget → ok but incomplete, stopped_by time_budget", async () => {
-    const r = (await list(pagedCall([listOf(10), listOf(10), listOf(10)], { delayMs: 40 }), {
+    const r = (await list(pagedCall([listOf(10, "p1"), listOf(10, "p2"), listOf(10, "p3")], { delayMs: 40 }), {
       budgetMs: 30,
     })) as Extract<RawListResult, { ok: true }>;
     expect(r.ok).toBe(true);
@@ -318,7 +388,7 @@ describe("rawList", () => {
     if (!r.complete) expect(r.stopped_by).toBe("time_budget");
   });
   it("size ceiling → ok but incomplete, stopped_by size_ceiling", async () => {
-    const r = (await list(pagedCall([listOf(100), listOf(100)]), {
+    const r = (await list(pagedCall([listOf(100, "p1"), listOf(100, "p2")]), {
       sizeCeilingBytes: 10,
     })) as Extract<RawListResult, { ok: true }>;
     expect(r.ok).toBe(true);
@@ -419,7 +489,7 @@ describe("profile isolation", () => {
 
 describe("renderRaw", () => {
   it("WARNING_INCOMPLETE is the FIRST key of an incomplete listing payload", async () => {
-    const r = await list(pagedCall([listOf(2), listOf(2), listOf(2)]), { pageCap: 1 });
+    const r = await list(pagedCall([listOf(2, "p1"), listOf(2, "p2"), listOf(2, "p3")]), { pageCap: 1 });
     const out = renderRaw(r);
     expect(out.isError).toBeUndefined();
     const parsed = JSON.parse(out.content[0].text);
@@ -432,6 +502,27 @@ describe("renderRaw", () => {
     const parsed = JSON.parse(renderRaw(r).content[0].text);
     expect(parsed.complete).toBe(true);
     expect(parsed).not.toHaveProperty("WARNING_INCOMPLETE");
+  });
+  it("H2: shape() receives ROWS ONLY and cannot strip WARNING_INCOMPLETE from an incomplete listing", async () => {
+    const r = await list(pagedCall([listOf(2, "p1"), listOf(2, "p2"), listOf(2, "p3")]), { pageCap: 1 });
+    let shapeSaw: unknown;
+    const out = renderRaw(r, (rows) => {
+      shapeSaw = rows;
+      return (rows as Array<{ id: string }>).map((x) => x.id); // an aggressive prune
+    });
+    expect(Array.isArray(shapeSaw)).toBe(true); // rows array, never the envelope
+    const parsed = JSON.parse(out.content[0].text);
+    expect(Object.keys(parsed)[0]).toBe("WARNING_INCOMPLETE"); // survived the prune
+    expect(parsed.stopped_by).toBe("page_cap");
+    expect(parsed.rows).toEqual(["p1-0", "p1-1"]);
+  });
+  it("a shape() returning undefined renders as 'null', never malformed content", async () => {
+    const r = await inProfile(
+      ((_m, _u, _c, _d, _n) => Promise.resolve({ ok: true, data: { some: "thing" } })) as CallFn,
+      () => rawRequest({ method: "GET", path: "/x", name: "T" }),
+    );
+    const out = renderRaw(r, () => undefined);
+    expect(out.content[0].text).toBe("null");
   });
   it("403 → do-not-retry capability-gap imperative", () => {
     const out = renderRaw({ ok: false, kind: "api_error", statusCode: "403", message: "Forbidden" });

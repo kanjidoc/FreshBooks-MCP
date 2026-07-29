@@ -77,14 +77,23 @@ async function runRawReport(
     name: spec.tool,
   });
   return renderRaw(res, (data) => {
-    const { value, result } = unwrapEnvelope(data, spec.envelope_key, "object");
-    const params = decodeReportParams(
-      (result as { download_token?: unknown }).download_token ??
-        (result as { downloadToken?: unknown }).downloadToken,
-    );
+    const { value, result } = unwrapEnvelope<Record<string, unknown>>(data, spec.envelope_key, "object");
+    // The token rides INSIDE the report payload (verified live 2026-07-29);
+    // the result-level fallback covers a future move. Decode its params claim,
+    // then STRIP the raw JWT from the output — the decoded echo is the useful
+    // part, the token itself is auth-shaped noise. A null echo would silently
+    // remove the filter-verification evidence, so the two null causes are
+    // named instead.
+    const rawToken = value.download_token ?? (result as { download_token?: unknown }).download_token;
+    const params = decodeReportParams(rawToken);
+    const { download_token: _token, ...report } = value;
     return {
-      params_the_server_actually_parsed: params,
-      report: detail === "summary" ? pruneSubAccounts(value) : value,
+      params_the_server_actually_parsed:
+        params ??
+        (rawToken === undefined
+          ? "UNAVAILABLE: response carried no download_token"
+          : "UNAVAILABLE: download_token present but undecodable"),
+      report: detail === "summary" ? pruneSubAccounts(report) : report,
     };
   });
 }
