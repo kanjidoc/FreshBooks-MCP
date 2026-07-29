@@ -279,9 +279,14 @@ tool coverage against the SDK, list these as out of scope rather than as gaps:
 | `client.invoices` `share_link` | Client-facing invoice share links |
 
 This applies only to resources the SDK *does* wrap. Resources the SDK never
-wrapped (Estimates, Chart of Accounts, Staff, and the General Ledger / Balance
-Sheet / Cash Flow / Account Aging / Expense Details reports) are a separate
-question and are not covered by this exclusion.
+wrapped (Estimates, Staff, Taxes, Invoice Profiles, and the General Ledger /
+Balance Sheet / Cash Flow / Accounts Aging / Expense Details / Trial Balance
+reports) are a separate question and are not covered by this exclusion.
+
+**There is no separate Chart of Accounts endpoint.** Probed live (2026-07-28):
+every `chart_of_accounts` path variant returns 404. The chart of accounts **is**
+`journal_entry_accounts`, already exposed as
+`freshbooks_list_journal_entry_accounts` — do not add a duplicate tool for it.
 
 ### Query builders (Pagination, Search, Sort, Includes)
 
