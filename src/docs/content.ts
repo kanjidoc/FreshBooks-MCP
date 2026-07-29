@@ -225,8 +225,12 @@ export const TOPIC_CONVENTIONS = `# FreshBooks MCP — Conventions
   profile — individual tools don't declare it. \`freshbooks_list_accounts\` shows
   the valid names; it and \`freshbooks_help\` are the only account-free tools.
 - **Tool naming:** \`freshbooks_<action>_<resource>\` — e.g. \`freshbooks_list_invoices\`.
-- **Annotations:** \`readOnlyHint\` on list/get/report tools (enables parallel calls);
-  \`destructiveHint\` on delete tools; \`idempotentHint\` on update tools.
+- **Annotations follow the action prefix** (enforced by \`test/tool-inventory.test.ts\`):
+  \`readOnlyHint\` on list/get/report tools (enables parallel calls);
+  \`destructiveHint\` on delete tools; \`idempotentHint\` on update tools; create
+  tools carry NONE (deliberate — a create is neither read-only, idempotent, nor
+  destructive of existing data). Tools matching no prefix need an entry in that
+  test's allow-list.
 - **Handlers never throw** — uncaught exceptions kill the agent loop. Every handler
   is try/catch wrapped and returns \`isError: true\` on failure.
 - **Money is a string** — FreshBooks returns \`{ amount: "12.34", code: "USD" }\`.

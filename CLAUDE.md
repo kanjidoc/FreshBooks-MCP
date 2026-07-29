@@ -527,9 +527,15 @@ Use `allowedTools: ["mcp__freshbooks__*"]` to allow all tools on the server.
 
 | Annotation | Use for | Effect |
 |---|---|---|
-| `readOnlyHint: true` | List, get, search tools | Enables parallel execution |
-| `destructiveHint: true` | Delete tools | Signals destructive action |
-| `idempotentHint: true` | Update tools | Repeated calls have no extra effect |
+| `readOnlyHint: true` | `list_`/`get_`/`report_` tools | Enables parallel execution |
+| `destructiveHint: true` | `delete_` tools | Signals destructive action |
+| `idempotentHint: true` | `update_` tools | Repeated calls have no extra effect |
+| *(none)* | `create_` tools | Deliberate: a create is neither read-only, idempotent, nor destructive of existing data |
+
+This convention is keyed on the tool's action prefix and **enforced by
+`test/tool-inventory.test.ts`**. A tool whose name matches no action prefix
+(e.g. `freshbooks_help`) must be added to that test's explicit allow-list with
+its expected annotations — the test fails otherwise.
 
 ## Error Handling
 
@@ -570,6 +576,28 @@ try {
   };
 }
 ```
+
+## Doc-maintenance contract
+
+The tool inventory and tool count appear in multiple documents. When tools are
+added, renamed, or removed, this is the authoritative map of what must change
+and what catches you if you forget:
+
+**Test-enforced (a failing test names the file):**
+- Tool **count** — README.md, SETUP.md, `package.json` description, CLAUDE.md,
+  `docs/claude-project-system-prompt.md` → `test/doc-tool-count.test.ts`
+- Tool **names** — README.md, CLAUDE.md, `docs/claude-project-system-prompt.md`
+  (both directions: missing AND stale) → `test/doc-inventory.test.ts`
+- **Report params** — schemas vs `src/report-params.ts` → `test/report-params.test.ts`
+- **Annotations** — the action-prefix convention → `test/tool-inventory.test.ts`
+
+**Derived automatically (zero edits):** `freshbooks_help` topics `tools`
+(renders the live registry) and `reports` (renders `REPORT_PARAMS`).
+
+**Hand-written and rot-prone (no guard — check deliberately):** SETUP.md's
+example prompts and limitations list; `src/docs/content.ts` prose topics;
+`CHANGELOG.md`. When you add a capability, grep these for the affected
+resource before shipping.
 
 ## Shareability
 
@@ -619,7 +647,7 @@ This project is designed so any FreshBooks user can use it:
 - When adding a new tool: define with `tool()` in `src/tools/<resource>.ts`, then add to the tools array in `src/tool-registry.ts`
 - Use Zod `.describe()` on every schema field so Claude understands parameters
 - Use `.default()` on optional Zod fields with sensible defaults
-- Mark read-only tools (list, get) with `{ annotations: { readOnlyHint: true } }`
+- Annotations follow the action prefix (test-enforced): `list_`/`get_`/`report_` → `readOnlyHint`; `delete_` → `destructiveHint`; `update_` → `idempotentHint`; `create_` → none; prefix-free tools go in `test/tool-inventory.test.ts`'s allow-list
 - Use the FreshBooks SDK client methods — never raw fetch/HTTP
 - Check `response.ok` before accessing `response.data`, and catch thrown errors — knowing that for SDK-backed tools the throw is the real error path (`call()` never returns `ok: false`; see Error Handling)
 - Monetary amounts are strings — use `big.js` for any arithmetic
