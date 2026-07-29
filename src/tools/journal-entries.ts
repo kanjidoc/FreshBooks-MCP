@@ -24,7 +24,7 @@ export const createJournalEntry = tool(
   {
     description: z.string().describe("Description of the journal entry"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
-    entry_date: z.string().optional().describe("Journal entry date in YYYY-MM-DD format (defaults to today)"),
+    entry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Journal entry date in YYYY-MM-DD format (defaults to today)"),
     credit_entries: z.array(
       z.object({
         sub_account_id: z.number().int().describe(

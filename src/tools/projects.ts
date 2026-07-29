@@ -87,7 +87,7 @@ export const createProject = tool(
     client_id: z.number().int().optional().describe("Client ID to associate with the project"),
     project_type: z.string().optional().describe("Project type (e.g. 'fixed_price', 'hourly_rate')"),
     description: z.string().optional().describe("Project description"),
-    due_date: z.string().optional().describe("Project due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Project due date in YYYY-MM-DD format"),
     budget: z.number().optional().describe("Project budget in hours"),
     fixed_price: z.string().optional().describe("Fixed price for the project as a monetary amount string (e.g. '1500.00')"),
   },
@@ -138,7 +138,7 @@ export const updateProject = tool(
     project_id: z.number().int().describe("The project ID to update"),
     title: z.string().optional().describe("Updated project title"),
     description: z.string().optional().describe("Updated project description"),
-    due_date: z.string().optional().describe("Updated due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated due date in YYYY-MM-DD format"),
     budget: z.number().optional().describe("Updated project budget in hours"),
   },
   async (args) => {

@@ -89,7 +89,7 @@ export const createOtherIncome = tool(
       amount: z.string().describe("Amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Income amount as a Money object"),
-    date: z.string().describe("Income date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Income date in YYYY-MM-DD format"),
     category_name: z
       .enum(["advertising", "in_person_sales", "online_sales", "rentals", "other"])
       .describe("Income category — one of the FreshBooks other-income categories (required)"),
@@ -147,7 +147,7 @@ export const updateOtherIncome = tool(
       amount: z.string().describe("Amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).optional().describe("Updated income amount"),
-    date: z.string().optional().describe("Updated income date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated income date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {

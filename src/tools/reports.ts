@@ -43,8 +43,8 @@ export const reportPaymentsCollected = tool(
   "freshbooks_report_payments_collected",
   "Generate a payments collected report for a given date range. Returns totals of payments received by currency and payment method.",
   {
-    start_date: z.string().describe("Report start date in YYYY-MM-DD format"),
-    end_date: z.string().describe("Report end date in YYYY-MM-DD format"),
+    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report start date in YYYY-MM-DD format"),
+    end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report end date in YYYY-MM-DD format"),
     currency_code: z.string().optional().describe("Filter by currency code (e.g. 'USD', 'CAD')"),
   },
   async (args) => {
@@ -88,8 +88,8 @@ export const reportProfitLoss = tool(
   "freshbooks_report_profit_loss",
   "Generate a profit and loss report for a given date range. Returns income, expenses, and net profit/loss totals. Supports cash-basis and fiscal-year reporting.",
   {
-    start_date: z.string().describe("Report start date in YYYY-MM-DD format"),
-    end_date: z.string().describe("Report end date in YYYY-MM-DD format"),
+    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report start date in YYYY-MM-DD format"),
+    end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report end date in YYYY-MM-DD format"),
     cash_based: z.boolean().optional().describe(CASH_BASED_DESC),
     fiscal_year_view: z
       .boolean()
@@ -136,8 +136,8 @@ export const reportTaxSummary = tool(
   "freshbooks_report_tax_summary",
   "Generate a tax summary report for a given date range. Returns tax collected and paid totals by tax name. Supports cash-basis reporting.",
   {
-    start_date: z.string().describe("Report start date in YYYY-MM-DD format"),
-    end_date: z.string().describe("Report end date in YYYY-MM-DD format"),
+    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report start date in YYYY-MM-DD format"),
+    end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Report end date in YYYY-MM-DD format"),
     // No fiscal_year_view here: the taxsummary endpoint does not parse it and
     // would silently ignore it, implying a filter that never applied.
     cash_based: z.boolean().optional().describe(CASH_BASED_DESC),

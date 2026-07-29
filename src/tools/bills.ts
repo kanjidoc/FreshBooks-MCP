@@ -96,7 +96,7 @@ export const createBill = tool(
       category_id: z.number().int().optional().describe("Expense category ID for the line (from freshbooks_list_expense_categories)"),
       quantity: z.number().default(1).describe("Quantity of the line item"),
     })).min(1).describe("Bill line items — at least one is required"),
-    due_date: z.string().describe("Bill due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Bill due date in YYYY-MM-DD format"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
   },
   async (args) => {

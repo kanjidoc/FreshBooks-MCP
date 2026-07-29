@@ -13,8 +13,8 @@ export const listExpenses = tool(
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
     search_vendor: z.string().optional().describe("Filter by vendor name"),
     search_category_id: z.number().int().optional().describe("Filter by expense category ID"),
-    search_date_min: z.string().optional().describe("Filter expenses on or after this date (YYYY-MM-DD)"),
-    search_date_max: z.string().optional().describe("Filter expenses on or before this date (YYYY-MM-DD)"),
+    search_date_min: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Filter expenses on or after this date (YYYY-MM-DD)"),
+    search_date_max: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Filter expenses on or before this date (YYYY-MM-DD)"),
     sort_by: z.string().optional().describe("Sort field (e.g. 'date', 'amount', 'vendor')"),
     sort_order: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
     includes: z.array(z.string()).optional().describe("Related resources to include (e.g. ['category'])"),
@@ -99,7 +99,7 @@ export const createExpense = tool(
   {
     category_id: z.number().int().describe("Expense category ID"),
     staff_id: z.number().int().describe("Staff member ID who incurred the expense"),
-    date: z.string().describe("Expense date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Expense date in YYYY-MM-DD format"),
     amount: z.object({
       amount: z.string().describe("Expense amount as a string, e.g. '50.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
@@ -158,7 +158,7 @@ export const updateExpense = tool(
     vendor: z.string().optional().describe("Updated vendor name"),
     notes: z.string().optional().describe("Updated notes about the expense"),
     category_id: z.number().int().optional().describe("Updated expense category ID"),
-    date: z.string().optional().describe("Updated expense date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated expense date in YYYY-MM-DD format"),
     amount: z.object({
       amount: z.string().describe("Expense amount as a string, e.g. '50.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),

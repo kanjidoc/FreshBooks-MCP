@@ -93,7 +93,7 @@ export const createPayment = tool(
       amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Payment amount as a Money object"),
-    date: z.string().describe("Payment date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Payment date in YYYY-MM-DD format"),
     type: z.enum([
       "Check", "Credit", "Cash", "Bank Transfer", "Credit Card",
       "Debit", "PayPal", "2Checkout", "VISA", "MASTERCARD",
@@ -153,7 +153,7 @@ export const updatePayment = tool(
       amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).optional().describe("Updated payment amount as a Money object"),
-    date: z.string().optional().describe("Updated payment date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated payment date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {

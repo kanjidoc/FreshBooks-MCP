@@ -85,7 +85,7 @@ export const createBillPayment = tool(
       amount: z.string().describe("Payment amount as a string, e.g. '250.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Payment amount as a Money object"),
-    paid_date: z.string().describe("Date the payment was made in YYYY-MM-DD format"),
+    paid_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Date the payment was made in YYYY-MM-DD format"),
     type: z
       .enum([
         "Check", "Credit", "Cash", "Bank Transfer", "Credit Card", "Debit", "PayPal",
@@ -137,7 +137,7 @@ export const updateBillPayment = tool(
       amount: z.string().describe("Updated payment amount as a string, e.g. '250.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).optional().describe("Updated payment amount as a Money object"),
-    paid_date: z.string().optional().describe("Updated date the payment was made in YYYY-MM-DD format"),
+    paid_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated date the payment was made in YYYY-MM-DD format"),
     type: z.string().optional().describe("Updated payment type (e.g. 'Check', 'Credit Card', 'Bank Transfer')"),
   },
   async (args) => {
