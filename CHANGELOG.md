@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Six ledger report tools** the frozen FreshBooks Node SDK never wrapped,
+  served raw (snake_case API fields) through the new raw-call layer:
+  `freshbooks_report_balance_sheet` (point-in-time `as_of_date` + up to 3
+  `compare_to` columns — the endpoint ignores start/end dates and the tool
+  says so), `freshbooks_report_general_ledger`,
+  `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`,
+  `freshbooks_report_expense_details`, and
+  `freshbooks_report_trial_balance`. 76 → 82 tools. Every response echoes
+  `params_the_server_actually_parsed` — the decoded `downloadToken.params`
+  claim, the API's own record of which filters it honored (the raw JWT
+  itself is stripped). A `detail: "summary"` default prunes nested
+  `sub_accounts[]` to `sub_accounts_omitted: N` (~10x smaller payloads;
+  `detail: "full"` keeps everything). Verified live by cross-footing on
+  every configured profile: trial balance, balance sheet, and general
+  ledger balance to the cent; cash-flow net change ties to the GL Cash
+  movement; accounts-aging ties to the sum of unpaid invoices;
+  expense-details ties record-for-record to `freshbooks_list_expenses`.
+
 - `src/raw-call.ts` — the single, tool-free escape hatch for FreshBooks
   endpoints the frozen Node SDK never wrapped. Routes through the SDK's own
   private `call()` (which re-syncs the rotated OAuth token per request),
