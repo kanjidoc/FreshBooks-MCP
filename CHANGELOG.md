@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `src/raw-call.ts` — the single, tool-free escape hatch for FreshBooks
+  endpoints the frozen Node SDK never wrapped. Routes through the SDK's own
+  private `call()` (which re-syncs the rotated OAuth token per request),
+  resolves the client from the active profile context so callers can never
+  cross accounts, and never throws: every failure returns a typed result
+  (`api_error` / `envelope_drift` with the raw body echoed / `integrity` /
+  `transport`). Exhaustive-pagination listing (`rawList`) computes
+  completeness, refuses to return partial data on integrity failures (page
+  echo mismatch, zero progress, mid-read errors, end-count mismatch), and
+  marks budget stops with a first-key `WARNING_INCOMPLETE`. Not itself a tool
+  — raw-backed tools arrive in later phases.
+- `freshbooks_help topic=reports` — the report parameter support matrix,
+  rendered live from `src/report-params.ts` (`REPORT_PARAMS`): per endpoint,
+  the honored params (transcribed from the `downloadToken.params` evidence
+  artifact), the proven-ignored params, wire-key mappings, and verification
+  date. `test/report-params.test.ts` asserts every report tool's schema stays
+  inside its entry.
+- Every date-only tool param now carries a `YYYY-MM-DD` regex, which compiles
+  into the JSON-Schema `pattern` — malformed dates are rejected client-side
+  before any API call (24 params across 10 tool files).
+- Test-suite typechecking: `npm run typecheck` (a sibling
+  `tsconfig.test.json`), wired into both CI workflows; `npm run lint` now
+  covers `test/` too.
+- New guard tests: `test/tool-inventory.test.ts` (name uniqueness, the
+  action-prefix annotation convention, raw-shape input schemas, the
+  account-param boundary, a ban on JSON-Schema-unrepresentable zod types, and
+  the raw-tier description marker), `test/doc-inventory.test.ts` (name-level
+  doc↔registry sync in both directions), and `test/sdk-contract.test.ts`
+  (pins `Client.prototype.call` arity 5 + exact-4.1.0, and enforces exactly
+  one `new Client(` and one `.axios` site in `src/`).
+
 - `freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;
   `freshbooks_report_tax_summary` accepts `cash_based`. FreshBooks reports default
   to an accrual basis, so cash-basis figures were previously unreachable through
@@ -64,6 +95,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Documentation
 
+- List-tool descriptions no longer open with "Supports pagination, search
+  filters, sorting, and includes." — 1.2KB of schema restatement in the
+  highest-attention position; the schema itself is authoritative.
+- CLAUDE.md gains a **doc-maintenance contract**: the map of every place the
+  tool inventory lives, split into test-enforced, derived, and hand-written
+  (rot-prone) sites.
+- The annotation convention (`create_` tools deliberately carry none;
+  prefix-free tools need a test allow-list entry) is documented in CLAUDE.md
+  and the `freshbooks_help` conventions topic, matching the new test.
 - `TOOL_AUDIT.md` is bannered as an executed historical snapshot, and its §9
   step 5 — which still prescribed the superseded `currency_code` wire key — is
   struck with a pointer to the correction. A fresh session following the doc's
