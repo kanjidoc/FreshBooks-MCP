@@ -1,6 +1,7 @@
 import "./load-env";
 import { join } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { Client } from "@freshbooks/api";
 import { freshbooksServer } from "./server";
 import { ensureFreshTokens } from "./freshbooks-client";
 import { lockPathFor, writeLock, removeLock } from "./server-lock";
@@ -34,6 +35,18 @@ async function main() {
   // withAccount covers correctness; this startup pass is best-effort.
   const transport = new StdioServerTransport();
   await freshbooksServer.instance.connect(transport);
+
+  // SDK-contract canary — AFTER connect (anything throwing in main() before it
+  // kills all tools), asserted on Client.prototype (constructing a real Client
+  // here would need credentials and mutate shared axios defaults), and it only
+  // WARNS on stderr: the 74 SDK-backed tools still work if raw access breaks.
+  // Hard enforcement lives in asRawCallable() and test/sdk-contract.test.ts.
+  const protoCall = (Client.prototype as unknown as { call?: unknown }).call;
+  if (typeof protoCall !== "function" || protoCall.length !== 5) {
+    console.error(
+      "[freshbooks] WARNING — @freshbooks/api Client.call() contract changed; raw-endpoint tools will refuse to run. SDK-backed tools are unaffected.",
+    );
+  }
 
   ensureFreshTokens().catch((err) =>
     console.error(
