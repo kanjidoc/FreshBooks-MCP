@@ -5,7 +5,9 @@ import {
   reportPaymentsCollected,
   reportProfitLoss,
   reportTaxSummary,
+  REPORT_PARAMS,
 } from "../src/tools/reports";
+import { allTools } from "../src/tool-registry";
 
 /** Serialize a search object exactly as the reports endpoints receive it. */
 function qs(search: Record<string, string | number | boolean>): string {
@@ -19,6 +21,42 @@ const schemaKeys = (t: unknown) => Object.keys((t as { inputSchema: object }).in
 // decoding each response's `downloadToken` JWT, whose `params` claim echoes the
 // server-side set. Unsupported params are SILENTLY DROPPED (no error, ok:true),
 // so offering one on the wrong tool would yield quietly wrong financial numbers.
+// REPORT_PARAMS (src/report-params.ts) is that matrix as data; this suite locks
+// every report tool's schema inside its entry.
+describe("REPORT_PARAMS conformance — schema ⊆ honored, schema ∩ ignored = ∅", () => {
+  // Args every report tool carries that are not wire params of the report
+  // endpoint itself.
+  const NON_WIRE_ARGS = new Set(["account", "detail"]);
+
+  for (const [key, spec] of Object.entries(REPORT_PARAMS)) {
+    it(`${spec.tool} stays inside the ${key} matrix entry`, () => {
+      const registered = allTools.find((t) => t.name === spec.tool);
+      expect(registered, `${spec.tool} is in REPORT_PARAMS but not registered`).toBeDefined();
+      const args = Object.keys(
+        (registered as unknown as { inputSchema: Record<string, unknown> }).inputSchema,
+      ).filter((a) => !NON_WIRE_ARGS.has(a));
+      for (const arg of args) {
+        const wire = spec.argToWire[arg] ?? arg;
+        expect(spec.honored, `${spec.tool} offers "${arg}" → wire "${wire}" not in honored`).toContain(wire);
+        expect(spec.ignored, `${spec.tool} offers "${arg}" → wire "${wire}" is proven-ignored`).not.toContain(
+          wire,
+        );
+      }
+    });
+    it(`${key} honored/ignored are disjoint and artifact-backed`, () => {
+      expect(spec.honored.filter((h) => spec.ignored.includes(h))).toEqual([]);
+      expect(spec.artifact).toBe("downloadToken.params");
+      expect(spec.verified).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+  }
+
+  it("every registered report tool has a REPORT_PARAMS entry", () => {
+    const inMatrix = new Set(Object.values(REPORT_PARAMS).map((s) => s.tool));
+    const reportTools = allTools.map((t) => t.name).filter((n) => n.startsWith("freshbooks_report_"));
+    expect(reportTools.filter((n) => !inMatrix.has(n))).toEqual([]);
+  });
+});
+
 describe("report parameter support matrix", () => {
   it("profit & loss offers both cash_based and fiscal_year_view", () => {
     const keys = schemaKeys(reportProfitLoss);

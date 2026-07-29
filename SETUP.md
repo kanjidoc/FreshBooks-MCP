@@ -250,8 +250,12 @@ Just talk to Claude in plain English. For example:
 - *"Show me all my unpaid invoices."*
 - *"Create an invoice for Acme Corp for 10 hours of consulting at $150/hour."*
 - *"What were my biggest expenses this quarter?"*
+- *"Show me a balance sheet as of June 30, compared to a year ago."*
+- *"Run a profit & loss for this year on a cash basis."*
+- *"Who owes me money, and how overdue are they?"* (accounts aging)
+- *"Does my ledger balance?"* (trial balance)
 
-There are **76 tools** in total. To see what's possible, ask Claude:
+There are **97 tools** in total. To see what's possible, ask Claude:
 *"What FreshBooks tools do you have?"* or *"Show me the FreshBooks help."*
 
 > **More than one FreshBooks login?** This server can connect several. Run `npm
@@ -318,6 +322,10 @@ went unused for about a month). Just re-run `npm run setup` to reconnect it.
   credit notes and journal-entry data works fine. See [CHANGELOG.md](CHANGELOG.md).
 - **Bills, bill payments, and bill vendors** can only be *created* if your FreshBooks
   account has the **Accounts Payable** add-on enabled. *Listing* them always works.
+- **Some reports depend on your FreshBooks plan.** A report tool returning a
+  **403** means that feature isn't included in that login's FreshBooks plan or
+  role (for example, accounts-*payable* aging needs the AP add-on). That's a
+  FreshBooks entitlement, not a bug — retrying won't change it.
 
 Everything else — invoices, clients, expenses, payments, time tracking, items,
 projects, reports, and more — works on a regular FreshBooks account.
@@ -339,6 +347,8 @@ projects, reports, and more — works on a regular FreshBooks account.
 | Claude has no FreshBooks tools after setup | Make sure you **fully quit and reopened** Claude. **(Desktop)** check the config path points to the real `dist/index.js`; look for the tools/hammer icon. **(Code)** make sure the project folder is open and the "freshbooks" server was enabled. |
 | One login has more than one FreshBooks business | The wizard lists them and lets you pick which business that login's profile should use. To connect more than one as separate accounts, re-run `npm run setup` and add another login. |
 | Claude picked the wrong account, or asks which account | With two or more logins configured, name the account in your request (e.g. "for acme"). Ask "what FreshBooks accounts are configured?" to see the valid names. |
+| Claude asks permission for every FreshBooks action | Deliberate: the recommended allowlist names each tool exactly instead of wildcarding all of them, so every money-touching write keeps a human gate. Allow the individual read-only tools you use often; keep approving writes one by one. |
+| A report answer starts with `WARNING_INCOMPLETE` | The listing stopped early at a safety limit, so totals computed from it would be wrong. Ask again with a narrower date range or filter. |
 
 Still stuck? Open an issue at
 [github.com/kanjidoc/FreshBooks-MCP/issues](https://github.com/kanjidoc/FreshBooks-MCP/issues).

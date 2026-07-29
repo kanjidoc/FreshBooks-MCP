@@ -25,6 +25,14 @@ async function connect(server: any) {
   return client;
 }
 
+// The REAL server module is a singleton and accepts exactly one transport —
+// every suite that talks to it must share this one connection.
+let realClientPromise: Promise<McpClient> | null = null;
+function realClient(): Promise<McpClient> {
+  realClientPromise ??= import("../src/server").then(({ freshbooksServer }) => connect(freshbooksServer));
+  return realClientPromise;
+}
+
 beforeAll(() => {
   process.env.FRESHBOOKS_CLIENT_ID = "cid";
   const root = mkdtempSync(join(tmpdir(), "fb-rt-"));
@@ -93,10 +101,63 @@ describe("real MCP round-trip (Amendment A11)", () => {
   });
 });
 
+describe("zod defaults survive the REAL MCP dispatch layer", () => {
+  // Two schema defaults do real work: estimateLine's nested currency_code
+  // ("USD" — without it, code: undefined would go onto a real POST) and the
+  // raw reports' detail: "summary" (without it every report flips to full).
+  // handler(args as any) tests bypass validation entirely, so an Agent-SDK
+  // change that stops applying defaults (especially inside array items)
+  // would ship green without this round-trip.
+  it("create_estimate applies the nested currency_code default through callTool", async () => {
+    const { resolveProfile } = await import("../src/profiles");
+    const bodies: unknown[] = [];
+    const call = async (_m: string, _u: string, _c: object, body: unknown, _n: string) => {
+      bodies.push(body);
+      return { ok: true, data: { response: { result: { estimate: { id: 1, status: 1 } } } } };
+    };
+    resolveProfile("acme").client = { call } as any;
+    const client = await realClient();
+    const res = await client.callTool({
+      name: "freshbooks_create_estimate",
+      arguments: {
+        account: "acme",
+        client_id: 7,
+        create_date: "2026-07-29",
+        lines: [{ name: "L", qty: "1", unit_cost: "5.00" }], // currency_code omitted
+      },
+    });
+    expect(res.isError).toBeUndefined();
+    const line = (bodies[0] as any).estimate.lines[0];
+    expect(line.unit_cost).toEqual({ amount: "5.00", code: "USD" });
+    resolveProfile("acme").client = null;
+  });
+
+  it("a raw report applies detail: 'summary' (pruning) through callTool", async () => {
+    const { resolveProfile } = await import("../src/profiles");
+    const call = async (_m: string, _u: string, _c: object, _d: unknown, _n: string) => ({
+      ok: true,
+      data: {
+        response: {
+          result: { trial_balance: { data: [{ name: "Equity", sub_accounts: [{ a: 1 }] }] } },
+        },
+      },
+    });
+    resolveProfile("acme").client = { call } as any;
+    const client = await realClient();
+    const res = await client.callTool({
+      name: "freshbooks_report_trial_balance",
+      arguments: { account: "acme", start_date: "2026-01-01", end_date: "2026-06-30" }, // detail omitted
+    });
+    expect(res.isError).toBeUndefined();
+    const parsed = JSON.parse((res.content as any)[0].text);
+    expect(parsed.report.data[0].sub_accounts_omitted).toBe(1); // summary pruning applied
+    resolveProfile("acme").client = null;
+  });
+});
+
 describe("real server exposes account correctly", () => {
   it("freshbooks_list_invoices has `account`; help and list_accounts do not", async () => {
-    const { freshbooksServer } = await import("../src/server");
-    const client = await connect(freshbooksServer);
+    const client = await realClient();
     const { tools } = await client.listTools();
     const inv = tools.find((t: any) => t.name === "freshbooks_list_invoices")!;
     expect((inv.inputSchema as any).properties.account.type).toBe("string");

@@ -17,6 +17,25 @@ import { reportPaymentsCollected, reportProfitLoss, reportTaxSummary } from "./t
 import { listTasks, getTask, createTask, updateTask, deleteTask } from "./tools/tasks";
 import { listExpenseCategories, getExpenseCategory } from "./tools/expense-categories";
 import { createJournalEntry, listJournalEntryAccounts, listJournalEntryDetails } from "./tools/journal-entries";
+import {
+  reportBalanceSheet,
+  reportGeneralLedger,
+  reportCashFlow,
+  reportAccountsAging,
+  reportExpenseDetails,
+  reportTrialBalance,
+} from "./tools/raw/reports";
+import {
+  listEstimates,
+  getEstimate,
+  createEstimate,
+  updateEstimate,
+  deleteEstimate,
+  sendEstimate,
+} from "./tools/raw/estimates";
+import { listStaff, getStaffMember } from "./tools/raw/staff";
+import { listTaxes, getTax, createTax, updateTax, deleteTax } from "./tools/raw/taxes";
+import { listInvoiceProfiles, getInvoiceProfile } from "./tools/raw/invoice-profiles";
 import { freshbooksHelp } from "./tools/help";
 
 /**
@@ -57,8 +76,19 @@ const accountScoped = [
   listProjects, getProject, createProject, updateProject, deleteProject,
   // Services
   listServices, getService, createService,
-  // Reports
+  // Reports (SDK-backed)
   reportPaymentsCollected, reportProfitLoss, reportTaxSummary,
+  // Reports (raw-backed — src/tools/raw/, direct API access via src/raw-call.ts)
+  reportBalanceSheet, reportGeneralLedger, reportCashFlow,
+  reportAccountsAging, reportExpenseDetails, reportTrialBalance,
+  // Estimates (raw-backed; send is the ONLY emailing action — create is draft-only)
+  listEstimates, getEstimate, createEstimate, updateEstimate, deleteEstimate, sendEstimate,
+  // Staff (raw-backed, read-only by decision — create_staff emails a real human)
+  listStaff, getStaffMember,
+  // Taxes (raw-backed)
+  listTaxes, getTax, createTax, updateTax, deleteTax,
+  // Invoice profiles (raw-backed; writes gated — can auto-generate real invoices)
+  listInvoiceProfiles, getInvoiceProfile,
   // Tasks
   listTasks, getTask, createTask, updateTask, deleteTask,
   // Expense categories (read-only)

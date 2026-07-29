@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listBillVendors = tool(
   "freshbooks_list_bill_vendors",
-  "List bill vendors for the FreshBooks account. Supports pagination, search by vendor name, and sorting. Returns vendor contact details, address, and currency info.",
+  "List bill vendors for the FreshBooks account. Returns vendor contact details, address, and currency info.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -204,7 +204,7 @@ export const updateBillVendor = tool(
 
 export const deleteBillVendor = tool(
   "freshbooks_delete_bill_vendor",
-  "Delete a bill vendor by ID. This action is permanent and cannot be undone.",
+  "Delete a bill vendor by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     vendor_id: z.number().int().describe("The bill vendor ID to delete"),
   },

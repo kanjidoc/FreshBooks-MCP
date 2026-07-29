@@ -1,0 +1,15 @@
+{
+  // Typechecks src/ AND test/ together, emitting nothing. A sibling config —
+  // not an `include` widening of tsconfig.json — because src/ compiles to
+  // CommonJS while the test files are executed by vitest's own transform;
+  // widening the build config would either fail (TS1343: import.meta under
+  // CommonJS) or start emitting compiled tests into dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "test/**/*"]
+}

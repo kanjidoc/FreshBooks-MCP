@@ -12,7 +12,7 @@ Copy everything below this line into your project's custom instructions:
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 76 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
+You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 97 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
@@ -48,14 +48,27 @@ You have access to a FreshBooks MCP server that lets you interact with one or mo
 
 **Journal Entries:** `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 
-**Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`
+**Estimates:** `freshbooks_list_estimates`, `freshbooks_get_estimate`, `freshbooks_create_estimate` (draft only — emails nothing), `freshbooks_update_estimate`, `freshbooks_delete_estimate` (soft delete), `freshbooks_send_estimate` (EMAILS the estimate — requires an explicit email_recipients list; the only sending action) — quotes sent before invoicing (raw snake_case fields)
+
+**Staff (read-only):** `freshbooks_list_staff`, `freshbooks_get_staff_member` — the account's team members and their staff ids (needed by `freshbooks_create_expense`); the API's `api_token` credential field is stripped
+
+**Taxes:** `freshbooks_list_taxes`, `freshbooks_get_tax`, `freshbooks_create_tax`, `freshbooks_update_tax`, `freshbooks_delete_tax` (hard delete — permanent) — the account's tax definitions (name, rate, number), not a tax report
+
+**Invoice Profiles (read-only):** `freshbooks_list_invoice_profiles`, `freshbooks_get_invoice_profile` — recurring-invoice templates
+
+**Reports:** `freshbooks_report_profit_loss`, `freshbooks_report_payments_collected`, `freshbooks_report_tax_summary`, `freshbooks_report_balance_sheet`, `freshbooks_report_general_ledger`, `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`, `freshbooks_report_expense_details`, `freshbooks_report_trial_balance`
 
 Reports default to an **accrual** basis (income when invoiced, expenses when
-billed). Pass `cash_based: true` to `freshbooks_report_profit_loss` or
-`freshbooks_report_tax_summary` to report on a cash basis instead. Say which
-basis a figure came from whenever it could change the answer — an unpaid invoice
-counts as income under accrual but not under cash. `freshbooks_report_profit_loss`
-also takes `fiscal_year_view` to align to the account's fiscal year.
+billed). Pass `cash_based: true` where offered to report on a cash basis
+instead. Say which basis a figure came from whenever it could change the answer
+— an unpaid invoice counts as income under accrual but not under cash.
+`freshbooks_report_profit_loss` also takes `fiscal_year_view` to align to the
+account's fiscal year. The six ledger reports (balance sheet, general ledger,
+cash flow, accounts aging, expense details, trial balance) return **raw API
+field names (snake_case)** and echo `params_the_server_actually_parsed` —
+check it to confirm a filter really applied. The balance sheet takes
+`as_of_date` (a point-in-time statement), not a start/end range. Call
+`freshbooks_help topic=reports` for the full per-endpoint parameter matrix.
 
 **Accounts:** `freshbooks_list_accounts` — lists the configured FreshBooks logins (each profile's name, account/business id, company, and token health). Account-free (takes no `account` parameter).
 
@@ -65,11 +78,11 @@ also takes `fiscal_year_view` to align to the account's fiscal year.
 
 1. **Monetary amounts** are strings (e.g., `"500.00"`) with a currency code (e.g., `"USD"`). Never use floating-point math — the server preserves decimal precision with string amounts.
 
-2. **Pagination:** All list tools accept `page` (default: 1) and `per_page` (default: 25, max: 100). When the user asks for "all" records, paginate through results.
+2. **Pagination:** Most list tools accept `page` (default: 1) and `per_page` (default: 25, max: 100). When the user asks for "all" records, paginate through results. Exceptions that always return everything in one response: `freshbooks_list_services`, `freshbooks_list_accounts`, and `freshbooks_list_journal_entry_accounts` (that endpoint ignores pagination server-side, so the params are not offered). Trust each tool's schema, not this rule, for whether pagination exists.
 
 3. **Search filters:** List tools accept optional search parameters for filtering. Use these to narrow results rather than fetching everything. Each tool's parameters are self-documented via Zod `.describe()` — inspect the tool schema for available filters.
 
-4. **Sorting:** List tools support `sort_by` and `sort_order` (asc/desc).
+4. **Sorting:** Most list tools support `sort_by` and `sort_order` (asc/desc). Exceptions with no sorting: `freshbooks_list_accounts`, `freshbooks_list_bill_payments`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`, and `freshbooks_list_services`.
 
 5. **Includes:** Invoice and expense list tools support an `includes` array to fetch related sub-resources in a single call (e.g., `["lines"]` for invoice line items).
 

@@ -143,8 +143,10 @@ src/
 resolves the named \`account\` to a profile, runs \`refreshIfNeeded(profile)\`, and
 enters that profile's \`AsyncLocalStorage\` context → the handler builds a typed
 payload (its zero-arg \`getFreshBooksClient()\`/\`getAccountId()\` read the active
-profile) → the FreshBooks SDK serializes and sends it → the handler checks
-\`response.ok\`, catches any thrown error, and returns an MCP result. Handlers
+profile) → the FreshBooks SDK serializes and sends it → the handler catches the
+SDK's thrown error (the SDK signals every failure by throwing; its \`call()\`
+never returns \`ok: false\`, so the \`response.ok\` check handlers also carry is
+defense-in-depth, not the live error path) and returns an MCP result. Handlers
 never throw; on an unknown or missing \`account\` the wrapper returns an error
 result rather than throwing.
 
@@ -196,9 +198,12 @@ export const TOPIC_EXTENDING = `# FreshBooks MCP — Adding a Tool
 2. **Register it** — add the export to the array in \`src/tool-registry.ts\`.
    That is the only wiring step; token-refresh wrapping is automatic.
 
-3. **Handlers must never throw.** Wrap the body in try/catch. Check
-   \`response.ok\` before reading \`response.data\`; also catch thrown SDK errors.
-   Return \`{ content: [{ type: "text", text }], isError: true }\` on failure.
+3. **Handlers must never throw.** Wrap the body in try/catch. SDK-backed
+   resources signal every error by THROWING (\`{ statusCode, message, errors[] }\`)
+   — the SDK's \`call()\` never returns \`ok: false\`, so the conventional
+   \`response.ok\` check is defense-in-depth, not the real error path; the catch
+   block is. Return \`{ content: [{ type: "text", text }], isError: true }\` on
+   failure.
 
 **SDK gotchas (these caused real bugs — see TOOL_AUDIT.md):**
 - **Method signatures vary by resource.** Most creates are \`create(data, accountId)\`,
@@ -220,8 +225,12 @@ export const TOPIC_CONVENTIONS = `# FreshBooks MCP — Conventions
   profile — individual tools don't declare it. \`freshbooks_list_accounts\` shows
   the valid names; it and \`freshbooks_help\` are the only account-free tools.
 - **Tool naming:** \`freshbooks_<action>_<resource>\` — e.g. \`freshbooks_list_invoices\`.
-- **Annotations:** \`readOnlyHint\` on list/get/report tools (enables parallel calls);
-  \`destructiveHint\` on delete tools; \`idempotentHint\` on update tools.
+- **Annotations follow the action prefix** (enforced by \`test/tool-inventory.test.ts\`):
+  \`readOnlyHint\` on list/get/report tools (enables parallel calls);
+  \`destructiveHint\` on delete tools; \`idempotentHint\` on update tools; create
+  tools carry NONE (deliberate — a create is neither read-only, idempotent, nor
+  destructive of existing data). Tools matching no prefix need an entry in that
+  test's allow-list.
 - **Handlers never throw** — uncaught exceptions kill the agent loop. Every handler
   is try/catch wrapped and returns \`isError: true\` on failure.
 - **Money is a string** — FreshBooks returns \`{ amount: "12.34", code: "USD" }\`.
@@ -229,8 +238,9 @@ export const TOPIC_CONVENTIONS = `# FreshBooks MCP — Conventions
 - **Dates** — date-only accounting fields (\`YYYY-MM-DD\`) are parsed with
   \`parseLocalDate()\` to avoid a UTC off-by-one. Full timestamps keep their offset.
 - **TypeScript strict mode** — prefer SDK model types over \`any\`.
-- **Errors come two ways** — \`response.ok === false\`, OR a thrown exception with
-  \`{ statusCode, message, errors[] }\`. Handle both.`;
+- **SDK errors arrive by throwing** — \`{ statusCode, message, errors[] }\`. The
+  SDK's \`call()\` never returns \`ok: false\`; handlers still check \`response.ok\`
+  as defense-in-depth, but the catch block is the live error path.`;
 
 export const TOPIC_TROUBLESHOOTING = `# FreshBooks MCP — Troubleshooting
 
@@ -269,6 +279,30 @@ The list/get tools for credit notes and journal entries work normally.
 flag — the FreshBooks SDK's transformServiceRequest serializes only the service
 name, so any billable value would be silently dropped. Change it in the
 FreshBooks web UI if a service must be non-billable.
+
+**A listing starts with \`WARNING_INCOMPLETE\`.** A raw exhaustive listing hit a
+safety budget (page cap, time budget, or size ceiling) and stopped early —
+\`stopped_by\` says which. Every total, sum, or count computed from that payload
+WILL be wrong. Narrow the query (a tighter date range or filter) and rerun; do
+not aggregate the partial rows.
+
+**A raw report/tool returns 403.** A permanent capability gap: the FreshBooks
+plan or role behind that account profile does not include the feature (e.g.
+accounts-payable aging needs the AP add-on). Retrying cannot help — name the
+profile to the user. This differs from 401 (an expired/revoked token, which
+\`npm run refresh-tokens\` fixes).
+
+**"My date range did nothing" on a report.** Two common causes. (1) The balance
+sheet is a point-in-time statement: it ignores \`start_date\`/\`end_date\`
+entirely and takes \`as_of_date\` (plus \`compare_to\` columns). (2) A filter the
+endpoint doesn't parse is silently dropped — check the
+\`params_the_server_actually_parsed\` echo in the response, and
+\`freshbooks_help topic=reports\` for what each report honors.
+
+**Claude keeps asking permission for every FreshBooks tool.** Deliberate: the
+recommended allowlist names each tool exactly rather than wildcarding
+\`mcp__freshbooks__*\`, so each write keeps a human gate. Allow individual tools
+you trust rather than the wildcard.
 
 **Build errors after editing a tool.** Payloads are typed against SDK model
 interfaces — a compile error usually means a wrong property name. Fix the name;

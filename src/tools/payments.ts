@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listPayments = tool(
   "freshbooks_list_payments",
-  "List payments for the FreshBooks account. Supports pagination, search filters, and sorting. Returns payment summaries including amount, date, type, and associated invoice.",
+  "List payments for the FreshBooks account. Returns payment summaries including amount, date, type, and associated invoice.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -93,7 +93,7 @@ export const createPayment = tool(
       amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Payment amount as a Money object"),
-    date: z.string().describe("Payment date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Payment date in YYYY-MM-DD format"),
     type: z.enum([
       "Check", "Credit", "Cash", "Bank Transfer", "Credit Card",
       "Debit", "PayPal", "2Checkout", "VISA", "MASTERCARD",
@@ -153,7 +153,7 @@ export const updatePayment = tool(
       amount: z.string().describe("Payment amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).optional().describe("Updated payment amount as a Money object"),
-    date: z.string().optional().describe("Updated payment date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated payment date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {
@@ -192,7 +192,7 @@ export const updatePayment = tool(
 
 export const deletePayment = tool(
   "freshbooks_delete_payment",
-  "Delete a payment by ID. This action is permanent and cannot be undone.",
+  "Delete a payment by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     payment_id: z.string().describe("The payment ID to delete"),
   },

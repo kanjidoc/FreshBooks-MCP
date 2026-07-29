@@ -1,15 +1,83 @@
-import { writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, existsSync, readFileSync, rmSync, readdirSync } from "node:fs";
+import { join, dirname, basename } from "node:path";
 
+/**
+ * Per-pid lock files. A single shared `.server.lock` was last-writer-wins: N
+ * servers overwrote one file, and the FIRST exiter deleted it — unlocking
+ * migration for everyone while N-1 servers still held live tokens (the A2
+ * CRITICAL race this lock exists to prevent). Each server therefore writes its
+ * own `.server.lock.<pid>`, removes only its own on exit, and freshness scans
+ * the whole family. The legacy shared `.server.lock` is still honored on read
+ * (a server built before this fix may hold one) but is never written.
+ */
 export function lockPathFor(rootDir: string): string {
   return join(rootDir, ".server.lock");
 }
-export function writeLock(path: string): void {
-  writeFileSync(path, JSON.stringify({ pid: process.pid, at: Date.now() }));
+
+function ownLockPath(basePath: string): string {
+  return `${basePath}.${process.pid}`;
 }
-export function removeLock(path: string): void {
+
+function readLockPid(path: string): unknown {
   try {
-    if (existsSync(path)) rmSync(path);
+    return JSON.parse(readFileSync(path, "utf8")).pid;
+  } catch {
+    return undefined;
+  }
+}
+
+function pidIsAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe (sends nothing)
+    return true;
+  } catch (err) {
+    // EPERM => alive but not ours; ESRCH => dead
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+/** The legacy shared file plus every per-pid sibling for this base path. */
+function allLockFiles(basePath: string): string[] {
+  const dir = dirname(basePath);
+  const base = basename(basePath);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names.filter((n) => n === base || n.startsWith(`${base}.`)).map((n) => join(dir, n));
+}
+
+export function writeLock(basePath: string): void {
+  writeFileSync(ownLockPath(basePath), JSON.stringify({ pid: process.pid, at: Date.now() }));
+  // Opportunistic sweep of crash leftovers: a sibling is removed ONLY when it
+  // PARSES and its pid is provably dead. Both ambiguous cases fail closed:
+  // pid reuse (kill(pid, 0) on a reused pid says "alive" → kept) and a
+  // malformed/truncated file (possibly a live server's mid-write — deleting
+  // it would re-open the exact migration-vs-live-server race this lock
+  // prevents → kept; it gets swept later once parseable and dead).
+  for (const f of allLockFiles(basePath)) {
+    if (f === ownLockPath(basePath)) continue;
+    const pid = readLockPid(f);
+    if (typeof pid === "number" && !pidIsAlive(pid)) {
+      try {
+        rmSync(f);
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+}
+
+export function removeLock(basePath: string): void {
+  try {
+    const own = ownLockPath(basePath);
+    if (existsSync(own)) rmSync(own);
+    // The legacy shared file is removed ONLY when it records our own pid —
+    // deleting another live server's lock is the exact defect this fixes.
+    if (existsSync(basePath) && readLockPid(basePath) === process.pid) rmSync(basePath);
   } catch {
     /* best effort */
   }
@@ -22,21 +90,8 @@ export function removeLock(path: string): void {
  * concurrently with it and burn a token (the A2 CRITICAL race). A reused PID
  * after an uncleaned crash fails CLOSED (migration refuses; recover via the
  * `confirmNoServer` override on `runMigration`), which is the correct bias for a
- * token-safety lock.
+ * token-safety lock. True if ANY lock file in the family holds a live pid.
  */
-export function isServerLockFresh(path: string): boolean {
-  if (!existsSync(path)) return false;
-  let pid: unknown;
-  try {
-    pid = JSON.parse(readFileSync(path, "utf8")).pid;
-  } catch {
-    return false;
-  }
-  if (typeof pid !== "number") return false;
-  try {
-    process.kill(pid, 0); // signal 0 = liveness probe (sends nothing)
-    return true;
-  } catch (err: any) {
-    return err?.code === "EPERM"; // EPERM => alive but not ours; ESRCH => dead
-  }
+export function isServerLockFresh(basePath: string): boolean {
+  return allLockFiles(basePath).some((f) => pidIsAlive(readLockPid(f)));
 }

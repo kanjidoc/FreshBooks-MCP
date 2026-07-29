@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listProjects = tool(
   "freshbooks_list_projects",
-  "List projects for the FreshBooks account. Supports pagination and sorting. Returns project summaries including title, client, type, budget, and due date.",
+  "List projects for the FreshBooks account. Returns project summaries including title, client, type, budget, and due date.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -87,7 +87,7 @@ export const createProject = tool(
     client_id: z.number().int().optional().describe("Client ID to associate with the project"),
     project_type: z.string().optional().describe("Project type (e.g. 'fixed_price', 'hourly_rate')"),
     description: z.string().optional().describe("Project description"),
-    due_date: z.string().optional().describe("Project due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Project due date in YYYY-MM-DD format"),
     budget: z.number().optional().describe("Project budget in hours"),
     fixed_price: z.string().optional().describe("Fixed price for the project as a monetary amount string (e.g. '1500.00')"),
   },
@@ -138,7 +138,7 @@ export const updateProject = tool(
     project_id: z.number().int().describe("The project ID to update"),
     title: z.string().optional().describe("Updated project title"),
     description: z.string().optional().describe("Updated project description"),
-    due_date: z.string().optional().describe("Updated due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated due date in YYYY-MM-DD format"),
     budget: z.number().optional().describe("Updated project budget in hours"),
   },
   async (args) => {
@@ -191,7 +191,7 @@ export const updateProject = tool(
 
 export const deleteProject = tool(
   "freshbooks_delete_project",
-  "Delete a project by ID. This action is permanent and cannot be undone.",
+  "Delete a project by ID. This is a hard delete: permanent and cannot be undone.",
   {
     project_id: z.number().int().describe("The project ID to delete"),
   },

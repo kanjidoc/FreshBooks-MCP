@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listBills = tool(
   "freshbooks_list_bills",
-  "List bills for the FreshBooks account. Supports pagination, sorting, and includes. Returns bill summaries including id, vendor, amount, status, and dates.",
+  "List bills for the FreshBooks account. Returns bill summaries including id, vendor, amount, status, and dates.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -96,7 +96,7 @@ export const createBill = tool(
       category_id: z.number().int().optional().describe("Expense category ID for the line (from freshbooks_list_expense_categories)"),
       quantity: z.number().default(1).describe("Quantity of the line item"),
     })).min(1).describe("Bill line items — at least one is required"),
-    due_date: z.string().describe("Bill due date in YYYY-MM-DD format"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Bill due date in YYYY-MM-DD format"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
   },
   async (args) => {
@@ -143,7 +143,7 @@ export const createBill = tool(
 
 export const deleteBill = tool(
   "freshbooks_delete_bill",
-  "Delete a bill by ID. This action is permanent and cannot be undone.",
+  "Delete a bill by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     bill_id: z.string().describe("The bill ID to delete"),
   },

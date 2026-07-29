@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listTasks = tool(
   "freshbooks_list_tasks",
-  "List tasks for the FreshBooks account. Supports pagination and sorting. Returns task summaries including name, description, rate, and billable status.",
+  "List tasks for the FreshBooks account. Returns task summaries including name, description, rate, and billable status.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -172,7 +172,7 @@ export const updateTask = tool(
 
 export const deleteTask = tool(
   "freshbooks_delete_task",
-  "Delete a task by ID. This action is permanent and cannot be undone.",
+  "Delete a task by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     task_id: z.number().int().describe("The task ID to delete"),
   },

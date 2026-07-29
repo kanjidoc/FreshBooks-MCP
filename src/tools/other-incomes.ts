@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listOtherIncomes = tool(
   "freshbooks_list_other_incomes",
-  "List other income records for the FreshBooks account. Supports pagination and sorting. Returns summaries including id, source, amount, date, and category.",
+  "List other income records for the FreshBooks account. Returns summaries including id, source, amount, date, and category.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -89,7 +89,7 @@ export const createOtherIncome = tool(
       amount: z.string().describe("Amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).describe("Income amount as a Money object"),
-    date: z.string().describe("Income date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Income date in YYYY-MM-DD format"),
     category_name: z
       .enum(["advertising", "in_person_sales", "online_sales", "rentals", "other"])
       .describe("Income category — one of the FreshBooks other-income categories (required)"),
@@ -147,7 +147,7 @@ export const updateOtherIncome = tool(
       amount: z.string().describe("Amount as a string, e.g. '500.00'"),
       code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
     }).optional().describe("Updated income amount"),
-    date: z.string().optional().describe("Updated income date in YYYY-MM-DD format"),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Updated income date in YYYY-MM-DD format"),
   },
   async (args) => {
     try {
@@ -200,7 +200,7 @@ export const updateOtherIncome = tool(
 
 export const deleteOtherIncome = tool(
   "freshbooks_delete_other_income",
-  "Delete an other income record by ID. This action is permanent and cannot be undone.",
+  "Delete an other income record by ID. This is a hard delete: permanent and cannot be undone.",
   {
     other_income_id: z.string().describe("The other income ID to delete"),
   },

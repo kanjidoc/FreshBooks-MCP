@@ -5,9 +5,107 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.2.0] - 2026-07-29
+
+The Tier 2 release: 76 → 97 tools, opening every safely-verifiable FreshBooks
+endpoint the frozen Node SDK never wrapped, through a new never-throw raw
+layer with exhaustive pagination, loud integrity guards, and per-response
+filter-verification echoes. Every number-producing tool was cross-footed
+against the live API on every configured profile before shipping.
 
 ### Added
+
+- **Tax writes** (`freshbooks_create_tax`, `freshbooks_update_tax`,
+  `freshbooks_delete_tax`) and **estimate writes**
+  (`freshbooks_create_estimate`, `freshbooks_update_estimate`,
+  `freshbooks_delete_estimate`, `freshbooks_send_estimate`). 90 → 97 tools.
+  Contracts transcribed from live go/no-go probes, then re-verified end to
+  end through the production tools: creates require the fields the API's
+  422s name (`customerid` — not clientid — plus `create_date` for
+  estimates); updates are PARTIAL — the API merges, verified by fields
+  surviving single-field PUTs; tax delete is HARD (permanent, 404s after),
+  estimate delete is SOFT (`vis_state: 1`, restorable). Creating an
+  estimate produces a draft and emails nothing; `freshbooks_send_estimate`
+  is the only emailing action, requires an explicit `email_recipients`
+  list, refuses (without any API call — tested) when it is missing or
+  empty, and was verified with exactly one live send to the owner's own
+  address. Invoice-profile writes do **not** ship: the Phase 6 gate
+  concluded NO-GO (a create probe could auto-invoice a real client; see
+  the go/no-go memo).
+
+- **Eight entity read tools** for resources the frozen SDK never wrapped
+  (raw snake_case fields; exhaustive listing with no `page` param):
+  `freshbooks_list_estimates`/`freshbooks_get_estimate` (quotes; the get
+  always passes `include[]=lines` — verified live that the API otherwise
+  omits line items), `freshbooks_list_staff`/`freshbooks_get_staff_member`
+  (closes a real hole — `freshbooks_create_expense` requires a `staff_id`
+  no tool could produce; **the API's `api_token` credential field is
+  stripped**, a live token was observed in it), `freshbooks_list_taxes`/
+  `freshbooks_get_tax` (tax definitions), and
+  `freshbooks_list_invoice_profiles`/`freshbooks_get_invoice_profile`
+  (recurring-invoice templates). 82 → 90 tools. Envelope keys probed live
+  on every configured profile (collection `staff` not `staffs`; single
+  `tax` not `taxes`); bogus IDs verified to return clean 404 errors; empty
+  collections are success, never errors. Per the no-guessed-filters
+  doctrine, no search filters are offered on any of them.
+- Written go/no-go memos for every write domain
+  (`docs/superpowers/specs/2026-07-29-tier2-write-go-no-go.md`), each gated
+  on a live artifact: **taxes GO** (full CRUD verified; merge-semantics
+  PUT; hard DELETE), **estimates GO** (create requires `customerid` +
+  `create_date`; merge-semantics PUT — lines survive; soft DELETE
+  `vis_state: 1`; nothing emailed on create), **staff NO-GO permanent**
+  (`create_staff` emails a real human), **invoice profiles NO-GO** (a
+  create probe could auto-invoice a real client; no record exists to verify
+  the single-item contract).
+
+- **Six ledger report tools** the frozen FreshBooks Node SDK never wrapped,
+  served raw (snake_case API fields) through the new raw-call layer:
+  `freshbooks_report_balance_sheet` (point-in-time `as_of_date` + up to 3
+  `compare_to` columns — the endpoint ignores start/end dates and the tool
+  says so), `freshbooks_report_general_ledger`,
+  `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`,
+  `freshbooks_report_expense_details`, and
+  `freshbooks_report_trial_balance`. 76 → 82 tools. Every response echoes
+  `params_the_server_actually_parsed` — the decoded `downloadToken.params`
+  claim, the API's own record of which filters it honored (the raw JWT
+  itself is stripped). A `detail: "summary"` default prunes nested
+  `sub_accounts[]` to `sub_accounts_omitted: N` (~10x smaller payloads;
+  `detail: "full"` keeps everything). Verified live by cross-footing on
+  every configured profile: trial balance, balance sheet, and general
+  ledger balance to the cent; cash-flow net change ties to the GL Cash
+  movement; accounts-aging ties to the sum of unpaid invoices;
+  expense-details ties record-for-record to `freshbooks_list_expenses`.
+
+- `src/raw-call.ts` — the single, tool-free escape hatch for FreshBooks
+  endpoints the frozen Node SDK never wrapped. Routes through the SDK's own
+  private `call()` (which re-syncs the rotated OAuth token per request),
+  resolves the client from the active profile context so callers can never
+  cross accounts, and never throws: every failure returns a typed result
+  (`api_error` / `envelope_drift` with the raw body echoed / `integrity` /
+  `transport`). Exhaustive-pagination listing (`rawList`) computes
+  completeness, refuses to return partial data on integrity failures (page
+  echo mismatch, zero progress, mid-read errors, end-count mismatch), and
+  marks budget stops with a first-key `WARNING_INCOMPLETE`. Not itself a tool
+  — raw-backed tools arrive in later phases.
+- `freshbooks_help topic=reports` — the report parameter support matrix,
+  rendered live from `src/report-params.ts` (`REPORT_PARAMS`): per endpoint,
+  the honored params (transcribed from the `downloadToken.params` evidence
+  artifact), the proven-ignored params, wire-key mappings, and verification
+  date. `test/report-params.test.ts` asserts every report tool's schema stays
+  inside its entry.
+- Every date-only tool param now carries a `YYYY-MM-DD` regex, which compiles
+  into the JSON-Schema `pattern` — malformed dates are rejected client-side
+  before any API call (24 params across 10 tool files).
+- Test-suite typechecking: `npm run typecheck` (a sibling
+  `tsconfig.test.json`), wired into both CI workflows; `npm run lint` now
+  covers `test/` too.
+- New guard tests: `test/tool-inventory.test.ts` (name uniqueness, the
+  action-prefix annotation convention, raw-shape input schemas, the
+  account-param boundary, a ban on JSON-Schema-unrepresentable zod types, and
+  the raw-tier description marker), `test/doc-inventory.test.ts` (name-level
+  doc↔registry sync in both directions), and `test/sdk-contract.test.ts`
+  (pins `Client.prototype.call` arity 5 + exact-4.1.0, and enforces exactly
+  one `new Client(` and one `.axios` site in `src/`).
 
 - `freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;
   `freshbooks_report_tax_summary` accepts `cash_based`. FreshBooks reports default
@@ -23,6 +121,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The staff tools' `api_token` stripping now also covers FAILURE paths: on
+  envelope drift (or an API error with no structured detail) the raw body is
+  echoed for the bug report, and it previously bypassed the success-path
+  strip — a drifted staff response would have echoed live credentials. Both
+  staff tools now deep-redact `api_token` (including nested carriers) across
+  the entire result before rendering; regression tests pin every echo path.
+- `.gitignore` now covers the whole per-pid lock family (`.server.lock*`),
+  and a lock file that had slipped into the branch is untracked; a test
+  asserts no lock file is ever tracked.
+- `writeLock`'s crash-leftover sweep fails closed on a malformed sibling
+  lock file (possibly a live server's mid-write) — only parseable, provably
+  dead pids are swept.
+- The server lock is now one file per pid (`.server.lock.<pid>`). A single
+  shared `.server.lock` was last-writer-wins: with N servers running, the first
+  to exit deleted the shared file and migration's "is a server running" guard —
+  the invariant that prevents rotating a refresh token concurrently with a live
+  server — reported no server while N−1 still held tokens. Freshness now scans
+  the whole lock family and is true if any live pid holds one; legacy shared
+  lock files are honored on read, never written.
+- `tsc` no longer emits on type errors (`noEmitOnError`). `dist/` is what the
+  installed MCP server runs and is gitignored, so a failing build silently
+  replacing a known-good `dist/` could not be rolled back with `git revert`.
+- `freshbooks_create_journal_entry`'s schema pointed at a top-level
+  `subAccountId` on `freshbooks_list_journal_entry_accounts` results; the field
+  exists only nested at `subAccounts[].subAccountId` (the parent level reads
+  `undefined`).
+- `freshbooks_list_journal_entry_accounts` no longer offers `page`/`per_page`.
+  The endpoint ignores both and echoes `per_page = total` (verified live), so
+  the params advertised a pagination contract that lied. Its description now
+  states the all-in-one-response behavior and disambiguates the tool from
+  `freshbooks_list_accounts` (logins) — it is the chart of accounts.
+- Nine of twelve `freshbooks_delete_*` descriptions claimed the delete is
+  "permanent and cannot be undone"; those nine are soft deletes
+  (`PUT vis_state:1`, restorable in the FreshBooks UI). Only
+  project/time_entry/other_income deletes are hard, and now say so explicitly.
+- `@freshbooks/api` is pinned to exact `4.1.0` (was `^4.1.0`). The SDK froze
+  there; the server's raw-endpoint layer depends on internals verified at that
+  version.
 - `freshbooks_report_payments_collected`'s `currency_code` filter had no effect.
   The endpoint parses the filter as the array param `currency_codes[]`; the
   handler sent the singular `currency_code`, which the API silently ignores —
@@ -38,6 +174,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Documentation
 
+- List-tool descriptions no longer open with "Supports pagination, search
+  filters, sorting, and includes." — 1.2KB of schema restatement in the
+  highest-attention position; the schema itself is authoritative.
+- CLAUDE.md gains a **doc-maintenance contract**: the map of every place the
+  tool inventory lives, split into test-enforced, derived, and hand-written
+  (rot-prone) sites.
+- The annotation convention (`create_` tools deliberately carry none;
+  prefix-free tools need a test allow-list entry) is documented in CLAUDE.md
+  and the `freshbooks_help` conventions topic, matching the new test.
+- `TOOL_AUDIT.md` is bannered as an executed historical snapshot, and its §9
+  step 5 — which still prescribed the superseded `currency_code` wire key — is
+  struck with a pointer to the correction. A fresh session following the doc's
+  own "execute Section 9 top-to-bottom" instruction would have re-introduced
+  the bug.
+- The Claude-project system prompt no longer claims every list tool paginates
+  and sorts; it names the exceptions and defers to each tool's schema.
+- The error-handling doctrine is scoped by tier at all six sites (`CLAUDE.md`,
+  `freshbooks_help` content): SDK-backed tools' errors THROW — the SDK's
+  `call()` never returns `ok: false`, so the `response.ok` check is
+  defense-in-depth — while raw-backed tools return a real `Result` whose `!ok`
+  branch is the only error path.
+- `CLAUDE.md` no longer lists "Chart of Accounts" as a never-wrapped resource:
+  no such endpoint exists (404, probed live); `journal_entry_accounts` IS the
+  chart of accounts. Prevents a duplicate tool.
 - Documented how to determine which params a FreshBooks report endpoint actually
   honors: decode the `downloadToken` JWT in any report response and read its
   `params` claim, which echoes the set the server parsed. Unsupported params are

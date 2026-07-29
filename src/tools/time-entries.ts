@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listTimeEntries = tool(
   "freshbooks_list_time_entries",
-  "List time entries for the FreshBooks account. Supports pagination and sorting. Returns time entry summaries including duration, client, project, and notes.",
+  "List time entries for the FreshBooks account. Returns time entry summaries including duration, client, project, and notes.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
@@ -191,7 +191,7 @@ export const updateTimeEntry = tool(
 
 export const deleteTimeEntry = tool(
   "freshbooks_delete_time_entry",
-  "Delete a time entry by ID. This action is permanent and cannot be undone.",
+  "Delete a time entry by ID. This is a hard delete: permanent and cannot be undone.",
   {
     time_entry_id: z.number().int().describe("The time entry ID to delete"),
   },

@@ -24,11 +24,11 @@ export const createJournalEntry = tool(
   {
     description: z.string().describe("Description of the journal entry"),
     currency_code: z.string().default("USD").describe("Currency code, e.g. 'USD'"),
-    entry_date: z.string().optional().describe("Journal entry date in YYYY-MM-DD format (defaults to today)"),
+    entry_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Journal entry date in YYYY-MM-DD format (defaults to today)"),
     credit_entries: z.array(
       z.object({
         sub_account_id: z.number().int().describe(
-          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+          "Sub-account ID — from freshbooks_list_journal_entry_accounts, the nested subAccounts[].subAccountId field (it is NOT on the parent account record, where it reads undefined)"
         ),
         amount: z.string().describe("Credit amount, e.g. '500.00'"),
       })
@@ -36,7 +36,7 @@ export const createJournalEntry = tool(
     debit_entries: z.array(
       z.object({
         sub_account_id: z.number().int().describe(
-          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+          "Sub-account ID — from freshbooks_list_journal_entry_accounts, the nested subAccounts[].subAccountId field (it is NOT on the parent account record, where it reads undefined)"
         ),
         amount: z.string().describe("Debit amount, e.g. '500.00'"),
       })
@@ -90,23 +90,15 @@ export const createJournalEntry = tool(
 
 export const listJournalEntryAccounts = tool(
   "freshbooks_list_journal_entry_accounts",
-  "List journal entry accounts (chart of accounts) for the FreshBooks account. Supports pagination. Returns account numbers and names used when creating journal entries.",
-  {
-    page: z.number().int().min(1).default(1).describe("Page number"),
-    per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
-  },
-  async (args) => {
+  "List journal entry accounts — this IS the chart of accounts (GL accounts, not FreshBooks logins; for logins use freshbooks_list_accounts). Always returns every account in one response: the endpoint ignores page/per_page (verified live — it echoes per_page=total), so no pagination params are offered. Sub-account IDs for freshbooks_create_journal_entry are nested at subAccounts[].subAccountId.",
+  {},
+  async () => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const queryBuilders = buildQueryBuilders({
-        page: args.page,
-        perPage: args.per_page,
-      });
-
       const jeClient = client as unknown as JournalEntryListResources;
-      const response = await jeClient.journalEntryAccounts.list(accountId, queryBuilders);
+      const response = await jeClient.journalEntryAccounts.list(accountId);
 
       if (!response.ok) {
         return {
@@ -130,7 +122,7 @@ export const listJournalEntryAccounts = tool(
 
 export const listJournalEntryDetails = tool(
   "freshbooks_list_journal_entry_details",
-  "List journal entry details for the FreshBooks account. Supports pagination. Returns individual line-level detail records associated with posted journal entries.",
+  "List journal entry details for the FreshBooks account. Returns individual line-level detail records associated with posted journal entries.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

@@ -8,14 +8,14 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listInvoices = tool(
   "freshbooks_list_invoices",
-  "List invoices for the FreshBooks account. Supports pagination, search filters, sorting, and includes. Returns invoice summaries including id, status, amount, customer, and dates.",
+  "List invoices for the FreshBooks account. Returns invoice summaries including id, status, amount, customer, and dates.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
     search_status: z.string().optional().describe("Filter by status (e.g. 'draft', 'sent', 'viewed', 'paid', 'partial', 'disputed')"),
     search_customer_id: z.number().int().optional().describe("Filter by customer/client ID"),
-    search_date_min: z.string().optional().describe("Filter invoices created on or after this date (YYYY-MM-DD)"),
-    search_date_max: z.string().optional().describe("Filter invoices created on or before this date (YYYY-MM-DD)"),
+    search_date_min: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Filter invoices created on or after this date (YYYY-MM-DD)"),
+    search_date_max: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").optional().describe("Filter invoices created on or before this date (YYYY-MM-DD)"),
     sort_by: z.string().optional().describe("Sort field (e.g. 'invoice_date', 'amount', 'invoice_number')"),
     sort_order: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
     includes: z.array(z.string()).optional().describe("Related resources to include (e.g. ['lines', 'allowed_gateway_info'])"),
@@ -99,7 +99,7 @@ export const createInvoice = tool(
   "Create a new invoice. Requires a customer ID and at least one line item. Amounts are strings to preserve decimal precision.",
   {
     customer_id: z.number().int().describe("The customer/client ID to invoice"),
-    create_date: z.string().describe("Invoice date in YYYY-MM-DD format"),
+    create_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD").describe("Invoice date in YYYY-MM-DD format"),
     due_offset_days: z.number().int().default(30).describe("Number of days until due"),
     lines: z.array(z.object({
       name: z.string().describe("Line item name/description"),
@@ -198,7 +198,7 @@ export const updateInvoice = tool(
 
 export const deleteInvoice = tool(
   "freshbooks_delete_invoice",
-  "Delete an invoice by ID. This action is permanent and cannot be undone.",
+  "Delete an invoice by ID. This is a soft delete (the API sets vis_state to deleted): the record leaves list results but can be restored in the FreshBooks web UI.",
   {
     invoice_id: z.string().describe("The invoice ID to delete"),
   },

@@ -10,6 +10,14 @@
 
 ## 1. How to read this document
 
+> **⚠️ HISTORICAL SNAPSHOT — do not re-execute.** This audit was written against
+> 2.0.0 and its remediation plan (Section 9) **has been executed and shipped**.
+> One of its prescriptions was itself wrong and has been superseded: step 5's
+> `currency_code` wire-key for `report_payments_collected` — see the
+> **Correction (post-2.1.2)** block at the end of Section 5. A fresh session that runs
+> Section 9 top-to-bottom would re-introduce that bug. Treat everything below as
+> a record of what was found and fixed, not as pending work.
+
 This is a **fix guide for a future Claude Code session**. It is self-contained: a fresh
 session can execute Section 9 top-to-bottom without re-investigating.
 
@@ -575,8 +583,11 @@ Work in this order — cheap/isolated first, structural last. After **each** ste
    a required enum. (`bill-payments.ts`)
 4. **#12/#13 bill vendors** — `fName`/`lName`/`email` → `primaryContact*` in both handlers.
    (`bill-vendors.ts`)
-5. **#3/#4/#5 reports** — `dateRange` → `search` in all three handlers; wire up
-   `currency_code` in `report_payments_collected`. (`reports.ts`)
+5. **#3/#4/#5 reports** — `dateRange` → `search` in all three handlers; ~~wire up
+   `currency_code` in `report_payments_collected`~~ **SUPERSEDED — do not apply:
+   the wire key is the array param `currency_codes[]`, not `currency_code`
+   (which the endpoint silently ignores). See the Correction block at the end of
+   Section 5.** (`reports.ts`)
 6. **#9 `update_time_entry`** — fetch-and-preserve `startedAt`. (`time-entries.ts`)
 7. **#11 `update_project`** — fetch-and-preserve `title`. (`projects.ts`)
 8. **#10 `update_other_income`** — add `amount`/`date` params + fetch-and-merge.

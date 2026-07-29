@@ -279,9 +279,42 @@ tool coverage against the SDK, list these as out of scope rather than as gaps:
 | `client.invoices` `share_link` | Client-facing invoice share links |
 
 This applies only to resources the SDK *does* wrap. Resources the SDK never
-wrapped (Estimates, Chart of Accounts, Staff, and the General Ledger / Balance
-Sheet / Cash Flow / Account Aging / Expense Details reports) are a separate
-question and are not covered by this exclusion.
+wrapped (Estimates, Staff, Taxes, Invoice Profiles, and the General Ledger /
+Balance Sheet / Cash Flow / Accounts Aging / Expense Details / Trial Balance
+reports) are a separate question and are not covered by this exclusion.
+
+**There is no separate Chart of Accounts endpoint.** Probed live (2026-07-28):
+every `chart_of_accounts` path variant returns 404. The chart of accounts **is**
+`journal_entry_accounts`, already exposed as
+`freshbooks_list_journal_entry_accounts` — do not add a duplicate tool for it.
+
+### Raw endpoints (SDK-unwrapped, reached via `src/raw-call.ts`)
+
+The truth table below was probed live (2026-07-28, every configured profile).
+It is the spec for `unwrapEnvelope`'s arguments — the envelope key column is
+load-bearing. Report params live in `src/report-params.ts`; entity endpoints
+are listed here as they ship.
+
+| Endpoint (under `/accounting/account/<id>/`) | Envelope key | Paginates | Notes |
+|---|---|---|---|
+| `estimates/estimates` | `estimates` | yes | |
+| `users/staffs` | **`staff`** (not `staffs`) | yes | read-only by decision (`create_staff` emails a real human) |
+| `taxes/taxes` | `taxes` | yes | |
+| `invoice_profiles/invoice_profiles` | `invoice_profiles` | yes | writes gated: can auto-generate real invoices |
+| `reports/accounting/balance_sheet` | `balance_sheet` | no | takes repeatable `dates[]`, ignores `start_date`/`end_date` |
+| `reports/accounting/general_ledger` | `general_ledger` | no | |
+| `reports/accounting/cash_flow` | `cash_flow` | no | ignores `cash_based` (inherently cash) |
+| `reports/accounting/accounts_aging` | `accounts_aging` | no | honors only `end_date` (+ `group_by=outstanding`); ignores `start_date`, `clientids[]` |
+| `reports/accounting/expense_details` | `expense_details` | no | ignores `summary_only` |
+| `reports/accounting/trial_balance` | `trial_balance` | no | |
+
+**Probed negative results (account-class, not profile-specific):**
+
+| Path | Result | Meaning |
+|---|---|---|
+| `reports/accounting/accounts_payable_aging` | **403** | Endpoint exists; needs an entitlement (AP add-on / plan) the probed account class lacks. Out of scope — do not ship without a profile that can verify it. |
+| `reports/accounting/revenue_by_client` | **422** | Endpoint exists but its contract is unknown — do not ship. |
+| any `chart_of_accounts` path | **404** | Does not exist (see above). |
 
 ### Query builders (Pagination, Search, Sort, Includes)
 
@@ -390,7 +423,7 @@ export const listInvoices = tool(
       const queryBuilders = buildQueryBuilders({ page: args.page, perPage: args.per_page });
       const response = await client.invoices.list(accountId, queryBuilders);
 
-      if (!response.ok) {
+      if (!response.ok) {                                         // defense-in-depth — see Error Handling
         return {
           content: [{ type: "text", text: `FreshBooks error: ${response.error?.message}` }],
           isError: true,
@@ -400,7 +433,7 @@ export const listInvoices = tool(
         content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
       };
     } catch (error: any) {
-      // SDK may also throw errors with { name, message, statusCode, errors }
+      // The REAL SDK error path: call() throws { name, message, statusCode, errors }
       return {
         content: [{ type: "text", text: `Error: ${error.message ?? String(error)}` }],
         isError: true,
@@ -413,11 +446,11 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-All 76 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 74 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
+All 97 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 95 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
 
 ### Tool naming convention
 
-All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+All 97 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
 
 **Accounting resources (accountId):**
 - Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
@@ -433,7 +466,12 @@ All 76 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Other Incomes: `freshbooks_list_other_incomes`, `freshbooks_get_other_income`, `freshbooks_create_other_income`, `freshbooks_update_other_income`, `freshbooks_delete_other_income`
 - Expense Categories: `freshbooks_list_expense_categories`, `freshbooks_get_expense_category` (read-only)
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
-- Reports: `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+- Reports (SDK-backed): `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
+- Reports (raw-backed, `src/tools/raw/reports.ts` — snake_case fields): `freshbooks_report_balance_sheet`, `freshbooks_report_general_ledger`, `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`, `freshbooks_report_expense_details`, `freshbooks_report_trial_balance`
+- Estimates (raw-backed; create is draft-only, `freshbooks_send_estimate` is the ONLY emailing action and requires explicit `email_recipients`): `freshbooks_list_estimates`, `freshbooks_get_estimate`, `freshbooks_create_estimate`, `freshbooks_update_estimate`, `freshbooks_delete_estimate`, `freshbooks_send_estimate`
+- Staff (raw-backed, read-only by decision — `create_staff` emails a real human; the `api_token` credential field is stripped): `freshbooks_list_staff`, `freshbooks_get_staff_member`
+- Taxes (raw-backed; delete is HARD): `freshbooks_list_taxes`, `freshbooks_get_tax`, `freshbooks_create_tax`, `freshbooks_update_tax`, `freshbooks_delete_tax`
+- Invoice Profiles (raw-backed, read-only; writes gated — can auto-generate real invoices): `freshbooks_list_invoice_profiles`, `freshbooks_get_invoice_profile`
 
 **Report basis and filters.** FreshBooks reports default to an **accrual** basis.
 `freshbooks_report_profit_loss` accepts `cash_based` and `fiscal_year_view`;
@@ -442,9 +480,12 @@ each endpoint honors is not guesswork — decode the `downloadToken` JWT in any
 report response and its `params` claim echoes the exact set the server parsed.
 **Unsupported params are silently dropped** (`ok: true`, no error), so never
 offer a param on a report whose token does not list it: the filter would appear
-to work while quietly producing wrong numbers. The current matrix is recorded in
-the comment block at the top of `src/tools/reports.ts`, and
-`test/report-params.test.ts` locks it in.
+to work while quietly producing wrong numbers. The matrix lives as DATA in
+`src/report-params.ts` (`REPORT_PARAMS` — honored, proven-ignored, wire-key
+mapping, and verification date per endpoint); `freshbooks_help topic=reports`
+renders it live, and `test/report-params.test.ts` asserts every report tool's
+schema stays inside its entry. Do not restate the matrix in prose anywhere —
+link here or to the help topic instead.
 
 Report params also serialize differently from list endpoints: the SDK builds
 reports with the `AccountingReportsResource` type, which is **not** in
@@ -519,19 +560,35 @@ Use `allowedTools: ["mcp__freshbooks__*"]` to allow all tools on the server.
 
 | Annotation | Use for | Effect |
 |---|---|---|
-| `readOnlyHint: true` | List, get, search tools | Enables parallel execution |
-| `destructiveHint: true` | Delete tools | Signals destructive action |
-| `idempotentHint: true` | Update tools | Repeated calls have no extra effect |
+| `readOnlyHint: true` | `list_`/`get_`/`report_` tools | Enables parallel execution |
+| `destructiveHint: true` | `delete_` tools | Signals destructive action |
+| `idempotentHint: true` | `update_` tools | Repeated calls have no extra effect |
+| *(none)* | `create_` tools | Deliberate: a create is neither read-only, idempotent, nor destructive of existing data |
+
+This convention is keyed on the tool's action prefix and **enforced by
+`test/tool-inventory.test.ts`**. A tool whose name matches no action prefix
+(e.g. `freshbooks_help`) must be added to that test's explicit allow-list with
+its expected annotations — the test fails otherwise.
 
 ## Error Handling
 
 Tool handlers must **never throw**. Uncaught exceptions kill the agent loop.
 
-The FreshBooks SDK can signal errors in two ways:
-1. **Response-level** — `response.ok === false` with error details in `response.error`
-2. **Thrown exceptions** — SDK throws errors with `{ name, message, statusCode, errors[] }`
+**How errors actually arrive is scoped by tier:**
 
-Both must be caught and returned as `isError: true`:
+- **SDK-backed tools (every `client.<resource>` call): errors THROW.** The SDK's
+  `call()` (`APIClient.js`) throws `{ name, message, statusCode, errors[] }` on
+  every failure and **never returns `ok: false`** — there is not a single
+  `ok: false` construction site in the SDK. The `if (!response.ok)` branch in
+  these handlers is defense-in-depth against a future SDK change, not a live
+  error path. Keep writing it (it is harmless and uniform), but never rely on it:
+  the `catch` block is where SDK errors are actually handled.
+- **Raw-backed tools (direct API access via `src/raw-call.ts`, where present):
+  the inverse.** They return a real `Result`-shaped object and the `!ok` branch
+  is the **only** error path — nothing throws.
+
+The `Result<T>` response shape documented above is correct as a type either way.
+Both paths must end in `isError: true`, never a throw:
 
 ```typescript
 try {
@@ -552,6 +609,28 @@ try {
   };
 }
 ```
+
+## Doc-maintenance contract
+
+The tool inventory and tool count appear in multiple documents. When tools are
+added, renamed, or removed, this is the authoritative map of what must change
+and what catches you if you forget:
+
+**Test-enforced (a failing test names the file):**
+- Tool **count** — README.md, SETUP.md, `package.json` description, CLAUDE.md,
+  `docs/claude-project-system-prompt.md` → `test/doc-tool-count.test.ts`
+- Tool **names** — README.md, CLAUDE.md, `docs/claude-project-system-prompt.md`
+  (both directions: missing AND stale) → `test/doc-inventory.test.ts`
+- **Report params** — schemas vs `src/report-params.ts` → `test/report-params.test.ts`
+- **Annotations** — the action-prefix convention → `test/tool-inventory.test.ts`
+
+**Derived automatically (zero edits):** `freshbooks_help` topics `tools`
+(renders the live registry) and `reports` (renders `REPORT_PARAMS`).
+
+**Hand-written and rot-prone (no guard — check deliberately):** SETUP.md's
+example prompts and limitations list; `src/docs/content.ts` prose topics;
+`CHANGELOG.md`. When you add a capability, grep these for the affected
+resource before shipping.
 
 ## Shareability
 
@@ -601,9 +680,9 @@ This project is designed so any FreshBooks user can use it:
 - When adding a new tool: define with `tool()` in `src/tools/<resource>.ts`, then add to the tools array in `src/tool-registry.ts`
 - Use Zod `.describe()` on every schema field so Claude understands parameters
 - Use `.default()` on optional Zod fields with sensible defaults
-- Mark read-only tools (list, get) with `{ annotations: { readOnlyHint: true } }`
+- Annotations follow the action prefix (test-enforced): `list_`/`get_`/`report_` → `readOnlyHint`; `delete_` → `destructiveHint`; `update_` → `idempotentHint`; `create_` → none; prefix-free tools go in `test/tool-inventory.test.ts`'s allow-list
 - Use the FreshBooks SDK client methods — never raw fetch/HTTP
-- Check `response.ok` before accessing `response.data`, and catch thrown errors
+- Check `response.ok` before accessing `response.data`, and catch thrown errors — knowing that for SDK-backed tools the throw is the real error path (`call()` never returns `ok: false`; see Error Handling)
 - Monetary amounts are strings — use `big.js` for any arithmetic
 - Accounting resources use `accountId` (string), project resources use `businessId` (number)
 - Do NOT add an `account` field to a tool's own schema — `withAccount` injects it. Keep using the zero-arg `getFreshBooksClient()`/`getAccountId()`/`getBusinessId()`; they resolve the active profile from the `AsyncLocalStorage` context

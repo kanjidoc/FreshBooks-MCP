@@ -5,7 +5,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listExpenseCategories = tool(
   "freshbooks_list_expense_categories",
-  "List expense categories for the FreshBooks account. Supports pagination and sorting. Returns category names and IDs used when creating or filtering expenses.",
+  "List expense categories for the FreshBooks account. Returns category names and IDs used when creating or filtering expenses.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

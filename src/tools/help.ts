@@ -10,6 +10,7 @@ import {
   TOPIC_TROUBLESHOOTING,
 } from "../docs/content";
 import { renderToolsTopic } from "../docs/render-tools";
+import { renderReportsTopic } from "../docs/render-reports";
 import { getVersion } from "../version";
 
 /** Render the `index` topic — the list of all help topics, headed by the version. */
@@ -22,6 +23,7 @@ with a \`topic\`:
 - **overview** — what this server is and the key concepts (start here)
 - **architecture** — file layout and how a request flows
 - **tools** — the full live inventory of every registered tool
+- **reports** — which params each report endpoint honors (and silently ignores)
 - **authentication** — OAuth, token files, auto-refresh, recovery
 - **extending** — how to add a new tool, and the SDK gotchas to avoid
 - **conventions** — naming, error handling, money, dates
@@ -44,6 +46,7 @@ export const freshbooksHelp = tool(
         "overview",
         "architecture",
         "tools",
+        "reports",
         "authentication",
         "extending",
         "conventions",
@@ -60,6 +63,7 @@ export const freshbooksHelp = tool(
         overview: renderOverviewTopic,
         architecture: TOPIC_ARCHITECTURE,
         tools: renderToolsTopic,
+        reports: renderReportsTopic,
         authentication: TOPIC_AUTHENTICATION,
         extending: TOPIC_EXTENDING,
         conventions: TOPIC_CONVENTIONS,
