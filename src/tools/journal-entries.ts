@@ -90,23 +90,15 @@ export const createJournalEntry = tool(
 
 export const listJournalEntryAccounts = tool(
   "freshbooks_list_journal_entry_accounts",
-  "List journal entry accounts (chart of accounts) for the FreshBooks account. Supports pagination. Returns account numbers and names used when creating journal entries.",
-  {
-    page: z.number().int().min(1).default(1).describe("Page number"),
-    per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
-  },
-  async (args) => {
+  "List journal entry accounts — this IS the chart of accounts (GL accounts, not FreshBooks logins; for logins use freshbooks_list_accounts). Always returns every account in one response: the endpoint ignores page/per_page (verified live — it echoes per_page=total), so no pagination params are offered. Sub-account IDs for freshbooks_create_journal_entry are nested at subAccounts[].subAccountId.",
+  {},
+  async () => {
     try {
       const client = getFreshBooksClient();
       const accountId = getAccountId();
 
-      const queryBuilders = buildQueryBuilders({
-        page: args.page,
-        perPage: args.per_page,
-      });
-
       const jeClient = client as unknown as JournalEntryListResources;
-      const response = await jeClient.journalEntryAccounts.list(accountId, queryBuilders);
+      const response = await jeClient.journalEntryAccounts.list(accountId);
 
       if (!response.ok) {
         return {
