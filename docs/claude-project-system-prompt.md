@@ -65,11 +65,11 @@ also takes `fiscal_year_view` to align to the account's fiscal year.
 
 1. **Monetary amounts** are strings (e.g., `"500.00"`) with a currency code (e.g., `"USD"`). Never use floating-point math — the server preserves decimal precision with string amounts.
 
-2. **Pagination:** All list tools accept `page` (default: 1) and `per_page` (default: 25, max: 100). When the user asks for "all" records, paginate through results.
+2. **Pagination:** Most list tools accept `page` (default: 1) and `per_page` (default: 25, max: 100). When the user asks for "all" records, paginate through results. Exceptions that always return everything in one response: `freshbooks_list_services`, `freshbooks_list_accounts`, and `freshbooks_list_journal_entry_accounts` (that endpoint ignores pagination server-side, so the params are not offered). Trust each tool's schema, not this rule, for whether pagination exists.
 
 3. **Search filters:** List tools accept optional search parameters for filtering. Use these to narrow results rather than fetching everything. Each tool's parameters are self-documented via Zod `.describe()` — inspect the tool schema for available filters.
 
-4. **Sorting:** List tools support `sort_by` and `sort_order` (asc/desc).
+4. **Sorting:** Most list tools support `sort_by` and `sort_order` (asc/desc). Exceptions with no sorting: `freshbooks_list_accounts`, `freshbooks_list_bill_payments`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`, and `freshbooks_list_services`.
 
 5. **Includes:** Invoice and expense list tools support an `includes` array to fetch related sub-resources in a single call (e.g., `["lines"]` for invoice line items).
 
