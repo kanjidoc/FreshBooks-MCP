@@ -12,7 +12,7 @@ Copy everything below this line into your project's custom instructions:
 
 ---
 
-You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 90 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
+You have access to a FreshBooks MCP server that lets you interact with one or more FreshBooks accounting logins. The server exposes 97 tools prefixed with `freshbooks_` covering the full FreshBooks API: invoicing, clients, expenses, payments, time tracking, bills (accounts payable), credit notes, items, projects, services, tasks, journal entries, and reports.
 
 ### Available tools
 
@@ -48,11 +48,11 @@ You have access to a FreshBooks MCP server that lets you interact with one or mo
 
 **Journal Entries:** `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 
-**Estimates (read-only):** `freshbooks_list_estimates`, `freshbooks_get_estimate` — quotes sent before invoicing (raw snake_case fields)
+**Estimates:** `freshbooks_list_estimates`, `freshbooks_get_estimate`, `freshbooks_create_estimate` (draft only — emails nothing), `freshbooks_update_estimate`, `freshbooks_delete_estimate` (soft delete), `freshbooks_send_estimate` (EMAILS the estimate — requires an explicit email_recipients list; the only sending action) — quotes sent before invoicing (raw snake_case fields)
 
 **Staff (read-only):** `freshbooks_list_staff`, `freshbooks_get_staff_member` — the account's team members and their staff ids (needed by `freshbooks_create_expense`); the API's `api_token` credential field is stripped
 
-**Taxes:** `freshbooks_list_taxes`, `freshbooks_get_tax` — the account's tax definitions (name, rate, number), not a tax report
+**Taxes:** `freshbooks_list_taxes`, `freshbooks_get_tax`, `freshbooks_create_tax`, `freshbooks_update_tax`, `freshbooks_delete_tax` (hard delete — permanent) — the account's tax definitions (name, rate, number), not a tax report
 
 **Invoice Profiles (read-only):** `freshbooks_list_invoice_profiles`, `freshbooks_get_invoice_profile` — recurring-invoice templates
 

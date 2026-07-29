@@ -446,11 +446,11 @@ export const listInvoices = tool(
 
 ### Bundling tools into an MCP server
 
-All 90 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 88 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
+All 97 tools are imported and assembled into a single array in `src/tool-registry.ts`. The 95 API tools are wrapped with `withAccount` (it injects the `account` field, resolves the named profile, refreshes that profile's token, and runs the handler inside the profile's `AsyncLocalStorage` context); the two account-free tools (`freshbooks_help`, `freshbooks_list_accounts`) are wrapped with `withoutAccount` (identity). `src/server.ts` then passes that array to `createSdkMcpServer`. When adding a new tool, define it in the appropriate `src/tools/<resource>.ts` file, then import and add it to the tools array in `src/tool-registry.ts` (under `accountScoped` for an API tool, or `accountFree` for an account-free one).
 
 ### Tool naming convention
 
-All 90 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
+All 97 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<resource>`:
 
 **Accounting resources (accountId):**
 - Invoices: `freshbooks_list_invoices`, `freshbooks_get_invoice`, `freshbooks_create_invoice`, `freshbooks_update_invoice`, `freshbooks_delete_invoice`
@@ -468,9 +468,9 @@ All 90 tools are prefixed with `freshbooks_` and follow `freshbooks_<action>_<re
 - Journal Entries: `freshbooks_create_journal_entry`, `freshbooks_list_journal_entry_accounts`, `freshbooks_list_journal_entry_details`
 - Reports (SDK-backed): `freshbooks_report_payments_collected`, `freshbooks_report_profit_loss`, `freshbooks_report_tax_summary`
 - Reports (raw-backed, `src/tools/raw/reports.ts` — snake_case fields): `freshbooks_report_balance_sheet`, `freshbooks_report_general_ledger`, `freshbooks_report_cash_flow`, `freshbooks_report_accounts_aging`, `freshbooks_report_expense_details`, `freshbooks_report_trial_balance`
-- Estimates (raw-backed, read-only): `freshbooks_list_estimates`, `freshbooks_get_estimate`
+- Estimates (raw-backed; create is draft-only, `freshbooks_send_estimate` is the ONLY emailing action and requires explicit `email_recipients`): `freshbooks_list_estimates`, `freshbooks_get_estimate`, `freshbooks_create_estimate`, `freshbooks_update_estimate`, `freshbooks_delete_estimate`, `freshbooks_send_estimate`
 - Staff (raw-backed, read-only by decision — `create_staff` emails a real human; the `api_token` credential field is stripped): `freshbooks_list_staff`, `freshbooks_get_staff_member`
-- Taxes (raw-backed): `freshbooks_list_taxes`, `freshbooks_get_tax`
+- Taxes (raw-backed; delete is HARD): `freshbooks_list_taxes`, `freshbooks_get_tax`, `freshbooks_create_tax`, `freshbooks_update_tax`, `freshbooks_delete_tax`
 - Invoice Profiles (raw-backed, read-only; writes gated — can auto-generate real invoices): `freshbooks_list_invoice_profiles`, `freshbooks_get_invoice_profile`
 
 **Report basis and filters.** FreshBooks reports default to an **accrual** basis.

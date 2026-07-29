@@ -25,9 +25,16 @@ import {
   reportExpenseDetails,
   reportTrialBalance,
 } from "./tools/raw/reports";
-import { listEstimates, getEstimate } from "./tools/raw/estimates";
+import {
+  listEstimates,
+  getEstimate,
+  createEstimate,
+  updateEstimate,
+  deleteEstimate,
+  sendEstimate,
+} from "./tools/raw/estimates";
 import { listStaff, getStaffMember } from "./tools/raw/staff";
-import { listTaxes, getTax } from "./tools/raw/taxes";
+import { listTaxes, getTax, createTax, updateTax, deleteTax } from "./tools/raw/taxes";
 import { listInvoiceProfiles, getInvoiceProfile } from "./tools/raw/invoice-profiles";
 import { freshbooksHelp } from "./tools/help";
 
@@ -74,12 +81,12 @@ const accountScoped = [
   // Reports (raw-backed — src/tools/raw/, direct API access via src/raw-call.ts)
   reportBalanceSheet, reportGeneralLedger, reportCashFlow,
   reportAccountsAging, reportExpenseDetails, reportTrialBalance,
-  // Estimates (raw-backed)
-  listEstimates, getEstimate,
+  // Estimates (raw-backed; send is the ONLY emailing action — create is draft-only)
+  listEstimates, getEstimate, createEstimate, updateEstimate, deleteEstimate, sendEstimate,
   // Staff (raw-backed, read-only by decision — create_staff emails a real human)
   listStaff, getStaffMember,
   // Taxes (raw-backed)
-  listTaxes, getTax,
+  listTaxes, getTax, createTax, updateTax, deleteTax,
   // Invoice profiles (raw-backed; writes gated — can auto-generate real invoices)
   listInvoiceProfiles, getInvoiceProfile,
   // Tasks

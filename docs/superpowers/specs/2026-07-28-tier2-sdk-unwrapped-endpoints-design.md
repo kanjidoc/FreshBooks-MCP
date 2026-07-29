@@ -42,9 +42,9 @@ internals cited (`APIClient.js` line numbers) are pinned to `@freshbooks/api@4.1
 - [x] **Phase 1** — `src/raw-call.ts` + `test/tool-inventory.test.ts` + `test/doc-inventory.test.ts` + `REPORT_PARAMS` + doc infrastructure → 76 tools *(done 2026-07-29; hardened by 2-agent adversarial review: 3 high / 4 med / 5 low findings fixed, incl. mid-read total-drift detection, shape-proof WARNING_INCOMPLETE, an `internal` failure kind, duplicate-page fingerprint)*
 - [x] **Phase 2** — 6 ledger reports → 82 *(done 2026-07-29; live cross-foot 40/40 across all FOUR profiles — trial balance/GL/balance sheet balance to the cent, cash-flow net ties to GL Cash movement, aging ties to Σ invoice outstanding, expense_details ties to list_expenses record-for-record; params echo verified; download_token params claim confirmed live and the raw JWT stripped from output; no rate limiting observed across ~70 rapid calls)*
 - [x] **Phase 3** — 8 entity reads (estimates, staff, taxes, invoice profiles) + **written go/no-go per write domain** → 90 *(done 2026-07-29; 42/42 live checks across all four profiles; staff `api_token` credential stripped (live token observed!); estimate single envelope verified as `estimate` via the CRUD probe; get_estimate passes `include[]=lines`; memos: taxes GO, estimates GO, staff NO-GO permanent, invoice profiles NO-GO — see 2026-07-29-tier2-write-go-no-go.md)*
-- [ ] **Phase 4** — taxes writes → 93
-- [ ] **Phase 5** — estimates writes + send → 97
-- [ ] **Phase 6** — invoice-profile writes (**gated** on Phase 3) → 100
+- [x] **Phase 4** — taxes writes → 93 *(done 2026-07-29; live CRUD via production tools 8/8: merge PUT held, hard delete confirmed 404, empty diff)*
+- [x] **Phase 5** — estimates writes + send → 97 *(done 2026-07-29; live CRUD 9/9: draft-only create, merge PUT held with lines surviving, soft delete, and the ONE live send to the owner's own address — status transitioned to "sent"; send refuses without explicit email_recipients, tested to never reach the API)*
+- [x] **Phase 6** — invoice-profile writes: **NO-GO, does not ship** *(gate exercised as designed — see 2026-07-29-tier2-write-go-no-go.md: a create probe could auto-invoice a real client, and no record exists on any profile to verify even the single-item read contract; final total is 97, not 100)*
 - [ ] **Release** — bump to 2.2.0 once, at the end
 - [ ] *Deferred, revisit only with new evidence:* chart-of-accounts writes, staff writes, `report_invoice_details`
 

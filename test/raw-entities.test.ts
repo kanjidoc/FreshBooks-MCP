@@ -1,9 +1,16 @@
 import { describe, it, expect } from "vitest";
 import type { Client } from "@freshbooks/api";
 import { runInProfile, type ProfileState } from "../src/profiles";
-import { listEstimates, getEstimate } from "../src/tools/raw/estimates";
+import {
+  listEstimates,
+  getEstimate,
+  createEstimate,
+  updateEstimate,
+  deleteEstimate,
+  sendEstimate,
+} from "../src/tools/raw/estimates";
 import { listStaff, getStaffMember } from "../src/tools/raw/staff";
-import { listTaxes, getTax } from "../src/tools/raw/taxes";
+import { listTaxes, getTax, createTax, updateTax, deleteTax } from "../src/tools/raw/taxes";
 import { listInvoiceProfiles } from "../src/tools/raw/invoice-profiles";
 
 type CallFn = (method: string, url: string, config: object, data: unknown, name: string) => any;
@@ -113,6 +120,118 @@ describe("staff api_token stripping (SECURITY — a live credential was observed
     const text = textOf(res as any);
     expect(text).not.toContain("secret-token-value");
     expect(JSON.parse(text)).toEqual({ id: 1 });
+  });
+});
+
+describe("raw write tools — wire bodies (T1, from the go/no-go transcripts)", () => {
+  /** Capture method/url/body of each call, serve a canned single-item result. */
+  const recording = (key: string, log: Array<{ method: string; url: string; body: unknown }>): CallFn =>
+    (async (method: string, url: string, _c: object, body: unknown, _n: string) => {
+      log.push({ method, url, body });
+      return { ok: true, data: { response: { result: { [key]: { id: 42, status: 1 } } } } };
+    }) as CallFn;
+
+  it("create_tax POSTs { tax: {...} } to the verified path; number omitted when absent", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("tax", log)), () =>
+      createTax.handler({ name: "VAT", amount: "7.5" } as any, {}),
+    );
+    expect(log).toEqual([
+      {
+        method: "POST",
+        url: "/accounting/account/ACC123/taxes/taxes",
+        body: { tax: { name: "VAT", amount: "7.5" } },
+      },
+    ]);
+  });
+
+  it("update_tax PUTs only the provided fields (merge semantics — verified live)", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("tax", log)), () =>
+      updateTax.handler({ tax_id: 9, amount: "8" } as any, {}),
+    );
+    expect(log[0]).toEqual({
+      method: "PUT",
+      url: "/accounting/account/ACC123/taxes/taxes/9",
+      body: { tax: { amount: "8" } },
+    });
+  });
+
+  it("update_tax with nothing to update refuses without any API call", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    const res = await runInProfile(profileWith(recording("tax", log)), () =>
+      updateTax.handler({ tax_id: 9 } as any, {}),
+    );
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(log).toHaveLength(0);
+  });
+
+  it("delete_tax uses the DELETE verb (hard delete — verified live)", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("tax", log)), () => deleteTax.handler({ tax_id: 9 } as any, {}));
+    expect(log[0].method).toBe("DELETE");
+    expect(log[0].url).toBe("/accounting/account/ACC123/taxes/taxes/9");
+  });
+
+  it("create_estimate sends customerid (not clientid) + create_date + wire-shaped lines", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("estimate", log)), () =>
+      createEstimate.handler(
+        {
+          client_id: 77,
+          create_date: "2026-07-29",
+          lines: [{ name: "Consulting", qty: "2", unit_cost: "150.00", currency_code: "USD" }],
+        } as any,
+        {},
+      ),
+    );
+    expect(log[0]).toEqual({
+      method: "POST",
+      url: "/accounting/account/ACC123/estimates/estimates",
+      body: {
+        estimate: {
+          customerid: 77,
+          create_date: "2026-07-29",
+          lines: [{ name: "Consulting", qty: "2", unit_cost: { amount: "150.00", code: "USD" }, type: 0 }],
+        },
+      },
+    });
+  });
+
+  it("update_estimate PUTs only provided fields; delete_estimate reports soft_delete", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("estimate", log)), () =>
+      updateEstimate.handler({ estimate_id: 5, notes: "n" } as any, {}),
+    );
+    expect(log[0].body).toEqual({ estimate: { notes: "n" } });
+    const res = await runInProfile(profileWith(recording("estimate", log)), () =>
+      deleteEstimate.handler({ estimate_id: 5 } as any, {}),
+    );
+    expect(JSON.parse(textOf(res as any)).soft_delete).toBe(true);
+  });
+
+  it("send_estimate REFUSES with no recipients — the fake call is NEVER invoked", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    for (const args of [{ estimate_id: 5 }, { estimate_id: 5, email_recipients: [] }]) {
+      const res = await runInProfile(profileWith(recording("estimate", log)), () =>
+        sendEstimate.handler(args as any, {}),
+      );
+      expect((res as { isError?: boolean }).isError).toBe(true);
+      expect(textOf(res as any)).toMatch(/Refusing to send/);
+    }
+    expect(log).toHaveLength(0); // the send path is unreachable without recipients
+  });
+
+  it("send_estimate PUTs action_email + the exact recipient list", async () => {
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("estimate", log)), () =>
+      sendEstimate.handler({ estimate_id: 5, email_recipients: ["owner@example.com"] } as any, {}),
+    );
+    expect(log[0]).toEqual({
+      method: "PUT",
+      url: "/accounting/account/ACC123/estimates/estimates/5",
+      body: { estimate: { action_email: true, email_recipients: ["owner@example.com"] } },
+    });
   });
 });
 

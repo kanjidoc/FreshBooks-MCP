@@ -255,7 +255,7 @@ Just talk to Claude in plain English. For example:
 - *"Who owes me money, and how overdue are they?"* (accounts aging)
 - *"Does my ledger balance?"* (trial balance)
 
-There are **90 tools** in total. To see what's possible, ask Claude:
+There are **97 tools** in total. To see what's possible, ask Claude:
 *"What FreshBooks tools do you have?"* or *"Show me the FreshBooks help."*
 
 > **More than one FreshBooks login?** This server can connect several. Run `npm

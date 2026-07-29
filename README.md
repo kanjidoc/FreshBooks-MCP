@@ -21,7 +21,7 @@ This server exposes FreshBooks accounting operations as MCP tools that any compa
 - Work across **multiple FreshBooks logins** from one server — each tool takes an `account` parameter, and `freshbooks_list_accounts` lists the configured logins
 - Ask the server **how it works** — the `freshbooks_help` tool returns its own architecture, conventions, and live tool inventory
 
-All 90 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
+All 97 tools support the FreshBooks API's pagination, search filters, sorting, and related-resource includes where applicable.
 
 ## 🚀 Getting Started
 
@@ -100,7 +100,7 @@ Nothing runs "in the cloud" — the server is a local program on your machine th
 - **[big.js](https://github.com/MikeMcl/big.js/)** — Decimal arithmetic for monetary values (FreshBooks returns amounts as strings to avoid floating-point precision issues)
 - **TypeScript** — Strict mode, compiled to ES2022
 
-## Available Tools (90 total)
+## Available Tools (97 total)
 
 Every API tool below also accepts an optional **`account`** parameter naming which configured FreshBooks login to act on. With a single login it can be omitted; with two or more it is required. Run `freshbooks_list_accounts` to see the configured names. See [Multiple FreshBooks accounts](#multiple-freshbooks-accounts) for the full model.
 
@@ -267,11 +267,15 @@ Every API tool below also accepts an optional **`account`** parameter naming whi
 > it honored. Ask `freshbooks_help topic=reports` for the per-endpoint
 > parameter matrix.
 
-### Estimates (read-only)
+### Estimates
 | Tool | Description |
 |---|---|
 | `freshbooks_list_estimates` | List all estimates (quotes sent to clients before invoicing) |
 | `freshbooks_get_estimate` | Get a single estimate by ID with line items |
+| `freshbooks_create_estimate` | Create a DRAFT estimate — nothing is emailed |
+| `freshbooks_update_estimate` | Update an estimate (partial — the API merges; passing `lines` replaces the line set) |
+| `freshbooks_delete_estimate` | Delete an estimate (soft delete — restorable in the UI) |
+| `freshbooks_send_estimate` | **Email** an estimate. Requires an explicit `email_recipients` list; the only action that contacts anyone. |
 
 ### Staff (read-only)
 | Tool | Description |
@@ -284,6 +288,9 @@ Every API tool below also accepts an optional **`account`** parameter naming whi
 |---|---|
 | `freshbooks_list_taxes` | List the account's tax definitions — name, rate, tax number |
 | `freshbooks_get_tax` | Get a single tax definition by ID |
+| `freshbooks_create_tax` | Create a tax definition (name + rate) |
+| `freshbooks_update_tax` | Update a tax definition (partial — the API merges) |
+| `freshbooks_delete_tax` | Delete a tax definition (**hard delete** — permanent) |
 
 ### Invoice Profiles (read-only)
 | Tool | Description |
@@ -357,7 +364,7 @@ Setup problems are covered in the [SETUP.md troubleshooting table](SETUP.md#trou
 
 ## Using FreshBooks MCP inside a Claude Project
 
-If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 90 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
+If you use [Claude Projects](https://claude.ai/), you can paste a ready-made system prompt — describing all 97 tools and how Claude should use them — into the project's custom instructions. It lives at [docs/claude-project-system-prompt.md](docs/claude-project-system-prompt.md).
 
 ## Contributing
 

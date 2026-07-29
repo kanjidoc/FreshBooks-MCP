@@ -31,6 +31,9 @@ const ACCOUNT_FREE = new Set(["freshbooks_help", "freshbooks_list_accounts"]);
  */
 const PREFIX_FREE_ALLOW_LIST: Record<string, RegisteredTool["annotations"]> = {
   freshbooks_help: { readOnlyHint: true },
+  // send emails real people: not read-only, not idempotent (each call sends
+  // again), not destructive of existing data — deliberately unannotated.
+  freshbooks_send_estimate: undefined,
 };
 
 describe("tool inventory sweeps", () => {

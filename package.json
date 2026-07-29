@@ -1,7 +1,7 @@
 {
   "name": "freshbooks-mcp",
   "version": "2.1.2",
-  "description": "MCP server exposing 90 FreshBooks accounting tools for AI assistants",
+  "description": "MCP server exposing 97 FreshBooks accounting tools for AI assistants",
   "main": "dist/index.js",
   "repository": {
     "type": "git",

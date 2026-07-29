@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Tax writes** (`freshbooks_create_tax`, `freshbooks_update_tax`,
+  `freshbooks_delete_tax`) and **estimate writes**
+  (`freshbooks_create_estimate`, `freshbooks_update_estimate`,
+  `freshbooks_delete_estimate`, `freshbooks_send_estimate`). 90 → 97 tools.
+  Contracts transcribed from live go/no-go probes, then re-verified end to
+  end through the production tools: creates require the fields the API's
+  422s name (`customerid` — not clientid — plus `create_date` for
+  estimates); updates are PARTIAL — the API merges, verified by fields
+  surviving single-field PUTs; tax delete is HARD (permanent, 404s after),
+  estimate delete is SOFT (`vis_state: 1`, restorable). Creating an
+  estimate produces a draft and emails nothing; `freshbooks_send_estimate`
+  is the only emailing action, requires an explicit `email_recipients`
+  list, refuses (without any API call — tested) when it is missing or
+  empty, and was verified with exactly one live send to the owner's own
+  address. Invoice-profile writes do **not** ship: the Phase 6 gate
+  concluded NO-GO (a create probe could auto-invoice a real client; see
+  the go/no-go memo).
+
 - **Eight entity read tools** for resources the frozen SDK never wrapped
   (raw snake_case fields; exhaustive listing with no `page` param):
   `freshbooks_list_estimates`/`freshbooks_get_estimate` (quotes; the get
