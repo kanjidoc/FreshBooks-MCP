@@ -28,7 +28,7 @@ export const createJournalEntry = tool(
     credit_entries: z.array(
       z.object({
         sub_account_id: z.number().int().describe(
-          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+          "Sub-account ID — from freshbooks_list_journal_entry_accounts, the nested subAccounts[].subAccountId field (it is NOT on the parent account record, where it reads undefined)"
         ),
         amount: z.string().describe("Credit amount, e.g. '500.00'"),
       })
@@ -36,7 +36,7 @@ export const createJournalEntry = tool(
     debit_entries: z.array(
       z.object({
         sub_account_id: z.number().int().describe(
-          "Sub-account ID — get it from freshbooks_list_journal_entry_accounts (the subAccountId field)"
+          "Sub-account ID — from freshbooks_list_journal_entry_accounts, the nested subAccounts[].subAccountId field (it is NOT on the parent account record, where it reads undefined)"
         ),
         amount: z.string().describe("Debit amount, e.g. '500.00'"),
       })
