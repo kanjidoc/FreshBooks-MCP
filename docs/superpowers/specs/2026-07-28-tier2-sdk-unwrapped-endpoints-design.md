@@ -38,7 +38,7 @@ internals cited (`APIClient.js` line numbers) are pinned to `@freshbooks/api@4.1
 
 ### Progress checklist
 
-- [ ] **Phase 0** — Part B bugs (9 items, each own commit) + `noEmitOnError` + server-lock fix + `dist` snapshot → 76 tools
+- [x] **Phase 0** — Part B bugs (9 items, each own commit) + `noEmitOnError` + server-lock fix + `dist` snapshot → 76 tools *(done 2026-07-29; items 1–2 had already landed in 7e82993; SDK pinned to exact 4.1.0; `.env.bak` files moved to `../FreshBooks-MCP-token-backups/`)*
 - [ ] **Phase 1** — `src/raw-call.ts` + `test/tool-inventory.test.ts` + `test/doc-inventory.test.ts` + `REPORT_PARAMS` + doc infrastructure → 76 tools
 - [ ] **Phase 2** — 6 ledger reports → 82
 - [ ] **Phase 3** — 8 entity reads (estimates, staff, taxes, invoice profiles) + **written go/no-go per write domain** → 90

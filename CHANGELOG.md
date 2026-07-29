@@ -23,6 +23,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The server lock is now one file per pid (`.server.lock.<pid>`). A single
+  shared `.server.lock` was last-writer-wins: with N servers running, the first
+  to exit deleted the shared file and migration's "is a server running" guard —
+  the invariant that prevents rotating a refresh token concurrently with a live
+  server — reported no server while N−1 still held tokens. Freshness now scans
+  the whole lock family and is true if any live pid holds one; legacy shared
+  lock files are honored on read, never written.
+- `tsc` no longer emits on type errors (`noEmitOnError`). `dist/` is what the
+  installed MCP server runs and is gitignored, so a failing build silently
+  replacing a known-good `dist/` could not be rolled back with `git revert`.
+- `freshbooks_create_journal_entry`'s schema pointed at a top-level
+  `subAccountId` on `freshbooks_list_journal_entry_accounts` results; the field
+  exists only nested at `subAccounts[].subAccountId` (the parent level reads
+  `undefined`).
+- `freshbooks_list_journal_entry_accounts` no longer offers `page`/`per_page`.
+  The endpoint ignores both and echoes `per_page = total` (verified live), so
+  the params advertised a pagination contract that lied. Its description now
+  states the all-in-one-response behavior and disambiguates the tool from
+  `freshbooks_list_accounts` (logins) — it is the chart of accounts.
+- Nine of twelve `freshbooks_delete_*` descriptions claimed the delete is
+  "permanent and cannot be undone"; those nine are soft deletes
+  (`PUT vis_state:1`, restorable in the FreshBooks UI). Only
+  project/time_entry/other_income deletes are hard, and now say so explicitly.
+- `@freshbooks/api` is pinned to exact `4.1.0` (was `^4.1.0`). The SDK froze
+  there; the server's raw-endpoint layer depends on internals verified at that
+  version.
 - `freshbooks_report_payments_collected`'s `currency_code` filter had no effect.
   The endpoint parses the filter as the array param `currency_codes[]`; the
   handler sent the singular `currency_code`, which the API silently ignores —
@@ -38,6 +64,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Documentation
 
+- `TOOL_AUDIT.md` is bannered as an executed historical snapshot, and its §9
+  step 5 — which still prescribed the superseded `currency_code` wire key — is
+  struck with a pointer to the correction. A fresh session following the doc's
+  own "execute Section 9 top-to-bottom" instruction would have re-introduced
+  the bug.
+- The Claude-project system prompt no longer claims every list tool paginates
+  and sorts; it names the exceptions and defers to each tool's schema.
+- The error-handling doctrine is scoped by tier at all six sites (`CLAUDE.md`,
+  `freshbooks_help` content): SDK-backed tools' errors THROW — the SDK's
+  `call()` never returns `ok: false`, so the `response.ok` check is
+  defense-in-depth — while raw-backed tools return a real `Result` whose `!ok`
+  branch is the only error path.
+- `CLAUDE.md` no longer lists "Chart of Accounts" as a never-wrapped resource:
+  no such endpoint exists (404, probed live); `journal_entry_accounts` IS the
+  chart of accounts. Prevents a duplicate tool.
 - Documented how to determine which params a FreshBooks report endpoint actually
   honors: decode the `downloadToken` JWT in any report response and read its
   `params` claim, which echoes the set the server parsed. Unsupported params are
