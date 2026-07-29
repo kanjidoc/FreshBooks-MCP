@@ -145,6 +145,18 @@ describe("staff api_token stripping (SECURITY — a live credential was observed
     expect(textOf(driftedGet as any)).not.toContain("LIVE-TOKEN-B");
   });
 
+  it("REGRESSION: a NESTED api_token (payload shape change) is redacted too", async () => {
+    // The success-path strip is shallow by design; the deep redaction pass
+    // must catch a token that moves under a nested carrier.
+    const rows = [{ id: 1, profile: { api_token: "LIVE-TOKEN-NESTED" } }];
+    const res = await runInProfile(profileWith(collection("staff", rows, [])), () =>
+      listStaff.handler({}, {}),
+    );
+    const text = textOf(res as any);
+    expect(text).not.toContain("LIVE-TOKEN-NESTED");
+    expect(JSON.parse(text).rows[0].profile.api_token).toBe("[REDACTED]");
+  });
+
   it("REGRESSION: a 200-with-error staff body must not leak api_token either", async () => {
     // api_error with no structured detail echoes rawBody too.
     const errBody: CallFn = (async (_m: string, _u: string, _c: object, _d: unknown, _n: string) => ({
@@ -242,6 +254,33 @@ describe("raw write tools — wire bodies (T1, from the go/no-go transcripts)", 
       deleteEstimate.handler({ estimate_id: 5 } as any, {}),
     );
     expect(JSON.parse(textOf(res as any)).soft_delete).toBe(true);
+  });
+
+  it("update_estimate with lines REPLACES the line set using the SAME wire shape as create", async () => {
+    // The update path shares toWireLine with create; if it ever diverges
+    // (e.g. sending unit_cost as a bare string), a lines-replacing PUT could
+    // zero out a real estimate's amounts with ok: true.
+    const log: Array<{ method: string; url: string; body: unknown }> = [];
+    await runInProfile(profileWith(recording("estimate", log)), () =>
+      updateEstimate.handler(
+        {
+          estimate_id: 5,
+          lines: [{ name: "Revised", qty: "3", unit_cost: "99.50", currency_code: "USD", description: "d" }],
+        } as any,
+        {},
+      ),
+    );
+    expect(log[0]).toEqual({
+      method: "PUT",
+      url: "/accounting/account/ACC123/estimates/estimates/5",
+      body: {
+        estimate: {
+          lines: [
+            { name: "Revised", qty: "3", unit_cost: { amount: "99.50", code: "USD" }, description: "d", type: 0 },
+          ],
+        },
+      },
+    });
   });
 
   it("send_estimate REFUSES with no recipients — the fake call is NEVER invoked", async () => {

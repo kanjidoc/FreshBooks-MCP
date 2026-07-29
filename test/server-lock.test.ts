@@ -62,4 +62,12 @@ describe("server lock (pid-liveness, not age)", () => {
     expect(existsSync(`${p}.1`)).toBe(true);
     removeLock(p);
   });
+  it("the sweep FAILS CLOSED on a malformed sibling — possibly a live server's mid-write", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fb-lock7-"));
+    const p = lockPathFor(dir);
+    writeFileSync(`${p}.777`, '{"pid":'); // truncated JSON
+    writeLock(p);
+    expect(existsSync(`${p}.777`)).toBe(true); // kept, not swept
+    removeLock(p);
+  });
 });

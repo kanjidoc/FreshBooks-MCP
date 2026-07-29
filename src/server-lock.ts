@@ -52,12 +52,16 @@ function allLockFiles(basePath: string): string[] {
 
 export function writeLock(basePath: string): void {
   writeFileSync(ownLockPath(basePath), JSON.stringify({ pid: process.pid, at: Date.now() }));
-  // Opportunistic sweep of crash leftovers: a sibling whose pid is dead can be
-  // removed safely (pid reuse fails CLOSED — kill(pid, 0) on a reused pid says
-  // "alive", so the file is kept and migration keeps refusing).
+  // Opportunistic sweep of crash leftovers: a sibling is removed ONLY when it
+  // PARSES and its pid is provably dead. Both ambiguous cases fail closed:
+  // pid reuse (kill(pid, 0) on a reused pid says "alive" → kept) and a
+  // malformed/truncated file (possibly a live server's mid-write — deleting
+  // it would re-open the exact migration-vs-live-server race this lock
+  // prevents → kept; it gets swept later once parseable and dead).
   for (const f of allLockFiles(basePath)) {
     if (f === ownLockPath(basePath)) continue;
-    if (!pidIsAlive(readLockPid(f))) {
+    const pid = readLockPid(f);
+    if (typeof pid === "number" && !pidIsAlive(pid)) {
       try {
         rmSync(f);
       } catch {
