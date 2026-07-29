@@ -25,6 +25,25 @@ function stripApiToken(row: unknown): unknown {
   return rest;
 }
 
+/**
+ * Deep-redact `api_token` EVERYWHERE in a raw result before it reaches
+ * renderRaw. The shape-level strip covers only the success path; renderRaw's
+ * failure branch echoes `rawBody` VERBATIM on envelope drift (and on
+ * api_error with no structured detail), and its shape-throw catch echoes the
+ * unshaped body too — so a drifted staff response would otherwise leak live
+ * tokens into model context. Redacting the whole result object closes every
+ * echo path at once; only values under an `api_token` key are touched.
+ */
+function redactApiTokens<T>(node: T): T {
+  if (Array.isArray(node)) return node.map(redactApiTokens) as unknown as T;
+  if (typeof node !== "object" || node === null) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    out[key] = key === "api_token" ? "[REDACTED]" : redactApiTokens(value);
+  }
+  return out as T;
+}
+
 export const listStaff = tool(
   "freshbooks_list_staff",
   `List the FreshBooks account's staff members (team logins). Answers "who works in this account, and what is their staff id?" — the staff_id freshbooks_create_expense needs. Not the configured server logins (that is freshbooks_list_accounts). QUIRK: the API returns each member's api_token credential; this server strips it. ${RAW_TIER_DESC}`,
@@ -37,7 +56,7 @@ export const listStaff = tool(
         envelopeKey: "staff",
         name: "List Staff",
       });
-      return renderRaw(result, (rows) => (rows as unknown[]).map(stripApiToken));
+      return renderRaw(redactApiTokens(result), (rows) => (rows as unknown[]).map(stripApiToken));
     } catch (error) {
       return {
         content: [
@@ -64,7 +83,9 @@ export const getStaffMember = tool(
         path: `/accounting/account/${accountId}/users/staffs/${args.staff_id}`,
         name: "Get Staff Member",
       });
-      return renderRaw(result, (data) => stripApiToken(unwrapEnvelope(data, "staff", "object").value));
+      return renderRaw(redactApiTokens(result), (data) =>
+        stripApiToken(unwrapEnvelope(data, "staff", "object").value),
+      );
     } catch (error) {
       return {
         content: [

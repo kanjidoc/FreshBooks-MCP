@@ -121,6 +121,40 @@ describe("staff api_token stripping (SECURITY — a live credential was observed
     expect(text).not.toContain("secret-token-value");
     expect(JSON.parse(text)).toEqual({ id: 1 });
   });
+
+  it("REGRESSION: a DRIFTED staff response must not leak api_token through the rawBody echo", async () => {
+    // The success-path strip runs inside shape(), which never runs on
+    // failure — renderRaw echoes rawBody verbatim on envelope drift. A
+    // renamed envelope key must therefore render with tokens REDACTED.
+    const driftedList = await runInProfile(
+      // wrong envelope key, rows still carrying live tokens
+      profileWith(collection("staffs", [{ id: 1, api_token: "LIVE-TOKEN-A" }], [])),
+      () => listStaff.handler({}, {}),
+    );
+    expect((driftedList as { isError?: boolean }).isError).toBe(true);
+    const listText = textOf(driftedList as any);
+    expect(listText).toMatch(/Envelope drift/);
+    expect(listText).not.toContain("LIVE-TOKEN-A");
+    expect(listText).toContain("[REDACTED]"); // body still echoed, tokens gone
+
+    const driftedGet = await runInProfile(
+      profileWith(single("wrong_key", { id: 1, api_token: "LIVE-TOKEN-B" }, [])),
+      () => getStaffMember.handler({ staff_id: 1 } as any, {}),
+    );
+    expect((driftedGet as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(driftedGet as any)).not.toContain("LIVE-TOKEN-B");
+  });
+
+  it("REGRESSION: a 200-with-error staff body must not leak api_token either", async () => {
+    // api_error with no structured detail echoes rawBody too.
+    const errBody: CallFn = (async (_m: string, _u: string, _c: object, _d: unknown, _n: string) => ({
+      ok: true,
+      data: { response: { errors: [], leaked: { api_token: "LIVE-TOKEN-C" } } },
+    })) as CallFn;
+    const res = await runInProfile(profileWith(errBody), () => listStaff.handler({}, {}));
+    expect((res as { isError?: boolean }).isError).toBe(true);
+    expect(textOf(res as any)).not.toContain("LIVE-TOKEN-C");
+  });
 });
 
 describe("raw write tools — wire bodies (T1, from the go/no-go transcripts)", () => {
