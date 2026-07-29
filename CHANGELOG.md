@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Eight entity read tools** for resources the frozen SDK never wrapped
+  (raw snake_case fields; exhaustive listing with no `page` param):
+  `freshbooks_list_estimates`/`freshbooks_get_estimate` (quotes; the get
+  always passes `include[]=lines` — verified live that the API otherwise
+  omits line items), `freshbooks_list_staff`/`freshbooks_get_staff_member`
+  (closes a real hole — `freshbooks_create_expense` requires a `staff_id`
+  no tool could produce; **the API's `api_token` credential field is
+  stripped**, a live token was observed in it), `freshbooks_list_taxes`/
+  `freshbooks_get_tax` (tax definitions), and
+  `freshbooks_list_invoice_profiles`/`freshbooks_get_invoice_profile`
+  (recurring-invoice templates). 82 → 90 tools. Envelope keys probed live
+  on every configured profile (collection `staff` not `staffs`; single
+  `tax` not `taxes`); bogus IDs verified to return clean 404 errors; empty
+  collections are success, never errors. Per the no-guessed-filters
+  doctrine, no search filters are offered on any of them.
+- Written go/no-go memos for every write domain
+  (`docs/superpowers/specs/2026-07-29-tier2-write-go-no-go.md`), each gated
+  on a live artifact: **taxes GO** (full CRUD verified; merge-semantics
+  PUT; hard DELETE), **estimates GO** (create requires `customerid` +
+  `create_date`; merge-semantics PUT — lines survive; soft DELETE
+  `vis_state: 1`; nothing emailed on create), **staff NO-GO permanent**
+  (`create_staff` emails a real human), **invoice profiles NO-GO** (a
+  create probe could auto-invoice a real client; no record exists to verify
+  the single-item contract).
+
 - **Six ledger report tools** the frozen FreshBooks Node SDK never wrapped,
   served raw (snake_case API fields) through the new raw-call layer:
   `freshbooks_report_balance_sheet` (point-in-time `as_of_date` + up to 3
