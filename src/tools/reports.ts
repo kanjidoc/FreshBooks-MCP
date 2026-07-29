@@ -27,21 +27,14 @@ export function reportSearch(
 }
 
 /**
- * Which optional params each report honors, verified on the wire by decoding
- * each response's `downloadToken` JWT (its `params` claim echoes the set the
- * server actually parsed):
- *
- *   profitloss          start_date end_date cash_based fiscal_year_view
- *                       currency_code resolution group_by_account
- *                       group_by_category_id report_mode
- *   taxsummary          start_date end_date cash_based currency_code
- *   payments_collected  start_date end_date currency_codes[] clientids[]
- *                       payment_methods[] payment_for
- *
- * Do not offer a param on a report that does not list it — the endpoint will
- * accept the request and quietly ignore the filter, producing wrong numbers
- * with no error.
+ * Which optional params each report honors lives as DATA in
+ * `src/report-params.ts` (REPORT_PARAMS), rendered live by `freshbooks_help
+ * topic=reports` and locked by `test/report-params.test.ts`. Do not offer a
+ * param on a report whose entry does not list it — the endpoint will accept
+ * the request and quietly ignore the filter, producing wrong numbers with no
+ * error. Re-exported here so the tools and their matrix ship from one module.
  */
+export { REPORT_PARAMS } from "../report-params";
 
 const CASH_BASED_DESC =
   "Report on a cash basis (income/expenses counted when money moves) instead of the default accrual basis (counted when invoiced/billed). Affects which transactions are included.";

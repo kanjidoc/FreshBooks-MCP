@@ -447,9 +447,12 @@ each endpoint honors is not guesswork — decode the `downloadToken` JWT in any
 report response and its `params` claim echoes the exact set the server parsed.
 **Unsupported params are silently dropped** (`ok: true`, no error), so never
 offer a param on a report whose token does not list it: the filter would appear
-to work while quietly producing wrong numbers. The current matrix is recorded in
-the comment block at the top of `src/tools/reports.ts`, and
-`test/report-params.test.ts` locks it in.
+to work while quietly producing wrong numbers. The matrix lives as DATA in
+`src/report-params.ts` (`REPORT_PARAMS` — honored, proven-ignored, wire-key
+mapping, and verification date per endpoint); `freshbooks_help topic=reports`
+renders it live, and `test/report-params.test.ts` asserts every report tool's
+schema stays inside its entry. Do not restate the matrix in prose anywhere —
+link here or to the help topic instead.
 
 Report params also serialize differently from list endpoints: the SDK builds
 reports with the `AccountingReportsResource` type, which is **not** in
