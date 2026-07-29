@@ -122,7 +122,7 @@ export const listJournalEntryAccounts = tool(
 
 export const listJournalEntryDetails = tool(
   "freshbooks_list_journal_entry_details",
-  "List journal entry details for the FreshBooks account. Supports pagination. Returns individual line-level detail records associated with posted journal entries.",
+  "List journal entry details for the FreshBooks account. Returns individual line-level detail records associated with posted journal entries.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

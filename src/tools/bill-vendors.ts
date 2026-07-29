@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listBillVendors = tool(
   "freshbooks_list_bill_vendors",
-  "List bill vendors for the FreshBooks account. Supports pagination, search by vendor name, and sorting. Returns vendor contact details, address, and currency info.",
+  "List bill vendors for the FreshBooks account. Returns vendor contact details, address, and currency info.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

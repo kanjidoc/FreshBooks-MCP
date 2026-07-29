@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listClients = tool(
   "freshbooks_list_clients",
-  "List clients for the FreshBooks account. Supports pagination, search filters, sorting, and includes. Returns client names, emails, organizations, and contact details.",
+  "List clients for the FreshBooks account. Returns client names, emails, organizations, and contact details.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

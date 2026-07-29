@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listBills = tool(
   "freshbooks_list_bills",
-  "List bills for the FreshBooks account. Supports pagination, sorting, and includes. Returns bill summaries including id, vendor, amount, status, and dates.",
+  "List bills for the FreshBooks account. Returns bill summaries including id, vendor, amount, status, and dates.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

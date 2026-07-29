@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listBillPayments = tool(
   "freshbooks_list_bill_payments",
-  "List bill payments for the FreshBooks account. Supports pagination. Returns bill payment summaries including id, bill, amount, and paid date.",
+  "List bill payments for the FreshBooks account. Returns bill payment summaries including id, bill, amount, and paid date.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

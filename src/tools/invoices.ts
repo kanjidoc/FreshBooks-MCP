@@ -8,7 +8,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listInvoices = tool(
   "freshbooks_list_invoices",
-  "List invoices for the FreshBooks account. Supports pagination, search filters, sorting, and includes. Returns invoice summaries including id, status, amount, customer, and dates.",
+  "List invoices for the FreshBooks account. Returns invoice summaries including id, status, amount, customer, and dates.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

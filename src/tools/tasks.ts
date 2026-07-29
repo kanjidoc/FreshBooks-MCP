@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listTasks = tool(
   "freshbooks_list_tasks",
-  "List tasks for the FreshBooks account. Supports pagination and sorting. Returns task summaries including name, description, rate, and billable status.",
+  "List tasks for the FreshBooks account. Returns task summaries including name, description, rate, and billable status.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listOtherIncomes = tool(
   "freshbooks_list_other_incomes",
-  "List other income records for the FreshBooks account. Supports pagination and sorting. Returns summaries including id, source, amount, date, and category.",
+  "List other income records for the FreshBooks account. Returns summaries including id, source, amount, date, and category.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

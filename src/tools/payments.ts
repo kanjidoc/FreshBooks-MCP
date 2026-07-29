@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listPayments = tool(
   "freshbooks_list_payments",
-  "List payments for the FreshBooks account. Supports pagination, search filters, and sorting. Returns payment summaries including amount, date, type, and associated invoice.",
+  "List payments for the FreshBooks account. Returns payment summaries including amount, date, type, and associated invoice.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

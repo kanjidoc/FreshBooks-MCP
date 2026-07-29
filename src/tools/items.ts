@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listItems = tool(
   "freshbooks_list_items",
-  "List items (products/services) for the FreshBooks account. Supports pagination and sorting. Returns item summaries including id, name, description, unit cost, and inventory.",
+  "List items (products/services) for the FreshBooks account. Returns item summaries including id, name, description, unit cost, and inventory.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

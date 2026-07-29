@@ -6,7 +6,7 @@ import { buildQueryBuilders } from "../query-helpers";
 
 export const listProjects = tool(
   "freshbooks_list_projects",
-  "List projects for the FreshBooks account. Supports pagination and sorting. Returns project summaries including title, client, type, budget, and due date.",
+  "List projects for the FreshBooks account. Returns project summaries including title, client, type, budget, and due date.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

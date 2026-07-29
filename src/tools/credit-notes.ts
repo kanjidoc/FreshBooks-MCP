@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listCreditNotes = tool(
   "freshbooks_list_credit_notes",
-  "List credit notes for the FreshBooks account. Supports pagination, search by client ID, sorting, and includes. Returns credit note status, amounts, and line items.",
+  "List credit notes for the FreshBooks account. Returns credit note status, amounts, and line items.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),

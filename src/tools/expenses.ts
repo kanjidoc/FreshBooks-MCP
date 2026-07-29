@@ -7,7 +7,7 @@ import { parseLocalDate } from "../date-helpers";
 
 export const listExpenses = tool(
   "freshbooks_list_expenses",
-  "List expenses for the FreshBooks account. Supports pagination, search filters, sorting, and includes. Returns expense summaries including amount, vendor, category, and date.",
+  "List expenses for the FreshBooks account. Returns expense summaries including amount, vendor, category, and date.",
   {
     page: z.number().int().min(1).default(1).describe("Page number"),
     per_page: z.number().int().min(1).max(100).default(25).describe("Results per page"),
