@@ -390,7 +390,7 @@ export const listInvoices = tool(
       const queryBuilders = buildQueryBuilders({ page: args.page, perPage: args.per_page });
       const response = await client.invoices.list(accountId, queryBuilders);
 
-      if (!response.ok) {
+      if (!response.ok) {                                         // defense-in-depth — see Error Handling
         return {
           content: [{ type: "text", text: `FreshBooks error: ${response.error?.message}` }],
           isError: true,
@@ -400,7 +400,7 @@ export const listInvoices = tool(
         content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }],
       };
     } catch (error: any) {
-      // SDK may also throw errors with { name, message, statusCode, errors }
+      // The REAL SDK error path: call() throws { name, message, statusCode, errors }
       return {
         content: [{ type: "text", text: `Error: ${error.message ?? String(error)}` }],
         isError: true,
@@ -527,11 +527,21 @@ Use `allowedTools: ["mcp__freshbooks__*"]` to allow all tools on the server.
 
 Tool handlers must **never throw**. Uncaught exceptions kill the agent loop.
 
-The FreshBooks SDK can signal errors in two ways:
-1. **Response-level** — `response.ok === false` with error details in `response.error`
-2. **Thrown exceptions** — SDK throws errors with `{ name, message, statusCode, errors[] }`
+**How errors actually arrive is scoped by tier:**
 
-Both must be caught and returned as `isError: true`:
+- **SDK-backed tools (every `client.<resource>` call): errors THROW.** The SDK's
+  `call()` (`APIClient.js`) throws `{ name, message, statusCode, errors[] }` on
+  every failure and **never returns `ok: false`** — there is not a single
+  `ok: false` construction site in the SDK. The `if (!response.ok)` branch in
+  these handlers is defense-in-depth against a future SDK change, not a live
+  error path. Keep writing it (it is harmless and uniform), but never rely on it:
+  the `catch` block is where SDK errors are actually handled.
+- **Raw-backed tools (direct API access via `src/raw-call.ts`, where present):
+  the inverse.** They return a real `Result`-shaped object and the `!ok` branch
+  is the **only** error path — nothing throws.
+
+The `Result<T>` response shape documented above is correct as a type either way.
+Both paths must end in `isError: true`, never a throw:
 
 ```typescript
 try {
@@ -603,7 +613,7 @@ This project is designed so any FreshBooks user can use it:
 - Use `.default()` on optional Zod fields with sensible defaults
 - Mark read-only tools (list, get) with `{ annotations: { readOnlyHint: true } }`
 - Use the FreshBooks SDK client methods — never raw fetch/HTTP
-- Check `response.ok` before accessing `response.data`, and catch thrown errors
+- Check `response.ok` before accessing `response.data`, and catch thrown errors — knowing that for SDK-backed tools the throw is the real error path (`call()` never returns `ok: false`; see Error Handling)
 - Monetary amounts are strings — use `big.js` for any arithmetic
 - Accounting resources use `accountId` (string), project resources use `businessId` (number)
 - Do NOT add an `account` field to a tool's own schema — `withAccount` injects it. Keep using the zero-arg `getFreshBooksClient()`/`getAccountId()`/`getBusinessId()`; they resolve the active profile from the `AsyncLocalStorage` context

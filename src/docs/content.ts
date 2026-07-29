@@ -143,8 +143,10 @@ src/
 resolves the named \`account\` to a profile, runs \`refreshIfNeeded(profile)\`, and
 enters that profile's \`AsyncLocalStorage\` context → the handler builds a typed
 payload (its zero-arg \`getFreshBooksClient()\`/\`getAccountId()\` read the active
-profile) → the FreshBooks SDK serializes and sends it → the handler checks
-\`response.ok\`, catches any thrown error, and returns an MCP result. Handlers
+profile) → the FreshBooks SDK serializes and sends it → the handler catches the
+SDK's thrown error (the SDK signals every failure by throwing; its \`call()\`
+never returns \`ok: false\`, so the \`response.ok\` check handlers also carry is
+defense-in-depth, not the live error path) and returns an MCP result. Handlers
 never throw; on an unknown or missing \`account\` the wrapper returns an error
 result rather than throwing.
 
@@ -196,9 +198,12 @@ export const TOPIC_EXTENDING = `# FreshBooks MCP — Adding a Tool
 2. **Register it** — add the export to the array in \`src/tool-registry.ts\`.
    That is the only wiring step; token-refresh wrapping is automatic.
 
-3. **Handlers must never throw.** Wrap the body in try/catch. Check
-   \`response.ok\` before reading \`response.data\`; also catch thrown SDK errors.
-   Return \`{ content: [{ type: "text", text }], isError: true }\` on failure.
+3. **Handlers must never throw.** Wrap the body in try/catch. SDK-backed
+   resources signal every error by THROWING (\`{ statusCode, message, errors[] }\`)
+   — the SDK's \`call()\` never returns \`ok: false\`, so the conventional
+   \`response.ok\` check is defense-in-depth, not the real error path; the catch
+   block is. Return \`{ content: [{ type: "text", text }], isError: true }\` on
+   failure.
 
 **SDK gotchas (these caused real bugs — see TOOL_AUDIT.md):**
 - **Method signatures vary by resource.** Most creates are \`create(data, accountId)\`,
@@ -229,8 +234,9 @@ export const TOPIC_CONVENTIONS = `# FreshBooks MCP — Conventions
 - **Dates** — date-only accounting fields (\`YYYY-MM-DD\`) are parsed with
   \`parseLocalDate()\` to avoid a UTC off-by-one. Full timestamps keep their offset.
 - **TypeScript strict mode** — prefer SDK model types over \`any\`.
-- **Errors come two ways** — \`response.ok === false\`, OR a thrown exception with
-  \`{ statusCode, message, errors[] }\`. Handle both.`;
+- **SDK errors arrive by throwing** — \`{ statusCode, message, errors[] }\`. The
+  SDK's \`call()\` never returns \`ok: false\`; handlers still check \`response.ok\`
+  as defense-in-depth, but the catch block is the live error path.`;
 
 export const TOPIC_TROUBLESHOOTING = `# FreshBooks MCP — Troubleshooting
 
