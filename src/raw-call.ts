@@ -571,22 +571,33 @@ export function renderRaw(
     return { content: [{ type: "text", text: parts.join("\n") }], isError: true };
   }
 
-  let payload: unknown;
-  if ("rows" in result) {
-    const base = {
-      rows: result.rows,
-      pages_fetched: result.pages_fetched,
-      pages_total: result.pages_total,
-      total: result.total,
-    };
-    payload = result.complete
-      ? { complete: true, ...base }
-      : // WARNING_INCOMPLETE is deliberately the FIRST key so it is the first
-        // thing in the rendered JSON.
-        { WARNING_INCOMPLETE: INCOMPLETE_WARNING, stopped_by: result.stopped_by, complete: false, ...base };
-    if (shape) payload = shape(payload);
-  } else {
-    payload = shape ? shape(result.data) : result.data;
+  // shape() may legitimately throw EnvelopeDriftError (it usually calls
+  // unwrapEnvelope). A throw here must become a failure result, not escape the
+  // tool handler — never-throw covers the renderer too.
+  try {
+    let payload: unknown;
+    if ("rows" in result) {
+      const base = {
+        rows: result.rows,
+        pages_fetched: result.pages_fetched,
+        pages_total: result.pages_total,
+        total: result.total,
+      };
+      payload = result.complete
+        ? { complete: true, ...base }
+        : // WARNING_INCOMPLETE is deliberately the FIRST key so it is the first
+          // thing in the rendered JSON.
+          { WARNING_INCOMPLETE: INCOMPLETE_WARNING, stopped_by: result.stopped_by, complete: false, ...base };
+      if (shape) payload = shape(payload);
+    } else {
+      payload = shape ? shape(result.data) : result.data;
+    }
+    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+  } catch (err) {
+    const failure =
+      err instanceof EnvelopeDriftError
+        ? driftFailure(err.message, err.rawBody)
+        : failureFromThrown(err);
+    return renderRaw(failure); // failure branch above — cannot recurse again
   }
-  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
 }

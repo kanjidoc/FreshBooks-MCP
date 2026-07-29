@@ -453,6 +453,21 @@ describe("renderRaw", () => {
     expect(out.content[0].text).toContain('{"odd":true}');
     expect(out.content[0].text).toMatch(/report it as a bug/);
   });
+  it("a throwing shape() becomes a failure result, never an escape (never-throw covers the renderer)", async () => {
+    const r = await inProfile(
+      ((_m, _u, _c, _d, _n) =>
+        Promise.resolve({ ok: true, data: { response: { result: { wrong_key: {} } } } })) as CallFn,
+      () => rawRequest({ method: "GET", path: "/x", name: "T" }),
+    );
+    const out = renderRaw(r, (data) => unwrapEnvelope(data, "balance_sheet", "object").value);
+    expect(out.isError).toBe(true);
+    expect(out.content[0].text).toMatch(/Envelope drift/);
+    const outPlain = renderRaw(r, () => {
+      throw new Error("shape exploded");
+    });
+    expect(outPlain.isError).toBe(true);
+    expect(outPlain.content[0].text).toMatch(/shape exploded/);
+  });
   it("shape() maps success data", async () => {
     const r = await inProfile(
       ((_m, _u, _c, _d, _n) =>
