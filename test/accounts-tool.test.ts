@@ -24,6 +24,15 @@ describe("registry wiring", () => {
   });
 });
 
+/** Narrow the MCP content union to its text member (throws loudly otherwise). */
+function firstText(res: { content: Array<{ type: string }> }): string {
+  const c = res.content[0] as { type: string; text?: unknown };
+  if (c?.type !== "text" || typeof c.text !== "string") {
+    throw new Error(`expected text content, got ${JSON.stringify(c)}`);
+  }
+  return c.text;
+}
+
 // --- R2: list_accounts surfaces collisions/broken/duplicates and marks quarantined ---
 
 // Far-future JWT so refreshIfNeeded() is a no-op (no network) for any profile.
@@ -68,7 +77,7 @@ describe("freshbooks_list_accounts (R2 collision surfacing, network-free)", () =
     useProfiles({ "acme.env": cfg("a", "A"), "beta.env": cfg("b", "B") });
     const res = await listAccounts.handler({}, {});
     expect(res.isError).toBeUndefined();
-    const out = JSON.parse(res.content[0].text);
+    const out = JSON.parse(firstText(res));
     expect(out.accounts.map((a: any) => a.account).sort()).toEqual(["acme", "beta"]);
     for (const acc of out.accounts) {
       expect(acc.token).toHaveProperty("expiry_seconds");
@@ -84,7 +93,7 @@ describe("freshbooks_list_accounts (R2 collision surfacing, network-free)", () =
     });
     const res = await listAccounts.handler({}, {});
     expect(res.isError).toBeUndefined();
-    const out = JSON.parse(res.content[0].text);
+    const out = JSON.parse(firstText(res));
 
     const copy = out.accounts.find((a: any) => a.account === "copy");
     const acme = out.accounts.find((a: any) => a.account === "acme");
@@ -108,7 +117,7 @@ describe("freshbooks_list_accounts (R2 collision surfacing, network-free)", () =
       "dupe.env": cfg("a", "A"), // identical refresh token rt-a -> same-token duplicate
     });
     const res = await listAccounts.handler({}, {});
-    const out = JSON.parse(res.content[0].text);
+    const out = JSON.parse(firstText(res));
     expect(out.broken).toContain("stub.env");
     expect(out.duplicates).toContain("dupe.env");
     expect(out.ignored_files).toEqual(expect.arrayContaining(["stub.env", "dupe.env"]));

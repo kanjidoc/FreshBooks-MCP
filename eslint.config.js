@@ -7,7 +7,7 @@ const tseslint = require("typescript-eslint");
  * axios internals and partial-payload casts (see CLAUDE.md / freshbooks_help).
  */
 module.exports = tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "test/**"] },
+  { ignores: ["dist/**", "node_modules/**"] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -117,7 +117,7 @@ describe("tool inventory sweeps", () => {
       for (const B of banned) {
         expect(schema instanceof B, `${path} uses ${B.name}`).toBe(false);
       }
-      const def = (schema as z.ZodType)._def as Record<string, unknown>;
+      const def = (schema as z.ZodType)._def as unknown as Record<string, unknown>;
       for (const key of ["innerType", "schema", "type"]) {
         if (def[key] instanceof z.ZodType) check(def[key], `${path}.<${key}>`);
       }

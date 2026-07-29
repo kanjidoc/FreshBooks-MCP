@@ -27,7 +27,8 @@
     "setup": "ts-node scripts/setup.ts",
     "check-tokens": "ts-node scripts/refresh-tokens.ts --check-only",
     "refresh-tokens": "ts-node scripts/refresh-tokens.ts",
-    "lint": "eslint src/",
+    "lint": "eslint src test",
+    "typecheck": "tsc -p tsconfig.test.json",
     "format": "prettier --write src/",
     "test": "vitest run"
   },
