@@ -5,7 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.2.0] - 2026-07-29
+
+The Tier 2 release: 76 → 97 tools, opening every safely-verifiable FreshBooks
+endpoint the frozen Node SDK never wrapped, through a new never-throw raw
+layer with exhaustive pagination, loud integrity guards, and per-response
+filter-verification echoes. Every number-producing tool was cross-footed
+against the live API on every configured profile before shipping.
 
 ### Added
 
@@ -115,6 +121,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The staff tools' `api_token` stripping now also covers FAILURE paths: on
+  envelope drift (or an API error with no structured detail) the raw body is
+  echoed for the bug report, and it previously bypassed the success-path
+  strip — a drifted staff response would have echoed live credentials. Both
+  staff tools now deep-redact `api_token` (including nested carriers) across
+  the entire result before rendering; regression tests pin every echo path.
+- `.gitignore` now covers the whole per-pid lock family (`.server.lock*`),
+  and a lock file that had slipped into the branch is untracked; a test
+  asserts no lock file is ever tracked.
+- `writeLock`'s crash-leftover sweep fails closed on a malformed sibling
+  lock file (possibly a live server's mid-write) — only parseable, provably
+  dead pids are swept.
 - The server lock is now one file per pid (`.server.lock.<pid>`). A single
   shared `.server.lock` was last-writer-wins: with N servers running, the first
   to exit deleted the shared file and migration's "is a server running" guard —
