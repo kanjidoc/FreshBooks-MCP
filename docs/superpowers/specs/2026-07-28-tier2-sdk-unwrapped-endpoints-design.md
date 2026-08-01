@@ -103,9 +103,15 @@ block: `.mcp.json`, `~/.claude.json:2175-2181`, Claude Desktop's config.
 
 ### Rules
 
-1. **Snapshot `dist/` before Phase 1** (`cp -R dist ../FreshBooks-MCP-dist-76-GOOD`).
-   `dist/` is gitignored → **`git revert` does not roll back the install**.
-   Re-snapshot each green phase.
+1. ~~**Snapshot `dist/` before Phase 1**~~ — **RETIRED 2026-08-01, do not revive.**
+   The rule was scoped to this migration and its four `../FreshBooks-MCP-dist-<count>-GOOD`
+   copies have been deleted. It existed because `dist/` is gitignored, so
+   `git revert` could not roll back the install, and a failing `tsc` could
+   half-overwrite a working build. Phase 0 added `noEmitOnError`
+   (`tsconfig.json:9`), which closes that failure mode, and every phase carries a
+   tag (`tier2-phase0/1/2/3/5`). Recover any build with
+   `git checkout <tag> && npm run build` — never by copying `dist/` to a sibling
+   directory of the repo.
 2. Never build while a server is live (`tsc` writes non-atomically).
 3. **Never run `node dist/index.js` / `npm start` ad hoc** — clobbers the lock,
    rotates all three profiles, deletes the lock on exit. Handshake-verify
@@ -113,10 +119,16 @@ block: `.mcp.json`, `~/.claude.json:2175-2181`, Claude Desktop's config.
 4. **Never `npm ci` or bare `npm install`** in the live checkout.
 5. `npm run check-tokens` is safe (pure JWT decode). `npm run refresh-tokens` is
    **not** — it rotates and ignores the lock.
-6. **Never restore a `profiles/*.env.bak`.** Three exist right now and all hold
-   superseded refresh tokens — `atomic-write.ts:27` creates one on every rotation
-   by design. Restoring one burns the token family. Move them out of the repo in
-   Phase 0.
+6. **Never restore a `profiles/*.env.bak`.** This invariant stands. Every `.bak`
+   holds a *superseded* refresh token — `atomic-write.ts:27` creates one on each
+   rotation by design — so restoring one burns the token family. They are rotation
+   exhaust, not a recovery path.
+   **Disposal amended 2026-08-01:** the Phase 0 instruction to *move them out of
+   the repo* produced `../FreshBooks-MCP-token-backups/`, which stranded four
+   accounts' plaintext credentials outside `.gitignore`'s reach with zero recovery
+   value. That directory has been deleted. `.gitignore:5` already covers
+   `profiles/` wholesale, so leave `.bak` files where they land and **delete** them
+   when stale — never relocate them beside the repo.
 7. **No `mcp__freshbooks__*` wildcard** in `.claude/settings.local.json` (21 exact
    entries today). Per-tool prompts are the last human gate before writes.
 8. **Build/restart from a shell with no `freshbooks` MCP attached** — both live
