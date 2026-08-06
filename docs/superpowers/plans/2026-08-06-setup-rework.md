@@ -717,7 +717,6 @@ H (Desktop): "Our conversation is saved — nothing is lost when you quit. 1. Qu
 A: Deliver the ENTIRE parting note before the user restarts (your session may end with it). Failure lines, per rung — rung 2: "open a new chat in this folder and paste: Run the FreshBooks setup doctor and follow SETUP.md's troubleshooting for whatever it reports." · rung 3: "open a new chat, paste the same kickoff prompt you started with, and add: The install finished but the test failed after restart."
 SC: "Claude lists your invoices."
 DP: ["Our conversation is saved", "open this same chat", "paste the same kickoff prompt", "Cmd+Q"]
-SC: "Claude lists your invoices."
 TR: "no FreshBooks tools after restart" → "Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect."
 
 **Wizard prompt literals — a standalone Appendix A section, not part of the restart step (owned here; T18's transcript test asserts them):**
@@ -726,7 +725,6 @@ is "Paste the full address here (it starts with https://localhost/callback):";
 the completion banner is "DONE!". Windows note for `install-config`'s
 insertion script: the Mac string is canonical and pinned; the rendered block
 appends "(Windows: the file opens in Notepad — select all, paste, Ctrl+S)".
-TR: "no FreshBooks tools after restart" → "Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect."
 
 ---
 
