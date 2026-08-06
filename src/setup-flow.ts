@@ -20,7 +20,9 @@
  *
  * PURITY. This module has ZERO imports and performs no I/O — it compiles into
  * `dist/` and is served by `freshbooks_help`. Filesystem questions are asked
- * through the injected `SetupCtx.exists`, never `fs`.
+ * through the injected `SetupCtx.exists`, never `fs`; questions about file
+ * CONTENTS cannot be asked here at all — the caller answers them and passes the
+ * answer in (`SetupCtx.legacyNeedsMigration`).
  */
 
 export interface SetupCtx {
@@ -28,10 +30,30 @@ export interface SetupCtx {
   redirectUri: string;
   /**
    * Injected by the CLI surfaces (wizard, headless); optional so the
-   * documentation render ctx (`DOC_CTX`) can omit it. `check()`/`appliesIf()`
-   * assert it — the documentation render never calls them.
+   * documentation render ctx (`DOC_CTX`) can omit it. `check()` asserts it —
+   * the documentation render never calls `check()`.
    */
   exists?: (path: string) => boolean;
+  /**
+   * The `migrate-legacy` predicate, evaluated by the caller: `true` iff the
+   * base `.env` holds token markers AND lacks `FRESHBOOKS_MIGRATED` (spec step
+   * list). It is a ctx field rather than a Book computation because the Book is
+   * pure data with zero imports — it can ask whether a path exists, never what
+   * a file CONTAINS. The spec's `SetupCtx` block is explicit that the ctx is
+   * "extended as needed", and this is that need.
+   *
+   * CONTRACT for surfaces that filter steps by `appliesIf` — the wizard and
+   * `--doctor`: compute this from the base `.env` (`readTokenMarkers` +
+   * the `FRESHBOOKS_MIGRATED` marker) and pass it in. Absent ⇒ the step does
+   * NOT apply: existence of `.env` is not evidence of an unmigrated login (by
+   * the time a run reaches `migrate-legacy` the base `.env` always exists —
+   * `app-credentials` just wrote it), so a surface that has not computed the
+   * predicate must not show a migration step it cannot justify. Optional so the
+   * documentation render ctx (`DOC_CTX`) can omit it; the docs never call
+   * `appliesIf` — they render the "shows this step only if …" opener instead
+   * (spec §Enforcement render rule (c)).
+   */
+  legacyNeedsMigration?: boolean;
 }
 
 export interface SetupStep {
@@ -208,8 +230,10 @@ export const EXIT8_DIRECTIVE =
 
 /**
  * The documentation render ctx (spec §Enforcement render rule (a)):
- * placeholders stay symbolic; only constants are real. Deliberately carries no
- * `exists` — the docs never run `check()`.
+ * placeholders stay symbolic; only constants are real. Deliberately carries
+ * neither `exists` nor `legacyNeedsMigration` — the docs never run `check()`,
+ * and they render every `docs`-surface step rather than filtering by
+ * `appliesIf` (spec §Enforcement render rule (c)).
  */
 export const DOC_CTX: SetupCtx = {
   projectDir: "<project folder>",
@@ -405,12 +429,15 @@ export const SETUP_FLOW: SetupStep[] = [
     title: "Move an older single-login setup into a named profile",
     who: "human",
     surfaces: ["docs", "wizard"],
-    // The Book is pure data, so `appliesIf` can only ask the ctx-injected
-    // filesystem question: does a base `.env` exist at all? The full predicate
-    // — that file holds tokens AND lacks `FRESHBOOKS_MIGRATED` — is evaluated
-    // by the surfaces that may read file contents (the wizard, `--doctor`);
-    // this narrows the step to the only state in which it could apply.
-    appliesIf: (ctx) => ctx.exists!(ctx.projectDir + "/.env"),
+    // Spec predicate: the base `.env` holds tokens without `FRESHBOOKS_MIGRATED`.
+    // That is a question about file CONTENT, which this zero-import module
+    // cannot ask — so the surfaces that can (the wizard, `--doctor`) evaluate
+    // it and pass it in as `ctx.legacyNeedsMigration`; see the contract on that
+    // field. Deliberately NOT `ctx.exists(.env)`: the base `.env` always exists
+    // by the time a run reaches this step (`app-credentials` just wrote it), so
+    // an existence test would show the migration step to every already-migrated
+    // user.
+    appliesIf: (ctx) => ctx.legacyNeedsMigration === true,
     summary:
       "Move tokens from an older single-login setup file into a named profile file.",
     humanScript: [

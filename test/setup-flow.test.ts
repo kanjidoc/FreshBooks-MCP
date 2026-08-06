@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { SETUP_FLOW, KICKOFF_PROMPT, SECRETS_RULES, SIDEBAR_TEXT,
   HEADLESS_VERBS, FOREIGN_FLAG_ALLOWLIST } from "../src/setup-flow";
+import type { SetupCtx } from "../src/setup-flow";
 
 const IDS = ["choose-claude","get-project","node-install","npm-install","build",
   "developer-app","app-credentials","migrate-legacy","nickname","authorize",
@@ -92,5 +93,41 @@ describe("persona-string manifest (content pins — the strings the design exist
       ["Client ID + Secret","Authorization code","Access/refresh tokens"]);
     expect(SECRETS_RULES.selfTest).toContain("asking permission to run things");
     expect(SIDEBAR_TEXT).toContain("copy button");
+  });
+});
+
+// ── Fix round 1, review finding 1 ───────────────────────────────────────────
+// migrate-legacy's predicate is CONTENT-level ("base .env holds tokens without
+// FRESHBOOKS_MIGRATED", spec step list), not existence-level. The Book cannot
+// read file contents (zero imports), so the surfaces that can — the wizard
+// (T18) and `--doctor` (T12) — compute it and pass it in as
+// SetupCtx.legacyNeedsMigration. Without this, every already-migrated user is
+// shown the migration step, because the base .env always exists by then
+// (app-credentials just wrote it).
+describe("migrate-legacy appliesIf (the legacy-tokens predicate)", () => {
+  const ctx = (over: Partial<SetupCtx> = {}): SetupCtx => ({
+    projectDir: "/tmp/project",
+    redirectUri: "https://localhost/callback",
+    exists: () => true,
+    ...over,
+  });
+  const applies = (c: SetupCtx) => step("migrate-legacy").appliesIf!(c);
+
+  it("is FALSE for an already-migrated project even though the base .env exists", () => {
+    expect(applies(ctx({ legacyNeedsMigration: false }))).toBe(false);
+  });
+  it("is TRUE only when the surface reports legacy tokens without the marker", () => {
+    expect(applies(ctx({ legacyNeedsMigration: true }))).toBe(true);
+  });
+  it("is FALSE when a surface has not computed the predicate", () => {
+    expect(applies(ctx())).toBe(false);
+  });
+  it("never consults ctx.exists — file existence is not the predicate", () => {
+    const seen: string[] = [];
+    const spy = (p: string) => { seen.push(p); return true; };
+    applies(ctx({ legacyNeedsMigration: true, exists: spy }));
+    applies(ctx({ legacyNeedsMigration: false, exists: spy }));
+    applies(ctx({ exists: spy }));
+    expect(seen).toEqual([]);
   });
 });
