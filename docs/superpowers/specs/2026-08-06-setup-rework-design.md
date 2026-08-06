@@ -224,7 +224,7 @@ overview closing list (`src/docs/content.ts:50-52`), which today omits
 
 ### Secrets (`SECRETS_RULES` — Book data, rendered into the docs)
 
-| Credential | Rungs 1–2 (agent drives) | Rung 3 (human drives) |
+| Credential | Rungs 1–2 (Claude can run commands) | Rung 3 (you type every command) |
 |---|---|---|
 | Client ID + Secret | User pastes into chat **by design** (reassurance line at exactly that prompt); agent passes the secret to `--init` via **`--client-secret-file`** (preferred — the CLI reads, uses, and shreds the file itself, so a failed cleanup is a loud CLI error, not a forgotten agent step) or `--client-secret-stdin`; never argv. Agent confirms by shape, never echoes. | Only into the wizard's terminal prompt; humanScript: *"paste these only into the setup window — never into this chat"*; volunteered-slip script per `app-credentials`. |
 | Authorization code | Transits chat; single-use, minutes-lived. It also appears inside the `--add-login` approval dialog — pre-briefed (see `save-login`). | Pasted into the wizard. |
@@ -299,7 +299,7 @@ trailing newline trimmed.
 | `--install (desktop\|code\|mcp-json\|both)` | The config writers. `both` = desktop + code in one invocation. **Code target decision tree** (mirrors the wizard: CLI branch `scripts/setup.ts:595-602`, unconditional `.mcp.json` write at `:565`, manual text `printMcpConfig` `:219-227`): `claude` CLI present → `claude mcp add-json … --scope user`; else write `.mcp.json` + the "open this folder in Claude Code and enable the server" script. Success prints the absolute path + mtime written. Failure (invalid existing JSON, unwritable path, missing CLI) → exit 10, payload = the exact config block + target path. **Command selection:** rung 1 writes `process.execPath`; a possibly-sandboxed process (rung 2) must NOT trust `process.execPath` — probe the standard host locations (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`), use `--command-path <abs>` if the agent has a better answer, else fall back to `"node"` with a stated PATH caveat. `--doctor` warns on a non-absolute command — with text that distinguishes the two causes: a legacy entry (fix: re-run `--install`) vs the deliberate rung-2 `"node"` fallback (expected; not an error — re-running `--install` on rung 2 would reproduce it) — and fails on an absolute-but-missing one. |
 | `--print-config <target>` | **Read-only.** Emits the exit-10 payload shape (config block + target path + command/args) at exit 0, using the SAME command-selection rule as `--install`. It never reads the user's existing config — the generated entry needs no such read (`buildClaudeServerConfig` is `{command, args}` with a deliberate no-`env` design), which is what makes the read-only claim structural. This is the degraded path's lawful source when a *denied* permission means `--install` never ran — no payload otherwise exists. |
 | `--discard-pending --name N` | Shreds a staged pending. Honest note in output: discarding does not revoke the grant server-side. |
-| `--doctor` | Checks, each keyed to a Book step id with fix text: node version; `node_modules`; build (`dist/index.js`); base `.env` presence/format (never echoes values); unmigrated-legacy detection; per-profile health via `inspectTokenHealth` (`src/freshbooks-client.ts:332-362`; post-`4f607fd` token-free) + quarantine from the registry; **stale pendings** (mode-marked; warn > 24 h; fix = the bare resume command or `--discard-pending`); **lingering `.rescue` files** (see Security — age + "the next refresh adopts it; to force now, run `refresh-tokens --profile <n>`"); lingering `.client-secret.tmp`; config entries per target-location (info per location; **fail only when no location carries a resolvable entry**; missing-config fix text carries the sandbox hypothesis: *"if a previous session reported this install succeeded, the write was virtualized — use the manual Edit Config route now; do NOT re-run `--install`"*); configured `dist/index.js` exists; file-permission warnings. **Zero profiles mid-setup is a failing `save-login` check, exit 1 — never exit 2** (setup's 2 = usage; `check-tokens`' no-profiles 2 is that CLI's convention, not this one's). Exits: 0 all-pass / 1 issues. |
+| `--doctor` | Checks, each keyed to a Book step id with fix text: node version; `node_modules`; build (`dist/index.js`); base `.env` presence/format (never echoes values); unmigrated-legacy detection; per-profile health via `inspectTokenHealth` (`src/freshbooks-client.ts:332-362`; post-`4f607fd` token-free) + quarantine from the registry; **stale pendings** (mode-marked; warn > 24 h; fix = the bare resume command or `--discard-pending`); **lingering `.rescue` files** (see Security — age + "the next refresh adopts it, or clears it if superseded; to force now, run `refresh-tokens --profile <n>`"); lingering `.client-secret.tmp`; config entries per target-location (info per location; **fail only when no location carries a resolvable entry**; missing-config fix text carries the sandbox hypothesis: *"if a previous session reported this install succeeded, the write was virtualized — use the manual Edit Config route now; do NOT re-run `--install`"*); configured `dist/index.js` exists; file-permission warnings. **Zero profiles mid-setup is a failing `save-login` check, exit 1 — never exit 2** (setup's 2 = usage; `check-tokens`' no-profiles 2 is that CLI's convention, not this one's). Exits: 0 all-pass / 1 issues. |
 
 ### `--add-login` state machine
 
@@ -357,7 +357,7 @@ save via writeNewProfile
 shred pending → exit 0
 ```
 
-**Exit 8, fully drafted.** Verbatim question (Book-authored, yes/no-able
+**Exit 8, fully drafted.** Verbatim question (Book-authored, answerable
 without knowing what an accountId is):
 
 > "This FreshBooks company (<company>) is already connected as
@@ -407,7 +407,7 @@ server's first startup refresh — do not misread it as failure.
 | 2 | usage (incl. resume without pending — lists pendings; `--reauth` on a nonexistent name) | fix invocation |
 | 3 | auth code rejected/expired (incl. a dead staged pair on resume) | fresh `--auth-url`, fresh paste |
 | 4 | name invalid/taken pre-exchange (no code spent) | `--doctor`; `--reauth` |
-| 5 | duplicate-pair backstop (degenerate states; live already-connected is exit 8) | `--reauth --name <existing>`; but if `--doctor` shows that profile healthy, the save already completed (a server rotation raced the resume) — `--discard-pending` is all that's needed |
+| 5 | duplicate-pair backstop (degenerate states; live already-connected is exit 8) | `--reauth --name <existing>`; but if `--doctor` shows that profile healthy, the save already completed (a server rotation raced the resume) — nothing more is needed: exit 5 has already shredded the pending |
 | 6 | business choice (pending staged) | resume `--business-id` |
 | 7 | precondition (`.env` missing / build missing) | payload names the Book step |
 | 8 | same-account confirmation (pending staged) | three branches above |
@@ -483,8 +483,10 @@ base-`.env` profile can never be a group member (it exists only when
   Finder window appears with a file highlighted; double-click that file (it
   opens in TextEdit); select everything you see and paste it to me"* → agent
   returns the merged complete file. **Both branches end with the same
-  insertion script:** *"click back in TextEdit, select all, paste over
-  everything, press Cmd+S."* A complete file is NEVER synthesized from the
+  self-contained insertion script:** *"open Claude's Settings, choose
+  Developer, click Edit Config, and double-click the highlighted file — then
+  in TextEdit select all, paste over everything, press Cmd+S"* (branch (2)
+  already has the file open; repeating the open is harmless). A complete file is NEVER synthesized from the
   block alone when the current contents are unknown — that wipes existing
   `mcpServers` entries. If the degraded branch adds dialogs beyond the
   promised range, the agent says so and restates the remaining count.

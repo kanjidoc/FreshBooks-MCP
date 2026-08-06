@@ -91,4 +91,20 @@ v3.1 (this same day) folds in every finding above — see the spec's
 Appendix C. Convergence across rounds: 71 findings/5 blockers (v1) → 61/2
 branch-blockers (v2) → ~21/0 blockers, 2 majors both in v3's own newest
 machinery (v3) → all closed in v3.1. A final single-agent amendment check ran
-after v3.1 (see the addendum below if present).
+after v3.1 — see the addendum.
+
+## Addendum — final amendment check (1 agent, post-v3.1)
+
+Scope: the v3→v3.1 diff only. Results: **Appendix C body-real — PASS (21/21,
+no table-only rows). Collateral damage — PASS.** Coherence — one material and
+three minor wording contradictions, all fixed in the follow-up commit:
+the exit-5 recovery cell advised `--discard-pending` for a pending exit 5
+had already shredded (cell now says nothing more is needed); the shared
+insertion script assumed branch (2)'s open file (now self-contained,
+Settings → Developer → Edit Config included); doctor's rescue text said "the
+next refresh adopts it" unconditionally (now "or clears it if superseded");
+`SECRETS_RULES`' column headings still used the banned agent-drives
+discriminator (now capability-keyed). Plus the "yes/no-able" nit (now
+"answerable"). No further review round was run: this check found only
+wording-level coherence issues with mechanically specified fixes, which were
+applied verbatim.
