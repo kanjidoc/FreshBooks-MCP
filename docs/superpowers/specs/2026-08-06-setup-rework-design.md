@@ -1,12 +1,14 @@
-# Setup Rework — One Book, Three Surfaces (v3)
+# Setup Rework — One Book, Three Surfaces (v3.1)
 
 **Date:** 2026-08-06
-**Status:** v3 — v2 amended against the 6-agent round-2 review
+**Status:** v3.1 — v3 amended against the targeted round-3 verification
 **History:** v1 (`a19bd81`) → round-1 review (71 findings,
 `docs/superpowers/reviews/2026-08-06-setup-rework-round1.md`) → leak fix
 (`4f607fd`) → v2 (`8fe50d0`) → round-2 review (61 findings,
-`docs/superpowers/reviews/2026-08-06-setup-rework-round2.md`) → this v3.
-Appendix A maps round-1 findings; Appendix B maps round-2 findings.
+`docs/superpowers/reviews/2026-08-06-setup-rework-round2.md`) → v3
+(`1815822`) → round-3 targeted verification (3 agents,
+`docs/superpowers/reviews/2026-08-06-setup-rework-round3.md`) → this v3.1.
+Appendix A maps round-1 findings; Appendix B round-2; Appendix C round-3.
 
 Every claim about existing code was verified against source at authoring time
 and cited as `file:line`.
@@ -129,9 +131,13 @@ overview closing list (`src/docs/content.ts:50-52`), which today omits
   placeholders stay symbolic (`<project folder>`) except constants
   (`https://localhost/callback`); only the wizard and headless surfaces
   interpolate live values; (b) for docs-surface steps the block renders BOTH
-  role variants under labeled headings — *"If Claude is driving:"* (from
-  `agentGuidance`) and *"If you are doing every step by hand:"* (from
-  `humanScript`) — so the agent-facing rules (including `SECRETS_RULES`'
+  role variants under capability-keyed headings — *"If Claude can run
+  commands on your computer:"* (from `agentGuidance`) and *"If you are typing
+  every command yourself:"* (from `humanScript`) — never "if Claude is
+  driving", which a rung-3 reader whose Claude drives the *conversation*
+  would wrongly self-select; the secrets block adds the one-line self-test
+  *"has Claude been asking permission to run things, or only telling you
+  what to type?"* — so the agent-facing rules (including `SECRETS_RULES`'
   rungs-1–2 row) reach the byte-tested doc, not just the code; (c) a step with
   `appliesIf` opens with the drift-tested line *"The setup program shows this
   step only if …"*, and agentGuidance forbids pre-narrating the wizard's
@@ -237,12 +243,17 @@ the user's own paste into chat).
 **Secret-file choreography (single approval, blessed shape):** the agent
 writes the secret to `{{projectDir}}/.client-secret.tmp` (covered by
 `.gitignore`'s `*.tmp`; `--doctor` warns if one is found lingering), then one
-approved command: `npx ts-node scripts/setup.ts --headless --init
---client-id <id> --client-secret-file .client-secret.tmp` — the CLI chmods it
-0600 before reading if the tool couldn't, shreds it after use
-**unconditionally** (success or failure), and errors loudly if the shred
-fails. Pre-brief: *"one longer command; your secret is read from a scratch
-file the setup program deletes itself — the dialog will not contain it."*
+approved command **run from `{{projectDir}}`**: `npx ts-node scripts/setup.ts
+--headless --init --client-id <id> --client-secret-file .client-secret.tmp` —
+the CLI unlinks-and-recreates the file at 0600 before reading (a plain
+chmod would not fix a pre-existing default-mode file left by a crash),
+shreds it after use **unconditionally** (success or failure), and errors
+loudly if the shred fails. Honest window: between the agent's file-write and
+the CLI run the file sits at default permissions for seconds — unavoidable
+with agent file tools (a shell-side `umask` write would put the secret into
+the approval dialog, which is worse). Pre-brief: *"one longer command; your
+secret is read from a scratch file the setup program deletes itself — the
+dialog will not contain it."*
 
 ## Surface 1 — the human wizard (`npm run setup`)
 
@@ -283,14 +294,26 @@ trailing newline trimmed.
 | `--init --client-id X (--client-secret-file F \| --client-secret-stdin \| --client-secret Y)` | Writes base `.env` via `buildBaseEnvVars` (`scripts/setup.ts:94-107`), preserving `FRESHBOOKS_MIGRATED`. Refuses (exit 9) when `.env` holds token markers without the marker. `--client-secret` (argv) warns. |
 | `--auth-url` | Prints the authorization URL. Requires init (exit 7). Never opens a browser. |
 | `--add-login --name N --callback-url 'U'` | State machine below. |
-| `--add-login --name N [--business-id B \| --account-id A \| --distinct-login --confirm-different-user]` | **Resume forms** (no callback URL) — consume the staged pair. `--account-id` **skips discovery** (the IDs are the user's assertion). Bare `--add-login --name N` re-runs discovery on the staged pair and re-emits the branch exit with its payload — this is the resume command `--doctor` prints. Resume with a `--name` that has no pending → exit 2, listing existing pending names. |
-| `--reauth --name N --callback-url 'U'` / `--reauth --name N` (resume) | Same discipline as add-login: name must EXIST (else exit 2 pointing at `--add-login`); exchange; **stage** (mode-marked pending); discover; verify by **set-containment** — the stored accountId appears among the discovered memberships (`scripts/setup.ts:352-353` — a membership carries both ids); a blank stored accountId skips the check with a warning. Mismatch → exit 12, pending kept (recovery: sign into the right account and re-auth — a new exchange overwrites the pending — or `--discard-pending`). Discovery failure → exit 11, pending kept, resume retries. Match → replace ONLY that profile's tokens via the guarded writer (`applyTokensToEnv` + `writeAtomic` + read-back, the `persistTokens` pattern `src/freshbooks-client.ts:145-170` minus client state); duplicate-token guard vs OTHER profiles applies; IDs unchanged; shred pending. **Live-server ruling:** if `.server.lock` is fresh (`src/server-lock.ts` liveness), warn — don't refuse: the dominant re-auth trigger is a dead token family (revert impossible), and a live family is covered by the U3 adopt guard (`src/freshbooks-client.ts:194-210`) unless the server idles past the new token's ~12h expiry — so the warning and the step's humanScript both say *"restart Claude after re-auth so it picks up the new login."* Works on a quarantined profile (fresh family); quarantine itself persists until the collision is resolved — the message says so. |
-| `--install (desktop\|code\|mcp-json\|both)` | The config writers. `both` = desktop + code in one invocation. **Code target decision tree** (mirrors the wizard, `scripts/setup.ts:595-608`): `claude` CLI present → `claude mcp add-json … --scope user`; else write `.mcp.json` + the "open this folder in Claude Code and enable the server" script. Success prints the absolute path + mtime written. Failure (invalid existing JSON, unwritable path, missing CLI) → exit 10, payload = the exact config block + target path. **Command selection:** rung 1 writes `process.execPath`; a possibly-sandboxed process (rung 2) must NOT trust `process.execPath` — probe the standard host locations (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`), use `--command-path <abs>` if the agent has a better answer, else fall back to `"node"` with a stated PATH caveat. `--doctor` warns on a non-absolute command ("legacy entry — re-run `--install`") and fails on an absolute-but-missing one. |
-| `--print-config <target>` | **Read-only.** Emits the exit-10 payload shape (config block + target path + command/args) at exit 0. This is the degraded path's lawful source when a *denied* permission means `--install` never ran — no payload otherwise exists. |
+| `--add-login --name N [--business-id B] [--account-id A] [--distinct-login --confirm-different-user]` | **Resume forms** (no callback URL; flags compose — exit 8's branch 1 is `--distinct-login --confirm-different-user [--business-id B]`) — consume the staged pair. `--account-id` **skips discovery** (the IDs are the user's assertion). Bare `--add-login --name N` re-runs discovery on the staged pair and re-emits the branch exit with its payload — this is the resume command `--doctor` prints. Resume with a `--name` that has no pending → exit 2, listing existing pending names. |
+| `--reauth --name N --callback-url 'U'` / `--reauth --name N` (resume) | Same discipline as add-login: name must EXIST (else exit 2 pointing at `--add-login`); exchange; **stage** (mode-marked pending); discover; verify by **set-containment** — the stored accountId appears among the discovered memberships (`scripts/setup.ts:352-353` — a membership carries both ids); a blank stored accountId skips the check with a warning. Mismatch → exit 12, pending kept (recovery: sign into the right account and re-auth — a new exchange overwrites the pending — or `--discard-pending`). Discovery failure → exit 11, pending kept, resume retries. Match → replace ONLY that profile's tokens via the guarded writer (`applyTokensToEnv` + `writeAtomic` + read-back, the `persistTokens` pattern `src/freshbooks-client.ts:145-170` minus client state); duplicate-token guard vs OTHER profiles applies; IDs unchanged; shred pending. **Live-server ruling:** if `.server.lock` is fresh (`src/server-lock.ts` liveness), warn — don't refuse: the dominant re-auth trigger is a dead token family (revert impossible), and a live family is covered by the U3 adopt guard (`src/freshbooks-client.ts:194-210`) unless the server idles past the new token's ~12h expiry **or a refresh races the re-auth write (a seconds-wide window between the U3 read and its persist)** — either way the consequence is a working login on the old family, never a lockout — so the warning and the step's humanScript both say *"restart Claude after re-auth so it picks up the new login."* Works on a quarantined profile (fresh family); quarantine itself persists until the collision is resolved — the message says so. |
+| `--install (desktop\|code\|mcp-json\|both)` | The config writers. `both` = desktop + code in one invocation. **Code target decision tree** (mirrors the wizard: CLI branch `scripts/setup.ts:595-602`, unconditional `.mcp.json` write at `:565`, manual text `printMcpConfig` `:219-227`): `claude` CLI present → `claude mcp add-json … --scope user`; else write `.mcp.json` + the "open this folder in Claude Code and enable the server" script. Success prints the absolute path + mtime written. Failure (invalid existing JSON, unwritable path, missing CLI) → exit 10, payload = the exact config block + target path. **Command selection:** rung 1 writes `process.execPath`; a possibly-sandboxed process (rung 2) must NOT trust `process.execPath` — probe the standard host locations (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`), use `--command-path <abs>` if the agent has a better answer, else fall back to `"node"` with a stated PATH caveat. `--doctor` warns on a non-absolute command — with text that distinguishes the two causes: a legacy entry (fix: re-run `--install`) vs the deliberate rung-2 `"node"` fallback (expected; not an error — re-running `--install` on rung 2 would reproduce it) — and fails on an absolute-but-missing one. |
+| `--print-config <target>` | **Read-only.** Emits the exit-10 payload shape (config block + target path + command/args) at exit 0, using the SAME command-selection rule as `--install`. It never reads the user's existing config — the generated entry needs no such read (`buildClaudeServerConfig` is `{command, args}` with a deliberate no-`env` design), which is what makes the read-only claim structural. This is the degraded path's lawful source when a *denied* permission means `--install` never ran — no payload otherwise exists. |
 | `--discard-pending --name N` | Shreds a staged pending. Honest note in output: discarding does not revoke the grant server-side. |
 | `--doctor` | Checks, each keyed to a Book step id with fix text: node version; `node_modules`; build (`dist/index.js`); base `.env` presence/format (never echoes values); unmigrated-legacy detection; per-profile health via `inspectTokenHealth` (`src/freshbooks-client.ts:332-362`; post-`4f607fd` token-free) + quarantine from the registry; **stale pendings** (mode-marked; warn > 24 h; fix = the bare resume command or `--discard-pending`); **lingering `.rescue` files** (see Security — age + "the next refresh adopts it; to force now, run `refresh-tokens --profile <n>`"); lingering `.client-secret.tmp`; config entries per target-location (info per location; **fail only when no location carries a resolvable entry**; missing-config fix text carries the sandbox hypothesis: *"if a previous session reported this install succeeded, the write was virtualized — use the manual Edit Config route now; do NOT re-run `--install`"*); configured `dist/index.js` exists; file-permission warnings. **Zero profiles mid-setup is a failing `save-login` check, exit 1 — never exit 2** (setup's 2 = usage; `check-tokens`' no-profiles 2 is that CLI's convention, not this one's). Exits: 0 all-pass / 1 issues. |
 
 ### `--add-login` state machine
+
+**Resume entry rules (load-bearing):** resume forms enter at the
+discover/save stages — the availability gate below applies ONLY to the
+`--callback-url` form (re-validating a name on resume would recreate the
+exit-4 dead loop the U10 mirror exists to prevent). And **every resume runs
+the pre-discovery short-circuit first**: if `profiles/<name>.env` already
+exists AND its refresh token equals the pending's — the
+crashed-between-save-and-shred signature — shred the pending and exit 0 with
+no API call. Without this, the just-saved profile's own accountId trips the
+exit-8 same-account branch before the save stage is ever reached, and the
+promised idempotent exit 0 is unreachable. (The save-stage NAME_TAKEN
+same-token rule below remains as backstop.)
 
 ```
 (start) name validated (normalizeProfileName + availability)
@@ -339,12 +362,13 @@ without knowing what an accountId is):
 
 > "This FreshBooks company (<company>) is already connected as
 > '<existing profile>'. Is this a **different person's** login for the same
-> company, or are you **reconnecting** the login you already added?"
+> company, are you **reconnecting** the login you already added — or did we
+> pick the **wrong business** a moment ago?"
 
 Payload: `{existingProfile, confirmQuestion, directive}` — the `directive`
 field carries the MUST-NOT rule ("do not pass `--distinct-login` without an
-affirmative human reply in this conversation; anything short of a clear yes is
-a no — re-ask once, then run `--doctor`"), and the payload does **not**
+affirmative human reply in this conversation; anything short of a clear
+'different person' is a no — re-ask once, then run `--doctor`"), and the payload does **not**
 include a ready-to-paste resume command (the human-facing command lives in
 SETUP.md's troubleshooting). The `save-login` agentGuidance repeats the rule.
 Honesty: this gate is a norm, not a mechanism — it raises the cost of
@@ -365,10 +389,14 @@ dir — and `*.pending` + `*.rescue` are ALSO added to `.gitignore` in PR 2
 pending per name; overwritten by a new exchange for the same name; shredded on
 success, exit 5, and `--discard-pending`; doctor-reported past 24 h. A
 resume whose staged access token has expired: the resume refreshes via the
-staged refresh token before discovery; if that fails → exit 3 semantics
-(stale grant — discard and re-auth). Note for agents: after a save, a stale
-staged access token in an already-saved profile heals on the server's first
-startup refresh — do not misread it as failure.
+staged refresh token before discovery — and **on success the rotated pair
+immediately overwrites the pending (plain 0600 write) before discovery
+proceeds**; the staged pair is its own token family, so an un-rewritten
+pending would hold a just-revoked pair and burn the grant on the next staged
+exit or resume. The save then uses the rotated pair. If the refresh fails →
+exit 3 semantics (stale grant — discard and re-auth). Note for agents: after
+a save, a stale staged access token in an already-saved profile heals on the
+server's first startup refresh — do not misread it as failure.
 
 ### Exit codes
 
@@ -379,20 +407,21 @@ startup refresh — do not misread it as failure.
 | 2 | usage (incl. resume without pending — lists pendings; `--reauth` on a nonexistent name) | fix invocation |
 | 3 | auth code rejected/expired (incl. a dead staged pair on resume) | fresh `--auth-url`, fresh paste |
 | 4 | name invalid/taken pre-exchange (no code spent) | `--doctor`; `--reauth` |
-| 5 | duplicate-pair backstop (degenerate states; live already-connected is exit 8) | `--reauth --name <existing>` |
+| 5 | duplicate-pair backstop (degenerate states; live already-connected is exit 8) | `--reauth --name <existing>`; but if `--doctor` shows that profile healthy, the save already completed (a server rotation raced the resume) — `--discard-pending` is all that's needed |
 | 6 | business choice (pending staged) | resume `--business-id` |
 | 7 | precondition (`.env` missing / build missing) | payload names the Book step |
 | 8 | same-account confirmation (pending staged) | three branches above |
 | 9 | unmigrated legacy `.env` | interactive wizard migration; resume `--doctor` |
 | 10 | config install failed | payload = block + path → degraded flow |
-| 11 | discovery failed (pending staged) | bare resume retry; `--account-id` skips |
+| 11 | discovery failed (pending staged) | bare resume retry; `--account-id` skips (**add-login only** — for `--reauth`, discovery IS the wrong-account protection: there is deliberately no skip; persistent failure → retry later or `--discard-pending`) |
 | 12 | `--reauth` account mismatch (pending kept) | re-auth in the right account (overwrites pending) or `--discard-pending` |
 
 ### `--json` shapes
 
 - Success: `{"ok":true,"verb":…, …}` — `add-login`/`reauth`:
   `{name, company, accountId, businessId, profilePath}`; `install`:
-  `{target, path, mtime, command, args}`; `print-config`:
+  `{target, path, mtime, command, args}` (`--install both` emits one object
+  per target, one per line — the `refresh-tokens --json` precedent); `print-config`:
   `{target, path, configBlock}`; `auth-url`: `{url}`; `init`: `{envPath}`;
   `discard-pending`: `{name, discarded:true}`; `doctor`:
   `{ok, checks:[{id, stepId, status, detail, fix}]}`.
@@ -437,23 +466,37 @@ base-`.env` profile can never be a group member (it exists only when
   Settings screen instead — about five extra minutes. Or approve it once and
   I do it in five seconds. Want me to ask again?"*
 - **Degraded path (second deny, or exit 10, or sandbox):** raw material from
-  `--print-config` (denied-permission case) or the exit-10 payload. Then the
-  two-branch merge protocol: (1) pre-brief a **read-only peek** (*"this
-  dialog is me looking at the file — it changes nothing"*); if granted and
-  the file is absent/empty → hand the user a COMPLETE file; if it has
-  content → the agent merges and hands back the complete merged file; (2) if
-  the read is denied too → the Finder-reveal script: *"click Edit Config — a
+  `--print-config` (denied-permission case) or the exit-10 payload — both
+  emit command/args via the SAME command-selection rule as `--install`
+  (probes + `--command-path` + `"node"` caveat); the degraded path is exactly
+  where a sandboxed `process.execPath` would poison the host config by hand.
+  **Disclosure first** (docPhrased): *"your Claude settings file may contain
+  access keys for other connectors you've installed; showing it to me puts
+  those in this chat."* The agent keeps every foreign entry byte-identical in
+  the merged file and never quotes their `env` values back outside the
+  returned file itself. Then the two-branch merge protocol: (1) pre-brief a
+  **read-only peek** (*"this dialog is me looking at the file — it changes
+  nothing on disk"*); if granted and the file is absent/empty → hand the user
+  a COMPLETE file; if it has content → the agent merges and hands back the
+  complete merged file; (2) if the read is denied too → the reveal script:
+  *"open Claude's Settings, choose Developer, then click Edit Config — a
   Finder window appears with a file highlighted; double-click that file (it
   opens in TextEdit); select everything you see and paste it to me"* → agent
-  returns the merged complete file → *"click back in TextEdit, select all,
-  paste over everything, press Cmd+S."* A complete file is NEVER synthesized
-  from the block alone when the current contents are unknown — that wipes
-  existing `mcpServers` entries. SETUP.md's manual-config instructions (inside
-  the `install-config` fenced region) use the same Edit-Config route.
+  returns the merged complete file. **Both branches end with the same
+  insertion script:** *"click back in TextEdit, select all, paste over
+  everything, press Cmd+S."* A complete file is NEVER synthesized from the
+  block alone when the current contents are unknown — that wipes existing
+  `mcpServers` entries. If the degraded branch adds dialogs beyond the
+  promised range, the agent says so and restates the remaining count.
+  SETUP.md's manual-config instructions (inside the `install-config` fenced
+  region) use the same Edit-Config route.
 - **Rung-2 mandatory confirmation:** after a successful `--install desktop`
   under Cowork, the agent has the user visually confirm the entry via the
   Edit-Config door before the restart step. Three touchpoints; the
-  alternative is the doctor→install→doctor sandbox loop.
+  alternative is the doctor→install→doctor sandbox loop. **If the user
+  reports the entry is NOT there, that IS the virtualized-sandbox signal:
+  enter the degraded path immediately and never re-run `--install`** (the
+  same rule doctor's fix text states for the cross-session case).
 
 ## The `restart` step (per-target parting notes)
 
@@ -481,17 +524,29 @@ Delivered complete BEFORE the restart, per target:
 - **Rescue-file lifecycle (replaces v2's unowned design):** `persistTokens`
   writes `<profile-file>.rescue` (0600) and prints only its path; the stderr
   full-token print remains ONLY when the rescue write also fails. **The
-  refresh path owns recovery:** before any rotation, `refreshAndPersist`
-  checks for `<file>.rescue` — if present, it adopts: retry writing the
-  rescue pair into the profile file (guarded write + verify), shred the
-  rescue on success, then continue normally; if the write fails again, keep
-  the rescue and fail loudly. This makes an unattended restart SAFE — without
-  it, the next `ensureFreshTokens` rotates the profile's revoked pair and the
-  reuse-revocation can kill the rescue pair's whole family. `--doctor`
-  reports lingering rescue files (age + fix). `.gitignore` gains `*.rescue`
-  and `*.pending` in the same PR — load-bearing for the legacy profile, whose
-  `filePath` is the repo-root `.env` (`src/profiles.ts:202-214`), putting its
-  rescue at the unignored root otherwise.
+  refresh path owns recovery:** the adoption check sits after
+  `preflightEnvFile` (`src/freshbooks-client.ts:183`) and before the U3
+  on-disk read (`:194`). If `<file>.rescue` exists AND its pair is newer than
+  the profile file's (compare the access tokens' `iat`; equal-or-older →
+  shred the rescue with a warning, never adopt — it is superseded), adoption
+  does BOTH halves: writes the rescue pair into the profile file (guarded
+  write + verify) **and sets `profile.config` + the live client to the
+  rescue pair, mirroring U3's in-memory adopt** — file-only adoption is not
+  enough, because a rescue older than ~12h fails `isTokenFresh` at the U3
+  gate and rotation would then run with the revoked in-memory refresh token,
+  burning the rescue family in exactly the unattended-overnight-restart case
+  this mechanism exists for. Shred the rescue on verified success; if the
+  write fails again, keep it and fail loudly. **Precedence rule:** every
+  successful verified guarded token write to `<file>` — `--reauth`'s replace
+  included — shreds `<file>.rescue` as superseded, so a deliberate re-auth
+  can never be silently reverted by a later adoption. `--doctor` reports
+  lingering rescue files (age + fix; note the "force now" advice —
+  `refresh-tokens --profile <n>` — can no-op for up to ~10 minutes while the
+  file pair's access token is still JWT-fresh; it self-heals at the next
+  needed refresh). `.gitignore` gains `*.rescue` and `*.pending` in the same
+  PR — load-bearing for the legacy profile, whose `filePath` is the repo-root
+  `.env` (`src/profiles.ts:202-214`), putting its rescue at the unignored
+  root otherwise.
 - **Hygiene tests:** every verb's stdout+stderr token-free on success AND
   failure fixtures (canary-JWT sliding window,
   `test/refresh-tokens-redaction.test.ts` pattern), including `--doctor` and
@@ -651,3 +706,33 @@ round-2 disposition audit verified 60/71 and these 11 close the rest).
 | M2-F6 | Fixed — labels-only numbered relay; beginner-answerable exit-8 question |
 | M2-F7 | Fixed — sign-in wall + 2FA line in `developer-app` |
 | M2-F8 | Fixed — pinned extraction (= R2-8) |
+
+## Appendix C — Round-3 findings disposition (targeted verification, 3 agents)
+
+Round-3 archive: `docs/superpowers/reviews/2026-08-06-setup-rework-round3.md`.
+All three verdicts: yes-with-fixes; zero blockers; all fixes below are folded
+into this v3.1.
+
+| ID | Disposition |
+|---|---|
+| Sim J5-MAJOR (exit-8 shadows crash-resume) | Fixed — pre-discovery same-pair short-circuit (resume-entry rules above the state machine) |
+| Sim J5-MOD / Arch-2 (staged refresh rotates family, pending not rewritten) | Fixed — rotated pair overwrites the pending before discovery |
+| Sim J3-MOD (reauth persistent discovery failure loops) | Ruled — deliberately NO `--account-id` skip for reauth (containment IS the wrong-account protection); retry-later / `--discard-pending` guidance in exit 11's row |
+| Sim J1 minors (branch-(a) insertion; Edit-Config navigation) | Fixed — shared insertion script; Settings → Developer navigation prepended |
+| Sim J2 minor (same-session absent-entry trigger) | Fixed — rung-2 bullet: absent = virtualized → degraded path, never re-run |
+| Sim J4 nit (question/directive framing) | Fixed — question offers the wrong-business branch; directive says "a clear 'different person'" |
+| Sim nits (countdown renumbering; print-config command rule) | Fixed — restate-count rule; `--print-config` inherits the selection rule |
+| Sec N3-1 (rescue-vs-reauth precedence; adoption clobber) | Fixed — newer-pair-only adoption + every-guarded-write-shreds-rescue precedence rule |
+| Sec N3-2 (print-config command selection) | Fixed — same rule bound to the verb |
+| Sec N3-3 (third-party secrets transit chat) | Fixed — disclosure line + foreign-entries-byte-identical rule + structural read-only note |
+| Sec N3-4 (role-label discriminator) | Fixed — capability-keyed headings + self-test line |
+| Sec N3-5 (secret-file residuals) | Fixed — honest window sentence; unlink-and-recreate at 0600; run-from-projectDir |
+| Arch-1 MAJOR (adoption must set memory too) | Fixed — adoption sets `profile.config` + client, placed after preflight, before the U3 read |
+| Arch-3 (TOCTOU in reauth rationale) | Fixed — folded into the warning rationale |
+| Arch-4 (resume entry implicit) | Fixed — resume-entry rules stated |
+| Arch-5 (exit-5 wrong advice after server rotation) | Fixed — exit-5 recovery cell amended |
+| Arch-6 (doctor warn vs rung-2 fallback) | Fixed — two-cause warn text |
+| Arch-7 nit (loose citation) | Fixed — split citations (:595-602, :565, :219-227) |
+| Arch-8 nit (exit-11 verb conflation) | Fixed — add-login-only marking (= Sim J3 ruling) |
+| Arch-9 nit (resume flag composability) | Fixed — verb-table grammar note |
+| Arch-10 nit (both-target JSON; rescue force-now no-op) | Fixed — one object per target; self-heal clause in the rescue doctor text |
