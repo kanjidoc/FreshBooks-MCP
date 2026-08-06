@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- internal: setup flow extracted into a data-driven core; no behavior change
+
 ### Fixed
 
 - **`check-tokens`/`refresh-tokens` `--json` no longer emits token material.**
