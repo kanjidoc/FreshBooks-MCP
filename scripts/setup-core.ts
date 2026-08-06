@@ -15,10 +15,22 @@
  * stdout/stderr or embeds one in a thrown message. Profile files are written
  * ONLY through `writeNewProfile` (via `saveProfile`) or
  * `applyTokensToEnv` + `writeAtomic` (via `replaceProfileTokens`) — never with a
- * bare `writeFileSync`.
+ * bare `writeFileSync`. The one bare `writeFileSync` in this file is
+ * `stagePending`, and a pending is deliberately NOT a profile file: see the
+ * staged-pending section at the bottom for why atomicity is the wrong tool
+ * there.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Client } from "@freshbooks/api";
 import { writeAtomic, readTokenMarkers } from "../src/atomic-write";
@@ -235,4 +247,183 @@ export function replaceProfileTokens(
   // stale rescue pair. The rescue file itself lands in PR 2 (Task 13, which owns
   // this line's test); `force` makes its absence — the case in PR 1 — a no-op.
   rmSync(`${profilePath}.rescue`, { force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Staged pendings — `profiles/<name>.env.pending`
+// ---------------------------------------------------------------------------
+//
+// A pending holds the token pair from a COMPLETED OAuth exchange that has not
+// yet become a profile. `--add-login` / `--reauth` stage one immediately after
+// the exchange, so every branch that can interrupt the run between exchange and
+// save — a multi-business choice, the same-account confirmation, a failed
+// discovery call, a crash — is resumable without sending the user back through
+// authorization. (An authorization code is single-use and lives minutes; a
+// staged refresh token can be resumed for as long as the grant lives.)
+//
+// Two design rulings this file must not "improve on":
+//
+//   1. PLAIN WRITE, NO `writeAtomic` (spec RS-F5). Atomicity buys nothing here —
+//      a torn pending is discarded and re-authorized, which is exactly what a
+//      missing pending already does — while `writeAtomic`'s `<path>.bak` would
+//      strand a SECOND copy of a live token pair on disk with nothing in the
+//      lifecycle that shreds it. Staging trades durability for leaving no
+//      residue, the opposite of the profile-write tradeoff.
+//   2. MODE 0600. Profile files inherit the umask; a pending is tightened
+//      explicitly because it is written outside the guarded path and is the one
+//      token store with no other protection.
+//
+// The `.env.pending` suffix is load-bearing, not cosmetic: both scans that read
+// `profiles/` filter on `endsWith(".env")` — discovery (`src/profiles.ts:109`)
+// and the duplicate-token guard (`src/migrate.ts:214`, mirrored in
+// `assertNoForeignDuplicate` above) — so a pending is invisible to the server
+// (which must never rotate a pair that is not yet a login) and to the save that
+// is about to write that very pair (which would otherwise refuse itself).
+
+/** The suffix that marks a staged, not-yet-saved token pair. */
+const PENDING_SUFFIX = ".env.pending";
+
+/** `# mode=add|reauth` — which resume path this staged pair belongs to. */
+const PENDING_MODE_RE = /^#[ \t]*mode=(add|reauth)[ \t]*$/m;
+
+/** `# staged=<iso>` — when the pair was staged, for the doctor's staleness check. */
+const PENDING_STAGED_RE = /^#[ \t]*staged=(.+?)[ \t]*$/m;
+
+/** A token pair staged between the OAuth exchange and the profile write. */
+export interface PendingRecord {
+  /** Which verb staged it — decides which write path a resume runs. */
+  mode: "add" | "reauth";
+  /** ISO timestamp; `--doctor` warns past 24 h. */
+  stagedAt: string;
+  accessToken: string;
+  refreshToken: string;
+}
+
+/**
+ * Where `<name>`'s staged pair lives.
+ *
+ * `name` must already be normalized (`normalizeProfileName`) — same contract as
+ * `assertNoForeignDuplicate` above, and for the same reason: the pending has to
+ * sit next to `profiles/<name>.env` under the identical spelling, or a resume on
+ * a case-sensitive filesystem would look for a file that is right there under a
+ * different case. Kept as a pure join rather than normalizing here so a
+ * caller's invalid name surfaces at its own validation step (exit 2/4) instead
+ * of as a throw from a path helper.
+ */
+export function pendingPath(profilesDir: string, name: string): string {
+  return join(profilesDir, `${name}${PENDING_SUFFIX}`);
+}
+
+function serializePending(rec: PendingRecord): string {
+  // Token lines first so the file parses as a dotenv profile fragment; the
+  // markers are comments, which `dotenv.parse` ignores and `parseProfileConfig`
+  // therefore accepts (only the two tokens are required, `src/profiles.ts:79`).
+  return [
+    `FRESHBOOKS_ACCESS_TOKEN=${rec.accessToken}`,
+    `FRESHBOOKS_REFRESH_TOKEN=${rec.refreshToken}`,
+    `# mode=${rec.mode}`,
+    `# staged=${rec.stagedAt}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * Write (or overwrite) `<name>`'s staged pair — one pending per name.
+ *
+ * Overwriting is the point on two paths: a fresh authorization for the same name
+ * supersedes the old staged pair, and a resume that had to refresh an expired
+ * staged access token MUST re-stage the rotated pair before it does anything
+ * else, or the pending would hold a just-revoked pair and burn the grant on the
+ * next staged exit.
+ *
+ * `profilesDir` is created if absent — the first login stages before any profile
+ * exists. The explicit `chmodSync` is not redundant with `writeFileSync`'s
+ * `mode`: that option applies at CREATION only, so overwriting a pre-existing
+ * looser file would otherwise silently keep its old permissions.
+ */
+export function stagePending(profilesDir: string, name: string, rec: PendingRecord): void {
+  const path = pendingPath(profilesDir, name);
+  mkdirSync(profilesDir, { recursive: true });
+  writeFileSync(path, serializePending(rec), { mode: 0o600 });
+  chmodSync(path, 0o600);
+}
+
+/**
+ * When a pending was staged: the `# staged=` marker, or the file's mtime when
+ * that marker is missing or unparseable.
+ *
+ * The fallback is deliberate asymmetry with `mode`, which has none: `stagedAt`
+ * drives only a staleness WARNING, so a damaged marker must not make a real
+ * staged pair unresumable, whereas `mode` selects a write path and guessing it
+ * could run the wrong one.
+ */
+function readStagedAt(raw: string, path: string): string {
+  const marker = PENDING_STAGED_RE.exec(raw)?.[1];
+  if (marker && !Number.isNaN(Date.parse(marker))) return marker;
+  return statSync(path).mtime.toISOString();
+}
+
+/**
+ * Read `<name>`'s staged pair, or null when there is nothing usable to resume —
+ * no file, no token pair, or no recognizable mode marker. A file that lands in
+ * one of those states is still reported by `listPendings`, so it can be
+ * discarded rather than linger unseen.
+ */
+export function loadPending(profilesDir: string, name: string): PendingRecord | null {
+  const path = pendingPath(profilesDir, name);
+  if (!existsSync(path)) return null;
+
+  const raw = readFileSync(path, "utf8");
+  const config = parseProfileConfig(raw);
+  if (!config) return null;
+
+  const mode = PENDING_MODE_RE.exec(raw)?.[1] as PendingRecord["mode"] | undefined;
+  if (!mode) return null;
+
+  return {
+    mode,
+    stagedAt: readStagedAt(raw, path),
+    accessToken: config.accessToken,
+    refreshToken: config.refreshToken,
+  };
+}
+
+/**
+ * Delete `<name>`'s staged pair. Called on save, on the duplicate-pair backstop,
+ * and by `--discard-pending`; `force` makes "already gone" a no-op so a resumed
+ * run can shred unconditionally.
+ *
+ * Honesty note for callers surfacing this to a user: discarding a pending does
+ * not revoke the grant server-side.
+ */
+export function shredPending(profilesDir: string, name: string): void {
+  rmSync(pendingPath(profilesDir, name), { force: true });
+}
+
+/**
+ * Every staged pending in `profilesDir`, for `--doctor` (staleness) and for the
+ * exit-2 listing a resume prints when its `--name` has nothing staged.
+ *
+ * Reports files whose markers are damaged too — `mode: "unknown"` — because the
+ * point of the listing is that no token-bearing file lingers unseen. Returns no
+ * tokens: a pending's contents never reach any output surface.
+ */
+export function listPendings(profilesDir: string): { name: string; mode: string; ageMs: number }[] {
+  if (!existsSync(profilesDir)) return [];
+  const now = Date.now();
+
+  return readdirSync(profilesDir)
+    .filter((file) => file.endsWith(PENDING_SUFFIX))
+    .sort()
+    .map((file) => {
+      const path = join(profilesDir, file);
+      const raw = readFileSync(path, "utf8");
+      return {
+        name: file.slice(0, -PENDING_SUFFIX.length),
+        mode: PENDING_MODE_RE.exec(raw)?.[1] ?? "unknown",
+        // Clamped: a future-dated marker (clock skew, hand-edit) must read as
+        // "just staged", never as a negative age the staleness check mishandles.
+        ageMs: Math.max(0, now - Date.parse(readStagedAt(raw, path))),
+      };
+    });
 }

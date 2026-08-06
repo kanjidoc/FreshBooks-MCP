@@ -8,6 +8,12 @@ profiles/
 .mcp.json
 *.bak
 *.tmp
+# Token stores written outside profiles/: staged OAuth pairs (<name>.env.pending)
+# and last-resort rescue writes (<profile file>.rescue). Global, not scoped to
+# profiles/ — the legacy single-login profile's own file IS the repo-root .env,
+# so its rescue lands here at the root, which `.env` above does not match.
+*.pending
+*.rescue
 *.js.map
 *.d.ts.map
 .DS_Store
