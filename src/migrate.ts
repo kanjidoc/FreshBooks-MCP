@@ -258,3 +258,63 @@ export function writeNewProfile(
   }
   return profilePath;
 }
+
+/** The opt-in comment that vouches a same-accountId profile as a distinct live login. */
+const DISTINCT_LOGIN_MARKER = "# freshbooks-distinct-login";
+
+/** The exact marker regex discovery uses (`src/profiles.ts:156`) — keep in lockstep. */
+const DISTINCT_LOGIN_RE = /^#\s*freshbooks-distinct-login\b/m;
+
+/**
+ * Opt every profile sharing `accountId` out of the same-account quarantine.
+ *
+ * Discovery quarantines EVERY unmarked member of a same-accountId group
+ * (`src/profiles.ts:177-189`), so marking only the file a caller just wrote would
+ * leave the whole group — including the incumbent login — excluded from rotation.
+ * The marking is therefore group-wide, and it is the CALLER's job: `writeNewProfile`
+ * deliberately knows nothing about it, so nothing can mark a group as distinct
+ * without a human having confirmed it.
+ *
+ * The directory is scanned FRESH here, never through the memoized `getRegistry()`:
+ * that snapshot predates the file the caller just wrote, so it would silently skip
+ * exactly the profile the opt-in is being requested for. Over-marking a file that
+ * discovery would exclude anyway is harmless; the legacy base-`.env` profile can
+ * never be a group member (it exists only when `profiles/` is empty,
+ * `src/profiles.ts:202-214`).
+ *
+ * Idempotent (an already-marked file is skipped, so re-running marks nothing) and
+ * token-preserving: each rewritten file is re-read afterwards and its token pair
+ * must be byte-identical, or this throws rather than leave a mangled login behind.
+ *
+ * @returns the file names (not paths) this call marked — empty when there was
+ *   nothing left to mark.
+ */
+export function markDistinctLogin(profilesDir: string, accountId: string): string[] {
+  // An empty accountId is not a group: discovery skips ID-less profiles entirely
+  // (`src/profiles.ts:172`), and matching on "" would sweep in every
+  // accounting-only login. Same guard as writeNewProfile's same-account scan.
+  if (!accountId || !existsSync(profilesDir)) return [];
+
+  const marked: string[] = [];
+  for (const file of readdirSync(profilesDir)) {
+    if (!file.endsWith(".env")) continue;
+    const path = join(profilesDir, file);
+    const content = readFileSync(path, "utf8");
+    const config = parseProfileConfig(content);
+    if (!config || config.accountId !== accountId) continue;
+    if (DISTINCT_LOGIN_RE.test(content)) continue; // already opted in
+
+    // Append on its own line — a file without a trailing newline would otherwise
+    // glue the marker onto the last value, corrupting it AND defeating the regex.
+    const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+    writeAtomic(path, `${content}${separator}${DISTINCT_LOGIN_MARKER}\n`);
+
+    // Post-write verification: the marker must never cost a login its tokens.
+    const check = readTokenMarkers(path);
+    if (check.access !== config.accessToken || check.refresh !== config.refreshToken) {
+      throw new Error(`profiles/${file} failed post-write verification after marking it distinct.`);
+    }
+    marked.push(file);
+  }
+  return marked;
+}
