@@ -83,10 +83,16 @@ export function shouldSkipQuarantinedRefresh(
   return Boolean(profile.quarantined);
 }
 
-/** Human-readable report for one profile — written to stderr so --json keeps stdout clean. */
+/**
+ * Human-readable report for one profile — written to stderr so --json keeps
+ * stdout clean. Reports token PRESENCE only, never token material: this
+ * output lands in agent transcripts and logs, and even a token suffix is a
+ * credential fragment. (TokenHealth itself carries no token strings — see the
+ * security invariant on the struct in src/freshbooks-client.ts.)
+ */
 function printHealth(health: TokenHealth): void {
-  const access = health.access ? `...${health.access.slice(-10)}` : "(none)";
-  const refresh = health.refresh ? `...${health.refresh.slice(-10)}` : "(none)";
+  const access = health.hasAccessToken ? "present" : "(none)";
+  const refresh = health.hasRefreshToken ? "present" : "(none)";
   console.error(`[${health.name}] ${health.filePath}`);
   console.error(`  access=${access} refresh=${refresh}`);
   if (health.expirySeconds === null) {

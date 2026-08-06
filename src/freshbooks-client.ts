@@ -300,13 +300,23 @@ export async function ensureFreshTokens(): Promise<void> {
   }
 }
 
+/**
+ * SECURITY INVARIANT — this struct must NEVER carry token material (not even a
+ * substring/suffix). It is serialized verbatim by the `refresh-tokens` CLI's
+ * `--json` mode and rendered by `freshbooks_list_accounts`, so anything on it
+ * lands in agent transcripts and logs. Presence is reported as booleans;
+ * anything that needs the actual tokens reads `profile.config` directly.
+ * Guarded by test/refresh-tokens-redaction.test.ts.
+ */
 export interface TokenHealth {
   /** Profile name (registry key). */
   name: string;
   /** Absolute path of this profile's token file. */
   filePath: string;
-  access?: string;
-  refresh?: string;
+  /** Whether an access token is configured (the token itself is never exposed). */
+  hasAccessToken: boolean;
+  /** Whether a refresh token is configured (the token itself is never exposed). */
+  hasRefreshToken: boolean;
   /** Seconds until the access token expires (negative if already expired). */
   expirySeconds: number | null;
   expired: boolean;
@@ -342,8 +352,8 @@ export function inspectTokenHealth(
   return {
     name: profile.name,
     filePath: profile.filePath,
-    access,
-    refresh,
+    hasAccessToken: Boolean(access),
+    hasRefreshToken: Boolean(refresh),
     expirySeconds,
     expired,
     issues,

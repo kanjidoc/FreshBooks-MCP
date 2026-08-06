@@ -39,6 +39,7 @@ FreshBooks-MCP/
 │   ├── server-lock.ts          # Best-effort .server.lock (pid-liveness) so migration refuses to run while a server holds tokens
 │   ├── config-paths.ts         # OS-aware path to the Claude Desktop config
 │   ├── mcp-config.ts           # Builds the MCP server entry for Claude Desktop / Code config
+│   ├── setup-flow.ts           # The Book — the setup flow as data (steps, kickoff prompt, secrets rules); zero imports, no I/O
 │   ├── query-helpers.ts        # Shared utility to build query builders from tool args
 │   ├── date-helpers.ts         # parseLocalDate() — avoids a UTC off-by-one on date-only fields
 │   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
@@ -71,7 +72,8 @@ FreshBooks-MCP/
 ├── .gitignore
 ├── .env.example                # Template for the shared OAuth app credentials (no tokens)
 ├── scripts/
-│   ├── setup.ts                # Interactive setup wizard (migration, add-login loop, OAuth, config)
+│   ├── setup.ts                # Interactive setup wizard (migration, add-login loop, OAuth, config) — prompts around setup-core.ts
+│   ├── setup-core.ts           # Non-interactive setup core: OAuth client, auth URL, code exchange, membership discovery, profile writes
 │   └── refresh-tokens.ts       # CLI to refresh each profile's token (or audit with --check-only; --profile <name> to target one)
 ├── README.md                   # Project landing page (what it does, architecture, tool list)
 ├── SETUP.md                    # Beginner setup walkthrough — also a script Claude can follow
@@ -107,7 +109,7 @@ npm run check-tokens   # Audit every profile's tokens + report JWT expiry (refre
 
 OAuth tokens live **only in dotenv files**, one per FreshBooks login: `profiles/<name>.env` (a legacy single-login base `.env` is still honored as the implicit `default` profile). The base `.env` holds only the shared OAuth **app** credentials (`FRESHBOOKS_CLIENT_ID`/`SECRET`/`REDIRECT_URI`) plus the `FRESHBOOKS_MIGRATED=1` marker — never a token. The server loads the base `.env` by absolute path at startup (`src/load-env.ts`, with `override: true`), and `src/profiles.ts` discovers the profile files into a memoized registry. MCP launcher configs (`.mcp.json`, the Claude Desktop config, `~/.claude.json`) carry only the command to start the server — never tokens. FreshBooks rotates the refresh token on every refresh call; the rotated pair is written back to that profile's own file.
 
-A FreshBooks `Client` is constructed in exactly **one** place — `getOrCreateClient(profile)` in `src/freshbooks-client.ts` — so token state lives on one object per profile. `src/freshbooks-client.ts` enforces these invariants on every refresh (each scoped to the active profile's file via the `src/atomic-write.ts` helper):
+A FreshBooks `Client` is constructed in exactly **one** place on the serving path — `getOrCreateClient(profile)` in `src/freshbooks-client.ts` — so token state lives on one object per profile. `src/freshbooks-client.ts` enforces these invariants on every refresh (each scoped to the active profile's file via the `src/atomic-write.ts` helper):
 1. **Pre-flight refusal** — before calling `refreshAccessToken()`, `preflightEnvFile()` verifies the profile's file exists, is readable/writable, and contains both token markers. If not, it throws *without* calling the API (no burned refresh token).
 2. **Atomic write** — `writeAtomic()` writes `<file>.tmp` (fsync'd) then `rename()`s into place; backup saved as `<file>.bak` (tmp/bak names are always derived from the target path, never a shared constant).
 3. **Post-write verification** — re-reads the file and confirms the new tokens are present.
@@ -185,7 +187,7 @@ One server can serve several FreshBooks logins. Each login is a **profile** — 
 
 - **The `account` convention.** `withAccount` injects an optional `account: z.string().optional()` field into every API tool's schema. The wrapper resolves it to a profile (`resolveProfile`), refreshes that profile's token (`refreshIfNeeded`), strips `account` from the args, and runs the original handler inside `runInProfile(profile, …)`. The unchanged zero-arg `getFreshBooksClient()` / `getAccountId()` / `getBusinessId()` read the active profile from `AsyncLocalStorage`, so the resource tool files never had to change. With ≥2 profiles, omitting `account` returns an `isError` result listing the valid names (never throws); with exactly one profile, `defaultProfileName()` supplies it.
 - **`freshbooks_list_accounts`** is the discovery tool — it enumerates profiles (name, account/business id, company, token health) and any ignored/colliding files. It and `freshbooks_help` are the only account-free tools.
-- **One `Client` per profile.** A FreshBooks `Client` is constructed in exactly one place — `getOrCreateClient(profile)` — and cached on `profile.client`, so each login's rotating token state lives on a single object. Never call `new Client(...)` elsewhere.
+- **One `Client` per profile.** A FreshBooks `Client` is constructed in exactly one place — `getOrCreateClient(profile)` — and cached on `profile.client`, so each login's rotating token state lives on a single object. Never call `new Client(...)` elsewhere. Exception: pre-profile OAuth clients during setup are constructed via `buildOAuthClient` in `scripts/setup-core.ts` — the invariant governs the serving path (`src/`), where `getOrCreateClient` remains the only site.
 - **Discovery is validated.** `discoverProfiles` excludes malformed files (`broken`), refuses duplicate refresh tokens (`duplicates`), and quarantines a profile that shares an `accountId` with another but carries a distinct token (until an explicit `# freshbooks-distinct-login` opt-in marker) so its possibly-superseded token is never auto-rotated.
 - **Server lock for migration safety.** `src/server-lock.ts` writes `.server.lock` (`{ pid }`) at startup. Migration refuses to run while a live server holds the lock — judged by **PID liveness only** (`process.kill(pid, 0)`), with no file-age bound and no heartbeat — so it can never rotate a token concurrently with a running server. A reused PID after an uncleaned crash fails closed; the `confirmNoServer` override on `runMigration` is the only recovery.
 
@@ -678,8 +680,9 @@ This project is designed so any FreshBooks user can use it:
 - One tool file per FreshBooks resource domain (invoices, clients, expenses, etc.)
 - `src/tool-registry.ts` imports all tools into a single array and wraps each handler with automatic token refresh
 - `src/server.ts` serves that tool list via `createSdkMcpServer`
-- `src/freshbooks-client.ts` is the single place that initializes the FreshBooks `Client`
+- `src/freshbooks-client.ts` is the single place that initializes the FreshBooks `Client` on the serving path (setup's pre-profile client comes from `buildOAuthClient` in `scripts/setup-core.ts`)
 - `src/query-helpers.ts` provides `buildQueryBuilders()` to convert tool args to SDK query builders
+- `src/setup-flow.ts` holds the setup flow as data (the Book); `scripts/setup-core.ts` holds its non-interactive steps, and `scripts/setup.ts` is the prompting wizard around them
 
 ### Git Conventions
 

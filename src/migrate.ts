@@ -24,6 +24,27 @@ import { lockPathFor, isServerLockFresh } from "./server-lock";
  */
 export const MIGRATED_MARKER = "FRESHBOOKS_MIGRATED";
 
+/** The machine-readable reasons `writeNewProfile` refuses to write a profile. */
+export type ProfileWriteErrorCode = "NAME_TAKEN" | "DUPLICATE_TOKEN" | "SAME_ACCOUNT";
+
+/**
+ * A refusal from a profile-write guard, carrying a `code` callers can branch on.
+ *
+ * The codes exist so headless callers can map a refusal onto an exit code without
+ * parsing prose. The MESSAGES are deliberately unchanged from the untyped throws
+ * they replace: `scripts/setup.ts` prints `err.message` verbatim to the user and
+ * the existing suite matches on that text, so reword nothing here.
+ */
+export class ProfileWriteError extends Error {
+  constructor(
+    public readonly code: ProfileWriteErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProfileWriteError";
+  }
+}
+
 export function isMigrated(baseEnvContent: string): boolean {
   return new RegExp(`^${MIGRATED_MARKER}=`, "m").test(baseEnvContent);
 }
@@ -168,8 +189,20 @@ export function runMigration(opts: {
  *
  * Shared by `runMigration` AND the setup add-login loop (Task 10) so neither path can
  * silently destroy another login's refresh token. Verifies the write by re-reading.
+ *
+ * Every refusal throws a `ProfileWriteError` whose `code` names the guard; the message
+ * text is unchanged from the untyped throws. `opts.onSameAccount` selects what the
+ * duplicate-accountId condition does: the default `"warn"` is today's behavior (warn,
+ * then write); `"refuse"` throws `SAME_ACCOUNT` BEFORE anything is written, for callers
+ * that must first get a human to confirm this really is a different person's login.
+ * Marking the resulting group as distinct logins is the caller's job (`markDistinctLogin`).
  */
-export function writeNewProfile(profilesDir: string, rawName: string, config: ProfileConfig): string {
+export function writeNewProfile(
+  profilesDir: string,
+  rawName: string,
+  config: ProfileConfig,
+  opts?: { onSameAccount?: "warn" | "refuse" },
+): string {
   const name = normalizeProfileName(rawName);
   const profilePath = join(profilesDir, `${name}.env`);
 
@@ -182,12 +215,22 @@ export function writeNewProfile(profilesDir: string, rawName: string, config: Pr
       const other = parseProfileConfig(readFileSync(join(profilesDir, file), "utf8"));
       if (!other) continue;
       if (other.refreshToken === config.refreshToken) {
-        throw new Error(
+        throw new ProfileWriteError(
+          "DUPLICATE_TOKEN",
           `Refresh token already present in profiles/${file} — refusing to write profiles/${name}.env. ` +
             `Two profile files sharing one refresh token guarantee a double-rotation lockout.`,
         );
       }
       if (config.accountId && other.accountId === config.accountId) {
+        if (opts?.onSameAccount === "refuse") {
+          // Refuse BEFORE any write: the caller wants a human to confirm this is a
+          // different person's login for the same company first.
+          throw new ProfileWriteError(
+            "SAME_ACCOUNT",
+            `profiles/${file} already uses accountId ${config.accountId} — refusing to write ` +
+              `profiles/${name}.env without confirmation that this is a DISTINCT login.`,
+          );
+        }
         console.warn(
           `Warning: profiles/${file} already uses accountId ${config.accountId}. ` +
             `Writing profiles/${name}.env as a DISTINCT login that shares that company.`,
@@ -197,7 +240,8 @@ export function writeNewProfile(profilesDir: string, rawName: string, config: Pr
   }
 
   if (existsSync(profilePath)) {
-    throw new Error(
+    throw new ProfileWriteError(
+      "NAME_TAKEN",
       `profiles/${name}.env already exists — refusing to overwrite. Choose a different name.`,
     );
   }
@@ -213,4 +257,64 @@ export function writeNewProfile(profilesDir: string, rawName: string, config: Pr
     throw new Error(`profiles/${name}.env failed post-write verification.`);
   }
   return profilePath;
+}
+
+/** The opt-in comment that vouches a same-accountId profile as a distinct live login. */
+const DISTINCT_LOGIN_MARKER = "# freshbooks-distinct-login";
+
+/** The exact marker regex discovery uses (`src/profiles.ts:156`) — keep in lockstep. */
+const DISTINCT_LOGIN_RE = /^#\s*freshbooks-distinct-login\b/m;
+
+/**
+ * Opt every profile sharing `accountId` out of the same-account quarantine.
+ *
+ * Discovery quarantines EVERY unmarked member of a same-accountId group
+ * (`src/profiles.ts:177-189`), so marking only the file a caller just wrote would
+ * leave the whole group — including the incumbent login — excluded from rotation.
+ * The marking is therefore group-wide, and it is the CALLER's job: `writeNewProfile`
+ * deliberately knows nothing about it, so nothing can mark a group as distinct
+ * without a human having confirmed it.
+ *
+ * The directory is scanned FRESH here, never through the memoized `getRegistry()`:
+ * that snapshot predates the file the caller just wrote, so it would silently skip
+ * exactly the profile the opt-in is being requested for. Over-marking a file that
+ * discovery would exclude anyway is harmless; the legacy base-`.env` profile can
+ * never be a group member (it exists only when `profiles/` is empty,
+ * `src/profiles.ts:202-214`).
+ *
+ * Idempotent (an already-marked file is skipped, so re-running marks nothing) and
+ * token-preserving: each rewritten file is re-read afterwards and its token pair
+ * must be byte-identical, or this throws rather than leave a mangled login behind.
+ *
+ * @returns the file names (not paths) this call marked — empty when there was
+ *   nothing left to mark.
+ */
+export function markDistinctLogin(profilesDir: string, accountId: string): string[] {
+  // An empty accountId is not a group: discovery skips ID-less profiles entirely
+  // (`src/profiles.ts:172`), and matching on "" would sweep in every
+  // accounting-only login. Same guard as writeNewProfile's same-account scan.
+  if (!accountId || !existsSync(profilesDir)) return [];
+
+  const marked: string[] = [];
+  for (const file of readdirSync(profilesDir)) {
+    if (!file.endsWith(".env")) continue;
+    const path = join(profilesDir, file);
+    const content = readFileSync(path, "utf8");
+    const config = parseProfileConfig(content);
+    if (!config || config.accountId !== accountId) continue;
+    if (DISTINCT_LOGIN_RE.test(content)) continue; // already opted in
+
+    // Append on its own line — a file without a trailing newline would otherwise
+    // glue the marker onto the last value, corrupting it AND defeating the regex.
+    const separator = content.length === 0 || content.endsWith("\n") ? "" : "\n";
+    writeAtomic(path, `${content}${separator}${DISTINCT_LOGIN_MARKER}\n`);
+
+    // Post-write verification: the marker must never cost a login its tokens.
+    const check = readTokenMarkers(path);
+    if (check.access !== config.accessToken || check.refresh !== config.refreshToken) {
+      throw new Error(`profiles/${file} failed post-write verification after marking it distinct.`);
+    }
+    marked.push(file);
+  }
+  return marked;
 }
