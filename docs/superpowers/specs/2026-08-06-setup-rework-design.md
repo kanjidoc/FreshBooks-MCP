@@ -1,7 +1,13 @@
 # Setup Rework — One Book, Three Surfaces (v3.1)
 
 **Date:** 2026-08-06
-**Status:** v3.1 — v3 amended against the targeted round-3 verification
+**Status:** v3.2 — v3.1 plus three reconciliations from the implementation-plan
+review (recorded in the plan's history): `--trust-exec-path` added to the
+`--install` row; the secret-file choreography simplified to read-once-then-
+immediately-delete (strictly shorter on-disk lifetime than v3.1's
+unlink-and-recreate); `distinctLogin` removed from `writeNewProfile`'s opts
+(the caller-side `markDistinctLogin` fresh scan already covers the
+just-written file).
 **History:** v1 (`a19bd81`) → round-1 review (71 findings,
 `docs/superpowers/reviews/2026-08-06-setup-rework-round1.md`) → leak fix
 (`4f607fd`) → v2 (`8fe50d0`) → round-2 review (61 findings,
@@ -245,10 +251,11 @@ writes the secret to `{{projectDir}}/.client-secret.tmp` (covered by
 `.gitignore`'s `*.tmp`; `--doctor` warns if one is found lingering), then one
 approved command **run from `{{projectDir}}`**: `npx ts-node scripts/setup.ts
 --headless --init --client-id <id> --client-secret-file .client-secret.tmp` —
-the CLI unlinks-and-recreates the file at 0600 before reading (a plain
-chmod would not fix a pre-existing default-mode file left by a crash),
-shreds it after use **unconditionally** (success or failure), and errors
-loudly if the shred fails. Honest window: between the agent's file-write and
+the CLI reads the file once and **immediately deletes it** (before doing
+anything else with the secret; the delete runs unconditionally, success or
+failure, and the CLI errors loudly if it fails) — so the secret's on-disk
+lifetime ends the moment the CLI starts, and a crash-before-read leftover is
+caught by `--doctor`'s lingering-tmp check. Honest window: between the agent's file-write and
 the CLI run the file sits at default permissions for seconds — unavoidable
 with agent file tools (a shell-side `umask` write would put the secret into
 the approval dialog, which is worse). Pre-brief: *"one longer command; your
@@ -296,7 +303,7 @@ trailing newline trimmed.
 | `--add-login --name N --callback-url 'U'` | State machine below. |
 | `--add-login --name N [--business-id B] [--account-id A] [--distinct-login --confirm-different-user]` | **Resume forms** (no callback URL; flags compose — exit 8's branch 1 is `--distinct-login --confirm-different-user [--business-id B]`) — consume the staged pair. `--account-id` **skips discovery** (the IDs are the user's assertion). Bare `--add-login --name N` re-runs discovery on the staged pair and re-emits the branch exit with its payload — this is the resume command `--doctor` prints. Resume with a `--name` that has no pending → exit 2, listing existing pending names. |
 | `--reauth --name N --callback-url 'U'` / `--reauth --name N` (resume) | Same discipline as add-login: name must EXIST (else exit 2 pointing at `--add-login`); exchange; **stage** (mode-marked pending); discover; verify by **set-containment** — the stored accountId appears among the discovered memberships (`scripts/setup.ts:352-353` — a membership carries both ids); a blank stored accountId skips the check with a warning. Mismatch → exit 12, pending kept (recovery: sign into the right account and re-auth — a new exchange overwrites the pending — or `--discard-pending`). Discovery failure → exit 11, pending kept, resume retries. Match → replace ONLY that profile's tokens via the guarded writer (`applyTokensToEnv` + `writeAtomic` + read-back, the `persistTokens` pattern `src/freshbooks-client.ts:145-170` minus client state); duplicate-token guard vs OTHER profiles applies; IDs unchanged; shred pending. **Live-server ruling:** if `.server.lock` is fresh (`src/server-lock.ts` liveness), warn — don't refuse: the dominant re-auth trigger is a dead token family (revert impossible), and a live family is covered by the U3 adopt guard (`src/freshbooks-client.ts:194-210`) unless the server idles past the new token's ~12h expiry **or a refresh races the re-auth write (a seconds-wide window between the U3 read and its persist)** — either way the consequence is a working login on the old family, never a lockout — so the warning and the step's humanScript both say *"restart Claude after re-auth so it picks up the new login."* Works on a quarantined profile (fresh family); quarantine itself persists until the collision is resolved — the message says so. |
-| `--install (desktop\|code\|mcp-json\|both)` | The config writers. `both` = desktop + code in one invocation. **Code target decision tree** (mirrors the wizard: CLI branch `scripts/setup.ts:595-602`, unconditional `.mcp.json` write at `:565`, manual text `printMcpConfig` `:219-227`): `claude` CLI present → `claude mcp add-json … --scope user`; else write `.mcp.json` + the "open this folder in Claude Code and enable the server" script. Success prints the absolute path + mtime written. Failure (invalid existing JSON, unwritable path, missing CLI) → exit 10, payload = the exact config block + target path. **Command selection:** rung 1 writes `process.execPath`; a possibly-sandboxed process (rung 2) must NOT trust `process.execPath` — probe the standard host locations (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`), use `--command-path <abs>` if the agent has a better answer, else fall back to `"node"` with a stated PATH caveat. `--doctor` warns on a non-absolute command — with text that distinguishes the two causes: a legacy entry (fix: re-run `--install`) vs the deliberate rung-2 `"node"` fallback (expected; not an error — re-running `--install` on rung 2 would reproduce it) — and fails on an absolute-but-missing one. |
+| `--install (desktop\|code\|mcp-json\|both)` | The config writers. `both` = desktop + code in one invocation. **Code target decision tree** (mirrors the wizard: CLI branch `scripts/setup.ts:595-602`, unconditional `.mcp.json` write at `:565`, manual text `printMcpConfig` `:219-227`): `claude` CLI present → `claude mcp add-json … --scope user`; else write `.mcp.json` + the "open this folder in Claude Code and enable the server" script. Success prints the absolute path + mtime written. Failure (invalid existing JSON, unwritable path, missing CLI) → exit 10, payload = the exact config block + target path. **Command selection:** default = probe the standard host locations (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`), `--command-path <abs>` overrides, `"node"` with a stated PATH caveat as last resort; a rung-1 agent (real host shell) passes `--trust-exec-path` to use `process.execPath` directly — a possibly-sandboxed process must never trust `process.execPath`, which is why probing is the default. `--doctor` warns on a non-absolute command — with text that distinguishes the two causes: a legacy entry (fix: re-run `--install`) vs the deliberate rung-2 `"node"` fallback (expected; not an error — re-running `--install` on rung 2 would reproduce it) — and fails on an absolute-but-missing one. |
 | `--print-config <target>` | **Read-only.** Emits the exit-10 payload shape (config block + target path + command/args) at exit 0, using the SAME command-selection rule as `--install`. It never reads the user's existing config — the generated entry needs no such read (`buildClaudeServerConfig` is `{command, args}` with a deliberate no-`env` design), which is what makes the read-only claim structural. This is the degraded path's lawful source when a *denied* permission means `--install` never ran — no payload otherwise exists. |
 | `--discard-pending --name N` | Shreds a staged pending. Honest note in output: discarding does not revoke the grant server-side. |
 | `--doctor` | Checks, each keyed to a Book step id with fix text: node version; `node_modules`; build (`dist/index.js`); base `.env` presence/format (never echoes values); unmigrated-legacy detection; per-profile health via `inspectTokenHealth` (`src/freshbooks-client.ts:332-362`; post-`4f607fd` token-free) + quarantine from the registry; **stale pendings** (mode-marked; warn > 24 h; fix = the bare resume command or `--discard-pending`); **lingering `.rescue` files** (see Security — age + "the next refresh adopts it, or clears it if superseded; to force now, run `refresh-tokens --profile <n>`"); lingering `.client-secret.tmp`; config entries per target-location (info per location; **fail only when no location carries a resolvable entry**; missing-config fix text carries the sandbox hypothesis: *"if a previous session reported this install succeeded, the write was virtualized — use the manual Edit Config route now; do NOT re-run `--install`"*); configured `dist/index.js` exists; file-permission warnings. **Zero profiles mid-setup is a failing `save-login` check, exit 1 — never exit 2** (setup's 2 = usage; `check-tokens`' no-profiles 2 is that CLI's convention, not this one's). Exits: 0 all-pass / 1 issues. |
@@ -438,8 +445,10 @@ server's first startup refresh — do not misread it as failure.
 `ProfileWriteError extends Error` with
 `code: "NAME_TAKEN" | "DUPLICATE_TOKEN" | "SAME_ACCOUNT"` (messages unchanged;
 PR 1 behavior-identical). `writeNewProfile` gains
-`opts?: { onSameAccount?: "warn" | "refuse"; distinctLogin?: boolean }`
-(default `"warn"` = today's `src/migrate.ts:190-196`).
+`opts?: { onSameAccount?: "warn" | "refuse" }`
+(default `"warn"` = today's `src/migrate.ts:190-196`); distinct-login marking
+is the caller's job via `markDistinctLogin`, whose fresh scan marks the
+just-written file too.
 `markDistinctLogin(profilesDir, accountId)`: **fresh directory scan at call
 time** (never the memoized `getRegistry()`, whose snapshot can miss the
 just-written file — which would re-create the A1 quarantine bug inverted),

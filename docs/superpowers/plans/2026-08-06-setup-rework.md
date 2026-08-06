@@ -1,70 +1,70 @@
-# Setup Rework Implementation Plan
+# Setup Rework Implementation Plan (v2)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Implement spec v3.1 (`docs/superpowers/specs/2026-08-06-setup-rework-design.md`, commit `d0b6a50`): a single-sourced setup flow ("the Book") rendered by a rewritten interactive wizard, a headless agent-driven CLI surface, and drift-tested docs — in three independently shippable phases (PR 1: Book + core; PR 2: headless + agent path + security hardening; PR 3: wizard + human docs).
+**Version note:** v2 — rewritten after a 4-agent plan review (code feasibility,
+spec fidelity, zero-context-executor simulation, human-outcome tracing).
+Changes: Appendix A now carries the drafted Book content (titles + copy the
+spec doesn't draft verbatim); the persona-string manifest test (T1) and wizard
+transcript-order test (T18) pin the human outcomes; injectable path ctx for
+all headless tests; mode-gated resumes; the rescue-adoption control flow fully
+specified with a new `decodeJwtIat`; the docs-generation script; and the three
+spec reconciliations (now landed as spec v3.2).
 
-**Architecture:** All setup knowledge lives in `src/setup-flow.ts` (data). A non-interactive core (`scripts/setup-core.ts`) does the OAuth/discovery/persist work; the wizard (`scripts/setup.ts`) and the headless dispatcher (`scripts/setup-headless.ts`) are thin surfaces over it. All profile writes keep flowing through the guarded writers in `src/migrate.ts`. Docs are enforced by drift tests against the Book.
+**Goal:** Implement spec v3.2 (`docs/superpowers/specs/2026-08-06-setup-rework-design.md`): the Book, a headless agent surface, security hardening, and a rewritten wizard — three independently shippable PRs.
+
+**Architecture:** All setup knowledge lives in `src/setup-flow.ts` (pure data). A non-interactive core (`scripts/setup-core.ts`) does OAuth/discovery/persist work; the wizard (`scripts/setup.ts`) and headless dispatcher (`scripts/setup-headless.ts`) are thin surfaces over it. Profile writes flow only through the guarded writers. Docs are byte-enforced against the Book by drift tests plus a committed regeneration script.
 
 **Tech Stack:** TypeScript strict, Node ≥18, ts-node (CLI), Vitest, zero new dependencies.
 
-## Global Constraints (from the spec — every task inherits these)
+## Global Constraints (every task inherits these)
 
-- **Zero new dependencies.** Argv parsing is hand-rolled (`scripts/refresh-tokens.ts:32-60` precedent).
-- **Node ≥18** (`package.json` engines): no `util.styleText`, no `structuredClone`-dependent tricks needed.
-- **Tokens never appear in stdout, stderr (success paths), chat-visible argv, or JSON** — the only exception is the last-resort loud-failure print in `persistTokens` when even the rescue write fails.
-- **Headless convention:** human-readable → stderr; `--json` → stdout. `--json` is a per-verb flag.
-- **No handler/CLI ever serializes a caught error object or HTTP body.** Error output goes through the allowlist envelope only.
-- **Every profile write goes through `writeNewProfile` / `applyTokensToEnv`+`writeAtomic`** — no third write path.
-- **Verbatim user-facing copy** (KICKOFF_PROMPT, SECRETS_RULES, step scripts, the exit-8 question, parting notes, pre-briefs) is **copied from the spec sections cited in each task** — the spec is the source of truth for strings; do not paraphrase. Where a task says "spec §X", open the spec and copy.
-- **Behavior freeze in Phase 1:** PR 1 must be behavior-identical (same prompts, same messages, same exit codes) — verified by the existing test suite passing unchanged.
-- **Commit style:** `feat:`/`fix:`/`test:`/`docs:` prefixes, one logical change per commit, `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` footer.
-- Run `npm run build && npm test && npm run lint` before every commit step; a task is not done with any of the three failing.
+- **Zero new dependencies.** Argv parsing hand-rolled (`scripts/refresh-tokens.ts:32-60` precedent).
+- **Node ≥18** (`package.json` engines).
+- **Tokens never appear in stdout, stderr (success paths), argv, or JSON.** Sole sanctioned exception: `persistTokens`' last-resort print when even the rescue write fails (T13 test b).
+- **Headless convention:** human-readable → stderr; `--json` → stdout; `--json` is a per-verb flag.
+- **No surface serializes a caught error object or HTTP body** — allowlist envelope only.
+- **Every profile write goes through `writeNewProfile` / `applyTokensToEnv`+`writeAtomic`.**
+- **Copy rule:** user-facing strings come from exactly two sources — (1) the spec sections a task cites, verbatim, for strings the spec drafts (KICKOFF_PROMPT §ladder; the exit-8 question + directive §"Exit 8, fully drafted"; the extended re-ask script, pre-briefs, disclosure line, insertion script §install-config choreography; SECRETS_RULES rows + honesty notes §Secrets; the sentinel + gate sentences §Enforcement); (2) **Appendix A of this plan**, verbatim, for everything the spec describes but does not draft (step titles, humanScript sentences, successChecks, troubleshooting rows, docPhrase selections). Do not paraphrase either source. KICKOFF_PROMPT's canonical form uses logical lines (no mid-phrase hard wraps), so substring assertions in tests hold.
+- **Phase-1 behavior freeze:** PR 1 is behavior-identical; the existing suite must pass unchanged.
+- **Injectable paths for tests:** every headless entry point takes a `SetupPaths` ctx (T7) — tests never touch the developer's real `.env`/`profiles/`/Desktop config.
+- **Commit style:** `feat:`/`fix:`/`test:`/`docs:` + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. `npm run build && npm test && npm run lint` green before every commit.
 
-## File Structure (final state)
+## File Structure (final state; task labels correct)
 
 ```
 src/
-  setup-flow.ts        # NEW — the Book: SetupCtx, SetupStep, SETUP_FLOW,
-                       #       KICKOFF_PROMPT, SECRETS_RULES (data only; no I/O)
-  migrate.ts           # MODIFIED — ProfileWriteError, writeNewProfile opts,
-                       #            markDistinctLogin
-  atomic-write.ts      # MODIFIED — 0600 modes
-  freshbooks-client.ts # MODIFIED — rescue-file write + adoption
-  docs/render-setup.ts # NEW — renderSetupStepMd + the help `setup` topic
-  tools/help.ts        # MODIFIED — register `setup` topic + index lines
-  docs/content.ts      # MODIFIED — overview topic list (+ fix `reports` omission)
+  setup-flow.ts        # NEW (T1) — the Book: pure data + KICKOFF_PROMPT,
+                       #   SECRETS_RULES, SIDEBAR_TEXT, HEADLESS_VERBS
+  migrate.ts           # MOD (T2 typed errors/opts; T3 markDistinctLogin)
+  atomic-write.ts      # MOD (T13 0600 modes)
+  freshbooks-client.ts # MOD (T13 rescue lifecycle + decodeJwtIat)
+  docs/render-setup.ts # NEW (T15) — renderSetupStepMd/renderSetupTopic
+  tools/help.ts        # MOD (T15) — setup topic + index line
+  docs/content.ts      # MOD (T15) — overview list gains reports + setup
 scripts/
-  setup-core.ts        # NEW — buildAuthUrl, exchangeCode, discoverMemberships,
-                       #       saveProfile, replaceProfileTokens, pending-file ops
-  setup-headless.ts    # NEW — verb dispatcher, exit codes, JSON envelopes, doctor
-  setup.ts             # MODIFIED — wizard rendered from the Book (Phase 3);
-                       #            --headless delegation (Phase 2); re-exports kept
+  setup-core.ts        # NEW (T4) + pending ops (T6) + install writers (T11)
+  setup-headless.ts    # NEW (T7) — dispatcher/verbs/doctor (T7-T12)
+  setup.ts             # MOD — --headless delegation (T7); wizard re-render (T18)
+  generate-setup-docs.ts # NEW (T16) — splices generated blocks into SETUP.md
 test/
-  setup-flow.test.ts             # NEW (T1)
-  migrate-typed-errors.test.ts   # NEW (T2)
-  mark-distinct-login.test.ts    # NEW (T3)
-  setup-core.test.ts             # NEW (T4)
-  pending-file.test.ts           # NEW (T7)
-  headless-init.test.ts          # NEW (T8)
-  headless-add-login.test.ts     # NEW (T9/T10)
-  headless-reauth.test.ts        # NEW (T11)
-  headless-install.test.ts       # NEW (T12)
-  headless-doctor.test.ts        # NEW (T13)
-  rescue-lifecycle.test.ts       # NEW (T14)
-  setup-hygiene.test.ts          # NEW (T15)
-  setup-flow-docs.test.ts        # NEW (T16, extended T20)
-  wizard-render.test.ts          # NEW (T18)
-.gitignore             # MODIFIED (T7) — *.pending, *.rescue
-README.md, SETUP.md, CLAUDE.md, CHANGELOG.md — per docs tasks
+  setup-flow.test.ts (T1) · migrate-typed-errors.test.ts (T2)
+  mark-distinct-login.test.ts (T3) · setup-core.test.ts (T4)
+  pending-file.test.ts (T6) · headless-init.test.ts (T7)
+  headless-add-login.test.ts (T8+T9) · headless-reauth.test.ts (T10)
+  headless-install.test.ts (T11) · headless-doctor.test.ts (T12)
+  rescue-lifecycle.test.ts (T13) · setup-hygiene.test.ts (T14)
+  help-topics.test.ts (T15) · setup-flow-docs.test.ts (T16, extended T19)
+  wizard-render.test.ts (T17+T18)
+.gitignore (T6) · README.md (T16) · SETUP.md (T16, T19) · CLAUDE.md (T5, T19)
+CHANGELOG.md (T5, T16, T20)
 ```
 
-Dependency/build note: `scripts/` is not part of the server `tsc` build (only
-`src/` compiles into `dist/`); `scripts/setup-core.ts` may construct a
-FreshBooks `Client` (pre-profile OAuth) — that is the CLAUDE.md carve-out
-recorded in T5. `src/setup-flow.ts` lives in `src/` because
-`src/docs/render-setup.ts` (compiled, served by `freshbooks_help`) imports it;
-it must stay pure data (no fs/network/ts-node-only imports).
+Build note: `scripts/` is outside the server `tsc` build; `src/setup-flow.ts`
+is in `src/` because `src/docs/render-setup.ts` (compiled, served by
+`freshbooks_help`) imports it — it must stay pure data (its only import:
+`node:path` types are not needed; it imports NOTHING). `SetupCtx.exists` is an
+injected function so the module never touches `fs`.
 
 ---
 
@@ -72,466 +72,607 @@ it must stay pure data (no fs/network/ts-node-only imports).
 
 ### Task 1: `src/setup-flow.ts` — the Book
 
-**Files:**
-- Create: `src/setup-flow.ts`
-- Test: `test/setup-flow.test.ts`
+**Files:** Create `src/setup-flow.ts`; Test `test/setup-flow.test.ts`
 
-**Interfaces:**
-- Produces: `SetupCtx { projectDir: string; redirectUri: string }`;
-  `SetupStep` exactly as spec §"Core concept" (fields: `id, title, who,
-  surfaces, appliesIf?, repeats?, summary, humanScript, agentGuidance,
-  successCheck, check?, verbs?, docPhrases?, troubleshooting`);
-  `SETUP_FLOW: SetupStep[]` (14 steps, ids and order exactly per spec §"The
-  step list": `choose-claude, get-project, node-install, npm-install, build,
-  developer-app, app-credentials, migrate-legacy, nickname, authorize,
-  save-login, install-config, verify, restart`);
-  `KICKOFF_PROMPT: string` (spec §ladder, rules 1–6 verbatim);
-  `SECRETS_RULES` (spec §Secrets table as
-  `{ credential: string; agentRungs: string; humanRung: string }[]` plus the
-  honesty-note strings); `HEADLESS_VERBS: string[]` (the canonical flag list:
-  `--init, --auth-url, --add-login, --reauth, --install, --print-config,
-  --discard-pending, --doctor, --headless, --json, --name, --callback-url,
-  --business-id, --account-id, --distinct-login, --confirm-different-user,
-  --client-id, --client-secret, --client-secret-file, --client-secret-stdin,
-  --command-path`).
-- Consumes: nothing (pure data module — no fs, no network).
-
-- [ ] **Step 1: Write the failing test**
+**Interfaces (Produces):**
 
 ```ts
-// test/setup-flow.test.ts
+export interface SetupCtx {
+  projectDir: string;
+  redirectUri: string;
+  exists?: (path: string) => boolean;  // injected by CLI surfaces; optional so
+                                       // the documentation render ctx omits it
+}
+export interface SetupStep { /* exactly spec §"Core concept": id, title, who,
+  surfaces, appliesIf?, repeats?, summary, humanScript, agentGuidance,
+  successCheck, check?, verbs?, docPhrases?, troubleshooting */ }
+export const SETUP_FLOW: SetupStep[];      // 14 steps — ids, order, and ALL
+                                           // field content per Appendix A + the
+                                           // spec sections it cites
+export const KICKOFF_PROMPT: string;       // spec §ladder, verbatim, logical lines
+export const SECRETS_RULES: {              // spec §Secrets, verbatim
+  rows: { credential: string; agentRungs: string; humanRung: string }[];
+  selfTest: string;                        // the one-line self-test (spec §Enforcement rule b)
+  honestyNotes: string[];
+};
+export const SIDEBAR_TEXT: string;         // the README no-web fallback, spec §Enforcement, verbatim
+export const HEADLESS_VERBS: string[];     // canonical flag list — MUST include:
+  // --headless --json --init --auth-url --add-login --reauth --install
+  // --print-config --discard-pending --doctor --name --callback-url
+  // --business-id --account-id --distinct-login --confirm-different-user
+  // --client-id --client-secret --client-secret-file --client-secret-stdin
+  // --command-path --trust-exec-path
+export const DOC_CTX: SetupCtx;            // { projectDir: "<project folder>",
+                                           //   redirectUri: "https://localhost/callback" }
+                                           // the documentation render ctx (spec render rule a)
+```
+
+Authoring constraints (bind T15/T16 — stated here so the Book is written
+compatibly): every `docPhrases[]` entry MUST be a substring of that step's
+rendered fields (T16 asserts phrases inside byte-equal regions); the manual
+Desktop/Code config JSON blocks live in `install-config`'s
+humanScript/agentGuidance (they must render inside that fence, spec
+§Enforcement); the dialog-budget range + countdown strings belong to
+**`get-project`** (the first command step); `npm-install`'s troubleshooting
+owns the MODULE_NOT_FOUND row; the wizard-handoff single-narrator line and the
+paste-mismatch confirmation script live in the steps Appendix A assigns them
+(`app-credentials` / `choose-claude`). `check()` returns `{ ok, detail }` —
+detail strings are in Appendix A. `node-install` has **no** `check()` — its
+check is the raw `node --version` command (bootstrap window, spec §Book
+`check` comment); the doctor's node check (T12) is deliberately independent.
+`build.surfaces = ["docs","wizard"]` — "headless precondition" is expressed
+via `check()` consumed by `--doctor`, not a surface value.
+
+- [ ] **Step 1: Portal probe (blocking, recorded).** Log into the owner FreshBooks account, open the Developer Portal, click Create an App, and record EVERY field on the form (labels, required/optional, the scope checkboxes' exact names) plus today's date. Write the results into Appendix A's `developer-app` entry (replacing its `PROBE:` markers). This is the REPORT_PARAMS discipline — the field list must be observed, never guessed.
+- [ ] **Step 2: Write the failing test** — `test/setup-flow.test.ts`:
+
+```ts
 import { describe, it, expect } from "vitest";
-import { SETUP_FLOW, KICKOFF_PROMPT, SECRETS_RULES, HEADLESS_VERBS } from "../src/setup-flow";
+import { SETUP_FLOW, KICKOFF_PROMPT, SECRETS_RULES, SIDEBAR_TEXT, HEADLESS_VERBS } from "../src/setup-flow";
 
 const IDS = ["choose-claude","get-project","node-install","npm-install","build",
   "developer-app","app-credentials","migrate-legacy","nickname","authorize",
   "save-login","install-config","verify","restart"];
+const step = (id: string) => SETUP_FLOW.find(s => s.id === id)!;
+const allText = (s: any) => [s.title, s.summary, ...s.humanScript, s.agentGuidance,
+  s.successCheck, ...(s.docPhrases ?? []), ...s.troubleshooting.flatMap((t: any) => [t.symptom, t.fix])].join("\n");
 
-describe("the Book", () => {
-  it("has exactly the spec's steps, in order, with unique ids", () => {
-    expect(SETUP_FLOW.map(s => s.id)).toEqual(IDS);
+describe("structure", () => {
+  it("ids/order", () => expect(SETUP_FLOW.map(s => s.id)).toEqual(IDS));
+  it("fields valid", () => { for (const s of SETUP_FLOW) {
+    expect(["human","either"]).toContain(s.who);
+    expect(s.surfaces.every((x: string) => ["wizard","docs","headless"].includes(x))).toBe(true);
+    expect(s.humanScript.length).toBeGreaterThan(0);
+    expect(s.agentGuidance).toBeTruthy(); expect(s.successCheck).toBeTruthy();
+  }});
+  it("repeats/appliesIf/build-surfaces", () => {
+    expect(SETUP_FLOW.filter(s => s.repeats).map(s => s.id)).toEqual(["nickname","authorize","save-login"]);
+    expect(SETUP_FLOW.filter(s => s.appliesIf).map(s => s.id)).toEqual(["migrate-legacy"]);
+    expect(step("build").surfaces).toEqual(["docs","wizard"]);
   });
-  it("every step has non-empty scripts and a valid who/surfaces", () => {
+  it("every verbs[] entry and every --flag mentioned in any step text is in HEADLESS_VERBS", () => {
     for (const s of SETUP_FLOW) {
-      expect(["human","either"]).toContain(s.who);
-      expect(s.surfaces.length).toBeGreaterThan(0);
-      for (const surf of s.surfaces) expect(["wizard","docs","headless"]).toContain(surf);
-      expect(s.humanScript.length).toBeGreaterThan(0);
-      expect(s.agentGuidance.length).toBeGreaterThan(0);
-      expect(s.summary).toBeTruthy();
-      expect(s.successCheck).toBeTruthy();
+      for (const v of s.verbs ?? []) expect(HEADLESS_VERBS).toContain(v);
+      for (const m of allText(s).match(/--[a-z-]+/g) ?? [])
+        expect([...HEADLESS_VERBS, "--profile", "--scope", "--version"]).toContain(m);
     }
   });
-  it("repeats is set on exactly the per-login steps", () => {
-    const repeating = SETUP_FLOW.filter(s => s.repeats === "per-login").map(s => s.id);
-    expect(repeating).toEqual(["nickname","authorize","save-login"]);
+  it("docPhrases are substrings of their step's own text", () => {
+    for (const s of SETUP_FLOW) for (const p of s.docPhrases ?? [])
+      expect(allText(s)).toContain(p);
   });
-  it("every verbs[] entry is a known flag", () => {
-    for (const s of SETUP_FLOW) for (const v of s.verbs ?? [])
-      expect(HEADLESS_VERBS).toContain(v);
-  });
-  it("kickoff prompt carries the six numbered rules and the pinned URL", () => {
+});
+
+describe("persona-string manifest (content pins — the strings the design exists for)", () => {
+  const M: [string, string][] = [
+    ["authorize",      "CAN'T BE REACHED"],
+    ["authorize",      "click once inside the address bar"],
+    ["authorize",      "stay with me"],
+    ["authorize",      "no harm done"],                       // closed-tab row
+    ["app-credentials","never into this chat"],               // rung-3 secrets row
+    ["app-credentials","I won't repeat it again"],            // shape-confirm
+    ["app-credentials","the setup program is the guide now"], // wizard handoff
+    ["developer-app",  "leave it as-is"],
+    ["developer-app",  "that's their sign-in check"],         // 2FA wall
+    ["get-project",    "between eight and ten"],              // dialog range
+    ["save-login",     "including the long code"],            // auth-code pre-brief
+    ["save-login",     "Which business is this for"],         // exit-6 labels-only relay
+    ["save-login",     "immediately"],                        // run-add-login-now rule
+    ["install-config", "you never edit a file by hand"],
+    ["install-config", "access keys for other connectors"],   // disclosure
+    ["install-config", "select all, paste over everything, press Cmd+S"],
+    ["install-config", "Want me to ask again?"],              // re-ask script
+    ["migrate-legacy", "one-time key"],                       // plain-English gate
+    ["restart",        "Our conversation is saved"],
+    ["restart",        "paste the same kickoff prompt"],      // rung-3 failure line
+    ["choose-claude",  "Dock"],                               // visual cue
+    ["choose-claude",  "isn't supported"],                    // honest stop
+    ["choose-claude",  "name the mismatch"],                  // paste-confirmation script
+  ];
+  for (const [id, phrase] of M)
+    it(`${id} carries "${phrase}"`, () => expect(allText(step(id))).toContain(phrase));
+  it("kickoff: six rules, pinned URL, heading+last-line quote-back", () => {
     expect(KICKOFF_PROMPT).toContain("https://github.com/kanjidoc/FreshBooks-MCP");
     for (const n of [1,2,3,4,5,6]) expect(KICKOFF_PROMPT).toMatch(new RegExp(`^${n}\\.`, "m"));
     expect(KICKOFF_PROMPT).toContain("quote back to me its opening heading and its final line");
   });
-  it("secrets rules cover the three credential rows", () => {
-    expect(SECRETS_RULES.rows.map((r: any) => r.credential)).toEqual([
-      "Client ID + Secret","Authorization code","Access/refresh tokens"]);
-  });
-  it("migrate-legacy is the only appliesIf step; build is a wizard step", () => {
-    expect(SETUP_FLOW.filter(s => s.appliesIf).map(s => s.id)).toEqual(["migrate-legacy"]);
-    expect(SETUP_FLOW.find(s => s.id === "build")!.surfaces).toContain("wizard");
+  it("secrets rules + self-test + sidebar", () => {
+    expect(SECRETS_RULES.rows.map(r => r.credential)).toEqual(
+      ["Client ID + Secret","Authorization code","Access/refresh tokens"]);
+    expect(SECRETS_RULES.selfTest).toContain("asking permission to run things");
+    expect(SIDEBAR_TEXT).toContain("copy button");
   });
 });
 ```
 
-- [ ] **Step 2: Run it — expect FAIL** (`npx vitest run test/setup-flow.test.ts` → module not found)
-- [ ] **Step 3: Implement `src/setup-flow.ts`.** Interfaces verbatim from spec §"Core concept" (including the `who` docstring, the `check()` bootstrap-window comment, and `repeats`). Populate all 14 steps: `id/title/who/surfaces/appliesIf/repeats/verbs` structurally per the spec's step-list table; `summary/humanScript/agentGuidance/successCheck/docPhrases/troubleshooting` strings **copied from the spec's step-list rows and choreography sections** (§install-config choreography, §restart, §Secrets, exit-8 drafted question into `save-login.agentGuidance`). `KICKOFF_PROMPT` verbatim from §ladder. `SECRETS_RULES` as `{ rows: [...], honestyNotes: [...] }` from §Secrets. `check?` implementations in Phase 1 only where pure (`get-project`: `existsSync(join(ctx.projectDir,"package.json"))`; `build`: `existsSync(join(ctx.projectDir,"dist","index.js"))`; `npm-install`: `existsSync(join(ctx.projectDir,"node_modules"))`) — wait, those use fs: keep the *module* pure by taking an injected `{ exists(path: string): boolean }` in `SetupCtx`; default wiring happens in the CLI surfaces. Add `exists: (p: string) => boolean` to `SetupCtx` and use only `ctx.exists`.
-- [ ] **Step 4: Run test — PASS.** Also `npm run build` (module must compile into `dist/` cleanly) and full `npm test` (nothing else may change).
-- [ ] **Step 5: Commit** — `feat: add src/setup-flow.ts — the Book (setup flow as data)`
+- [ ] **Step 3: Run — FAIL** (module missing)
+- [ ] **Step 4: Implement** from Appendix A + the cited spec sections. No fs imports; `check()` uses `ctx.exists!`.
+- [ ] **Step 5: PASS + `npm run build` + full suite green** → **Step 6: Commit** — `feat: the Book — setup flow as data with persona-string manifest`
 
 ### Task 2: Typed errors in `src/migrate.ts`
 
-**Files:**
-- Modify: `src/migrate.ts` (the guard block at `:179-203`)
-- Test: `test/migrate-typed-errors.test.ts`
+As plan v1, with two corrections: opts type is `{ onSameAccount?: "warn" | "refuse" }` (no `distinctLogin` — spec v3.2), and the message-compat evidence is `test/migrate.test.ts`'s regexes (`/already exists/i`, `/refresh token/i`) plus the display at `scripts/setup.ts:471`; the frozen strings are `src/migrate.ts:186` and `:201`.
 
-**Interfaces:**
-- Produces: `export class ProfileWriteError extends Error { constructor(public readonly code: "NAME_TAKEN" | "DUPLICATE_TOKEN" | "SAME_ACCOUNT", message: string) }`;
-  `writeNewProfile(profilesDir, rawName, config, opts?: { onSameAccount?: "warn" | "refuse" })` — `distinctLogin` handling is NOT here (it belongs to callers via `markDistinctLogin`, Task 3). Default `onSameAccount: "warn"` reproduces today's `console.warn` + write (`src/migrate.ts:190-196`); `"refuse"` throws `ProfileWriteError("SAME_ACCOUNT", …)` **before** writing.
-- Consumes: nothing new. **Messages must remain byte-identical** for the existing throws (`NAME_TAKEN` ← `:199-203` text, `DUPLICATE_TOKEN` ← `:184-188` text) — `scripts/setup.ts:471` and tests match on message text.
-
-- [ ] **Step 1: Failing test**
-
-```ts
-// test/migrate-typed-errors.test.ts (fixture helpers: tmp dir + two profile files,
-// reuse the fixture style from the existing migrate tests)
-it("NAME_TAKEN and DUPLICATE_TOKEN throws carry codes with unchanged messages", () => {
-  // existing-name case
-  try { writeNewProfile(dir, "acme", cfgB); throw new Error("no throw"); }
-  catch (e: any) {
-    expect(e).toBeInstanceOf(ProfileWriteError);
-    expect(e.code).toBe("NAME_TAKEN");
-    expect(e.message).toContain("already exists — refusing to overwrite");
-  }
-});
-it("onSameAccount:'refuse' throws SAME_ACCOUNT before writing; default still warns and writes", () => {
-  expect(() => writeNewProfile(dir, "acme2", sameAccountCfg, { onSameAccount: "refuse" }))
-    .toThrowError(expect.objectContaining({ code: "SAME_ACCOUNT" }));
-  expect(existsSync(join(dir, "acme2.env"))).toBe(false);        // refused BEFORE write
-  writeNewProfile(dir, "acme2", sameAccountCfg);                  // default: warns, writes
-  expect(existsSync(join(dir, "acme2.env"))).toBe(true);
-});
-```
-
-- [ ] **Step 2: Run — FAIL** (ProfileWriteError not exported)
-- [ ] **Step 3: Implement.** Add the class; wrap the two existing `throw new Error(...)` sites keeping their exact strings; insert the `refuse` branch inside the same-account scan loop before `writeAtomic` is reached.
-- [ ] **Step 4: Full suite green** (`npm test` — the existing migrate/setup tests prove message-compat).
-- [ ] **Step 5: Commit** — `feat: typed ProfileWriteError codes on the profile-write guards`
+- [ ] Steps 1–5 as v1 (failing test → implement → suite → commit `feat: typed ProfileWriteError codes on the profile-write guards`).
 
 ### Task 3: `markDistinctLogin`
 
-**Files:**
-- Modify: `src/migrate.ts` (append)
-- Test: `test/mark-distinct-login.test.ts`
+As plan v1 (fresh `readdirSync` scan — required by spec §Typed errors, NOT `getRegistry()`; the requirement itself is spec §Typed errors, historical trace Appendix B row RA-F4). Tests unchanged from v1 (group marking, discovery un-quarantine, idempotence, `.env.pending` decoy untouched).
 
-**Interfaces:**
-- Produces: `export function markDistinctLogin(profilesDir: string, accountId: string): string[]` — returns the files it marked. **Fresh `readdirSync` scan at call time** (never `getRegistry()` — spec Appendix C / RA-F4), filter `endsWith(".env")`, parse via `parseProfileConfig`, match `config.accountId === accountId`, skip files already matching `/^#\s*freshbooks-distinct-login\b/m` (the exact regex from `src/profiles.ts:156`), append the line `# freshbooks-distinct-login\n` via `writeAtomic(path, content + marker)`, then verify each marked file's tokens via `readTokenMarkers` (throw on mismatch).
-- Consumes: `writeAtomic`, `readTokenMarkers` (`src/atomic-write.ts`), `parseProfileConfig` (`src/profiles.ts`).
-
-- [ ] **Step 1: Failing test** — fixtures: three files sharing accountId `A1` (one already marked), one file with accountId `A2`, one `.env.pending` decoy:
-
-```ts
-it("marks every unmarked member of the accountId group and nothing else", () => {
-  const marked = markDistinctLogin(dir, "A1");
-  expect(marked.sort()).toEqual(["alpha.env", "beta.env"]);           // gamma was pre-marked
-  for (const f of ["alpha.env","beta.env","gamma.env"])
-    expect(readFileSync(join(dir,f),"utf8")).toMatch(/^#\s*freshbooks-distinct-login\b/m);
-  expect(readFileSync(join(dir,"other.env"),"utf8")).not.toMatch(/distinct-login/);
-  expect(readFileSync(join(dir,"stray.env.pending"),"utf8")).not.toMatch(/distinct-login/);
-});
-it("marked files still parse and keep their tokens; discovery un-quarantines the group", () => {
-  markDistinctLogin(dir, "A1");
-  const res = discoverProfiles(dir, join(dir, "unused-base.env"));
-  for (const p of res.profiles.values()) expect(p.quarantined).toBe(false);
-});
-it("is idempotent", () => {
-  markDistinctLogin(dir, "A1");
-  expect(markDistinctLogin(dir, "A1")).toEqual([]);
-});
-```
-
-- [ ] **Step 2: FAIL** → **Step 3: implement** → **Step 4: PASS + full suite** → **Step 5: Commit** — `feat: markDistinctLogin — group-wide quarantine opt-in helper`
+- [ ] Steps 1–5 as v1; commit `feat: markDistinctLogin — group-wide quarantine opt-in helper`.
 
 ### Task 4: Core extraction — `scripts/setup-core.ts`
 
-**Files:**
-- Create: `scripts/setup-core.ts`
-- Modify: `scripts/setup.ts` (replace inlined logic with core calls; KEEP `buildBaseEnvVars`, `serializeEnv`, and all current exports in place — `test/setup-decoupling.test.ts:2` imports from `../scripts/setup`)
-- Test: `test/setup-core.test.ts`
-
-**Interfaces (Produces — Phase 2/3 rely on these exact signatures):**
+As plan v1, plus two additions the review demanded:
 
 ```ts
-export interface Memberships { user: { firstName?: string; lastName?: string; email?: string };
-  list: { label: string; accountId: string; businessId: string }[] }
-export function buildOAuthClient(clientId: string, clientSecret: string, redirectUri: string): Client; // CLAUDE.md carve-out (T5)
-export function buildAuthUrl(client: Client): string;                       // wraps getAuthRequestUrl()
-export function extractCodeFromUrl(urlString: string): string | null;       // MOVED from setup.ts (same body, scripts/setup.ts:71-82)
-export async function exchangeCode(client: Client, code: string):
-  Promise<{ accessToken: string; refreshToken: string }>;                   // throws on rejection (caller maps to exit 3)
-export async function discoverMemberships(authed: Client): Promise<Memberships>; // pure users.me() read — NO prompts (the signature redesign, spec A6): maps businessMemberships[] exactly as scripts/setup.ts:330-353 does today, label = business name ?? "(unnamed business)"
-export function saveProfile(profilesDir: string, name: string, config: ProfileConfig,
-  opts?: Parameters<typeof writeNewProfile>[3]): string;                    // pass-through to writeNewProfile (PR 1: NO added behavior)
-export function replaceProfileTokens(profilePath: string, accessToken: string, refreshToken: string): void;
-  // applyTokensToEnv + writeAtomic + readTokenMarkers verify (the persistTokens pattern,
-  // src/freshbooks-client.ts:145-170, minus client/config state) — used by --reauth in Phase 2
+export function buildTokenClient(clientId: string, clientSecret: string,
+  redirectUri: string, accessToken: string, refreshToken: string): Client;
+// buildOAuthClient + assign client.accessToken/client.refreshToken (the
+// src/freshbooks-client.ts:201 assignment pattern) — the blessed way T8/T9/T10
+// build a Client on a staged pair. NOTE: Memberships.businessId is a STRING
+// here (env-file serialization form); the server-side contract uses number —
+// deliberate, commented.
+export function assertNoForeignDuplicate(profilesDir: string, name: string,
+  refreshToken: string): void;
+// throws ProfileWriteError("DUPLICATE_TOKEN") if any OTHER profiles/*.env
+// (endsWith(".env") filter — pendings invisible) carries refreshToken.
+// Used by --reauth (T10).
+export function replaceProfileTokens(profilePath: string, accessToken: string,
+  refreshToken: string): void;
+// applyTokensToEnv + writeAtomic + readTokenMarkers verify, AND — per spec
+// §Security precedence — rmSync(`${profilePath}.rescue`, {force:true}) after a
+// verified write. (T13's test f asserts this here.)
 ```
 
-- Consumes: `Client` from `@freshbooks/api`; `writeNewProfile`, `applyTokensToEnv` (move? NO — import from `src/freshbooks-client.ts`, already exported), `writeAtomic`, `readTokenMarkers`.
+- [ ] Steps as v1 (stub-based tests incl. the `discoverMemberships` mapping test and `replaceProfileTokens` fixture; `vi.mock("../scripts/setup-core")` path form in later tasks). Commit `refactor: extract non-interactive setup core (behavior-identical)`.
 
-- [ ] **Step 1: Failing tests** — stub the Client (plain object with `getAuthRequestUrl`, `getAccessToken`, `users.me`):
+### Task 5: Phase-1 docs + PR 1
 
-```ts
-it("discoverMemberships maps the membership shape to {label, accountId, businessId}", async () => {
-  const authed: any = { users: { me: async () => ({ ok: true, data: { firstName: "A",
-    businessMemberships: [ { business: { name: "Studio", accountId: "acc1", id: 7 } },
-                           { business: { accountId: "acc2", id: 9 } } ] } }) } };
-  const m = await discoverMemberships(authed);
-  expect(m.list).toEqual([
-    { label: "Studio", accountId: "acc1", businessId: "7" },
-    { label: "(unnamed business)", accountId: "acc2", businessId: "9" }]);
-});
-it("exchangeCode surfaces SDK rejection as a throw with no token in the message", async () => {
-  const client: any = { getAccessToken: async () => { throw Object.assign(new Error("invalid_grant"),
-    { config: { data: "client_secret=SHOULDNOTAPPEAR" } }); } };
-  await expect(exchangeCode(client, "x")).rejects.toThrow("invalid_grant");
-});
-it("replaceProfileTokens swaps only the two token lines and verifies", () => { /* tmp profile fixture */ });
-```
-
-- [ ] **Step 2: FAIL** → **Step 3: implement core; rewire `scripts/setup.ts`:** `addLogin()` keeps its exact prompt sequence but calls `buildOAuthClient`/`buildAuthUrl`/`extractCodeFromUrl`/`exchangeCode`; `discoverIds()` becomes a thin prompt loop around `discoverMemberships` (same console output, byte-for-byte — copy the current template strings). `saveProfile` used in place of the direct `writeNewProfile` call.
-- [ ] **Step 4: PASS + full existing suite green (behavior freeze).**
-- [ ] **Step 5: Commit** — `refactor: extract non-interactive setup core (behavior-identical)`
-
-### Task 5: Phase-1 docs — CLAUDE.md carve-out
-
-**Files:**
-- Modify: `CLAUDE.md` — (a) "Client is constructed in exactly one place" invariant gains the carve-out sentence: *"Exception: pre-profile OAuth clients during setup are constructed via `buildOAuthClient` in `scripts/setup-core.ts` — the invariant governs the serving path (`src/`), where `getOrCreateClient` remains the only site."* (b) Project-structure tree gains `src/setup-flow.ts`, `scripts/setup-core.ts`.
-- Test: none (doc-inventory/doc-tool-count unaffected — verify by running them).
-
-- [ ] **Step 1: Edit CLAUDE.md** → **Step 2: `npm test` green** → **Step 3: Commit** — `docs: CLAUDE.md — setup-core Client carve-out + structure` → **Step 4: Open PR 1** (`feat/setup-rework-book`), body summarizing behavior-identity + the spec link.
+As v1 (CLAUDE.md carve-out + tree) **plus** a CHANGELOG `## [Unreleased]` entry for PR 1 ("internal: setup flow extracted into a data-driven core; no behavior change"). Commit `docs: CLAUDE.md carve-out + changelog; open PR 1`.
 
 ---
 
-# Phase 2 — PR 2: headless surface + agent path + security hardening
+# Phase 2 — PR 2: headless + agent path + security
 
-### Task 6: Pending-file module + `.gitignore`
+### Task 6: Pending-file ops + `.gitignore`
 
-**Files:**
-- Create: pending ops in `scripts/setup-core.ts` (append)
-- Modify: `.gitignore` (add `*.pending` and `*.rescue` after the `*.tmp` line)
-- Test: `test/pending-file.test.ts`
+As plan v1 (`PendingRecord {mode, stagedAt, accessToken, refreshToken}`; plain `writeFileSync(..., {mode:0o600})`, no bak/tmp; serialization = the two dotenv token lines + `# mode=` + `# staged=` comments, parseable by `parseProfileConfig` since only the two tokens are required, `src/profiles.ts:79`). Gitignore test follows the house precedent: `git check-ignore` subprocess on `profiles/x.env.pending` and `.env.rescue` (see `test/gitignore.test.ts`). Commit `feat: staged-pending ops + gitignore coverage for *.pending/*.rescue`.
 
-**Interfaces:**
-- Produces:
+### Task 7: Dispatcher + `SetupPaths` ctx + `--init` + `--auth-url`
 
-```ts
-export interface PendingRecord { mode: "add" | "reauth"; stagedAt: string;
-  accessToken: string; refreshToken: string }
-export function pendingPath(profilesDir: string, name: string): string;  // `${profilesDir}/${name}.env.pending`
-export function stagePending(profilesDir: string, name: string, rec: PendingRecord): void;
-  // plain writeFileSync(path, serialize(rec), { mode: 0o600 }) — NO bak/tmp ceremony (spec RS-F5).
-  // Serialization: dotenv lines FRESHBOOKS_ACCESS_TOKEN/REFRESH_TOKEN + comment lines
-  // `# mode=add` / `# staged=<iso>` (dotenv ignores comments; parse with parseProfileConfig + regexes)
-export function loadPending(profilesDir: string, name: string): PendingRecord | null;
-export function shredPending(profilesDir: string, name: string): void;   // rmSync force:true
-export function listPendings(profilesDir: string): { name: string; mode: string; ageMs: number }[];
-```
+**Files:** Create `scripts/setup-headless.ts`; Modify `scripts/setup.ts` (top of `main()`: `if (process.argv.includes("--headless")) return process.exit(await runHeadless(process.argv.slice(2)))`); Test `test/headless-init.test.ts`
 
-- [ ] **Step 1: Failing tests** — round-trip; 0600 mode (skip on win32: `it.skipIf(process.platform === "win32")`); invisibility: a staged pending never appears in `discoverProfiles` results (not even `broken`) and never trips `writeNewProfile`'s duplicate-token scan (stage a pending whose refresh token equals a would-be profile's; `writeNewProfile` succeeds); `listPendings` ages.
-- [ ] **Step 2: FAIL** → **Step 3: implement + edit `.gitignore`** → **Step 4: PASS; also `git check-ignore profiles/x.env.pending .env.rescue` both match** (assert in test via `git check-ignore` spawn or by reading `.gitignore` for the two literals — use the literal-read variant, no subprocess).
-- [ ] **Step 5: Commit** — `feat: staged-pending file ops + gitignore coverage for *.pending/*.rescue`
-
-### Task 7: Headless dispatcher skeleton + error envelope + `--init` + `--auth-url`
-
-**Files:**
-- Create: `scripts/setup-headless.ts`
-- Modify: `scripts/setup.ts` — first line of `main()`: if `process.argv.includes("--headless")`, delegate to `runHeadless(process.argv)` and return its exit code (wizard untouched otherwise)
-- Test: `test/headless-init.test.ts`
-
-**Interfaces:**
-- Produces:
+**Interfaces (Produces):**
 
 ```ts
+export interface SetupPaths {           // EVERY verb resolves paths through this —
+  rootDir: string;                      // the injectable test seam (never the
+  baseEnvPath: string;                  // developer's real files). Defaults:
+  profilesDir: string;                  // repo root / .env / profiles/ /
+  desktopConfigPath: string;            // resolveDesktopConfigPath() / .mcp.json
+  mcpJsonPath: string;
+}
+export function defaultPaths(): SetupPaths;
 export const EXIT = { OK:0, FAIL:1, USAGE:2, CODE_REJECTED:3, NAME_TAKEN:4, DUP_PAIR:5,
   BUSINESS_CHOICE:6, PRECONDITION:7, SAME_ACCOUNT:8, UNMIGRATED:9, INSTALL_FAILED:10,
   DISCOVERY_FAILED:11, REAUTH_MISMATCH:12 } as const;
 export interface Emit { json: boolean }
-export function emitOk(e: Emit, verb: string, fields: Record<string, unknown>): void;   // stdout JSON | stderr human
+export function emitOk(e: Emit, verb: string, fields: Record<string, unknown>): void;
 export function emitErr(e: Emit, verb: string, exitCode: number, stepId: string,
   symptom: string, fix: string, message: string, extra?: Record<string, unknown>): void;
-  // NEVER receives/serializes an Error object — call sites pass err.message only (allowlist envelope, spec §--json)
-export async function runHeadless(argv: string[]): Promise<number>;
+export async function runHeadless(argv: string[], paths?: SetupPaths): Promise<number>;
 ```
 
-`--init` per spec verb table: parse `--client-id` + exactly one secret source;
-`--client-secret-file F` → unlink-and-recreate F at 0600 before read? NO —
-re-read the spec: the CLI **reads** the agent-written file; "unlinks-and-
-recreates at 0600 before reading" means: `const secret = readFileSync(F,"utf8").split("\n")[0].trim(); rmSync(F); writeFileSync(F, secret, {mode:0o600}); …use…; rmSync(F, {force:true})` — simpler and equivalent: read once, `rmSync` immediately (shred-on-read), keep the secret only in memory; the 0600 recreate is pointless once shredded. **Implement: read → immediate rmSync (unconditional, in a finally) → use.** Loudly `console.error` + exit FAIL if the rm throws. `--client-secret-stdin` → read one line from stdin. `--client-secret X` → warn on stderr. Legacy guard: if `.env` exists, contains `FRESHBOOKS_REFRESH_TOKEN=` non-empty (regex from `scripts/setup.ts:249`) and `!isMigrated(content)` → `emitErr(..., EXIT.UNMIGRATED, "migrate-legacy", ...)` **before any write**. Otherwise `writeEnvFile(buildBaseEnvVars(id, secret, REDIRECT_URI, isMigrated(existing)))`.
-`--auth-url`: requires parseable `.env` with client id/secret (else PRECONDITION, stepId `app-credentials`); prints `{url}` / plain URL; **never** calls `openBrowser`.
+**Dispatcher-level preconditions (run before ANY verb):** if
+`paths.baseEnvPath` exists, contains a non-empty `FRESHBOOKS_REFRESH_TOKEN=`
+line (regex from `scripts/setup.ts:249`) and `!isMigrated(content)` →
+`emitErr(..., EXIT.UNMIGRATED, "migrate-legacy", ...)` — **every verb refuses
+on an unmigrated legacy `.env`** (spec: "headless verbs refuse", plural), not
+just `--init`.
 
-- [ ] **Step 1: Failing tests** — capture stdout/stderr (vitest `vi.spyOn(console, ...)` + a `run(argv)` that returns the exit code, mirroring `scripts/refresh-tokens.ts:114`'s testable-run pattern): init writes `.env` with only the 3 creds + marker preservation; legacy-token fixture → exit 9, `.env` untouched; secret-file shredded even when init fails (name-collision on nothing — force failure via unwritable dir fixture); `--client-secret` argv path warns; auth-url exit 7 without `.env`; JSON envelopes match the shapes; **no secret string in any captured stream** for the file/stdin paths.
-- [ ] **Step 2: FAIL** → **Step 3: implement** → **Step 4: PASS + suite** → **Step 5: Commit** — `feat: headless dispatcher, --init (exit-9 legacy guard, secret-file transport), --auth-url`
+`--init`: `--client-id` + exactly one secret source. `--client-secret-file F`:
+read the first line, trim, then **immediately `rmSync(F)` in a `finally`**
+(unconditional; loud `console.error` + `EXIT.FAIL` if the rm throws) — the
+spec-v3.2 read-once-then-delete choreography. `--client-secret-stdin`: one
+line from stdin, trimmed. `--client-secret X`: stderr warning. Then
+`writeEnvFile`-equivalent against `paths.baseEnvPath` with
+`buildBaseEnvVars(id, secret, REDIRECT_URI, isMigrated(existing))`, mode 0600.
+`--auth-url`: parseable base env required (else PRECONDITION, stepId
+`app-credentials`); prints `{url}`; never opens a browser.
+
+- [ ] **Step 1: failing tests** (tmp-dir `SetupPaths` fixtures; run via `runHeadless([...], paths)` capturing streams): init happy path; marker preservation; **legacy fixture → exit 9 for `--init` AND `--auth-url` AND `--add-login`**; secret-file shredded on success and on failure (failure forced via read-only `baseEnvPath` parent dir); argv-secret warns; auth-url exit 7; JSON envelope shapes; no secret in any stream.
+- [ ] **Steps 2–4** → **Step 5: Commit** — `feat: headless dispatcher with injectable paths; --init and --auth-url`
 
 ### Task 8: `--add-login` — callback form, clean path
 
-**Files:**
-- Modify: `scripts/setup-headless.ts`
-- Test: `test/headless-add-login.test.ts`
+As plan v1, with the review's corrections stated plainly:
+- **Save-opts rule:** every save on an UNCONFIRMED path passes
+  `{ onSameAccount: "refuse" }`; ONLY the `--distinct-login
+  --confirm-different-user` resume passes `{ onSameAccount: "warn" }` (and
+  then calls `markDistinctLogin(paths.profilesDir, savedConfig.accountId)`).
+- A thrown `ProfileWriteError("SAME_ACCOUNT")` at save → the exit-8 path
+  **keeping the pending**.
+- Clients on staged pairs via `buildTokenClient` (T4).
+- [ ] Steps as v1 (stubbed core; assert exchange-not-called on exit 4; nothing staged on exit 3; pending survives a crashed save). Commit `feat: --add-login clean path with stage-before-discovery`.
 
-**Interfaces:**
-- Consumes: T4 core (`exchangeCode`, `discoverMemberships`, `saveProfile`), T6 pending ops, T2 `ProfileWriteError`, T3 `markDistinctLogin`.
-- Produces: the `addLogin(argv, emit)` verb handler. Order per spec state machine: (1) `normalizeProfileName` + availability (`existsSync(profilesDir/name.env)`) → NAME_TAKEN exit 4 **before** exchange, fix text per spec exit table ("already yours? run --doctor; reconnecting? use --reauth"); (2) `exchangeCode` → CODE_REJECTED exit 3 on throw; (3) `stagePending(mode:"add")` **before** discovery; (4) `discoverMemberships` with a Client built on the staged pair; (5) single membership + no same-account collision → `saveProfile` → `shredPending` → `emitOk` `{name, company, accountId, businessId, profilePath}`.
+### Task 9: `--add-login` — branches, resumes, short-circuit
 
-- [ ] **Step 1: Failing tests** (stubbed core via vitest `vi.mock` of `./setup-core`): clean path emits ok and no pending remains; name-taken exits 4 with NO exchange call (assert stub not called); exchange throw exits 3 with nothing staged; crash simulation (make save throw generic) leaves the pending on disk.
-- [ ] **Step 2–4: FAIL → implement → PASS** → **Step 5: Commit** — `feat: --add-login clean path with stage-before-discovery`
-
-### Task 9: `--add-login` — branch exits + resume forms + short-circuit
-
-**Files:**
-- Modify: `scripts/setup-headless.ts`
-- Test: extend `test/headless-add-login.test.ts`
-
-**Interfaces (Produces — behavior contract, spec state machine + exit table):**
-- Multi-membership → stage kept, exit 6, payload `memberships: [{label, accountId, businessId}]`.
-- Same-account (any membership accountId ∈ existing profiles' accountIds — fresh scan) → stage kept, exit 8, payload `{existingProfile, confirmQuestion, directive}` (strings verbatim from spec §"Exit 8, fully drafted"; NO resume command in payload).
-- Discovery throw → stage kept, exit 11.
-- **Resume forms** (`--name` present, no `--callback-url`): no pending → USAGE exit 2 listing `listPendings` names. **Pre-discovery short-circuit first:** if `profiles/<name>.env` exists and its refresh token equals the pending's → `shredPending`, exit 0 (no network). Then: expired staged access token (decode via `decodeJwtExp` from `src/freshbooks-client.ts`) → refresh via staged refresh token (Client.refreshAccessToken) and **immediately `stagePending` the rotated pair** before proceeding; refresh failure → exit 3 + fix "stale grant — --discard-pending and re-auth". `--account-id A [--business-id B]` → **skip discovery**, save with asserted ids. `--business-id B` alone → re-discover, pick the matching membership (absent → USAGE 2). `--distinct-login` requires `--confirm-different-user` (else USAGE 2); on save: `saveProfile(..., { onSameAccount: "warn" })` then `markDistinctLogin(profilesDir, accountId)`. Bare resume → re-run discovery on staged pair, re-emit the branch exit. Save-stage backstop: catch `ProfileWriteError` — NAME_TAKEN + same-token-as-pending → shred, exit 0; NAME_TAKEN different-token / DUPLICATE_TOKEN → shred, exit 5 with the amended fix text (spec exit table); SAME_ACCOUNT (refuse mode, only reachable without the confirmed flag) → exit 8 path.
-
-- [ ] **Step 1: Failing tests** — one test per row above (12 tests), all with mocked core + tmp profiles dir; assert exact exit codes, payload fields, pending presence/absence after each, and that `--account-id` resume performs zero discovery calls.
-- [ ] **Step 2–4: FAIL → implement → PASS** → **Step 5: Commit** — `feat: --add-login branch exits, resume grammar, crash-idempotent short-circuit`
+As plan v1's contract, plus the review's rules — all normative:
+- **Mode gate:** a resume (`--name` without `--callback-url`) first loads the
+  pending and **requires `mode === "add"`**; a `mode:"reauth"` pending →
+  USAGE 2 naming `--reauth --name N` (and vice-versa in T10). This closes the
+  cross-verb shred hazard.
+- **Mixed flags:** `--callback-url` combined with any resume-only flag
+  (`--business-id`/`--account-id`/`--distinct-login`) → USAGE 2.
+- **Bare resume** re-runs discovery on the staged pair; **clean discovery
+  proceeds to save → exit 0** (that is exit-11's recovery working); branch
+  conditions re-emit their exits. The confirmed distinct-login resume
+  **bypasses** the discover-stage same-account check (else branch 1 is
+  unreachable) — the save-stage guard still runs with `"warn"`.
+- **Pre-discovery short-circuit** (before everything, incl. the staged
+  refresh): same-named profile exists AND its refresh token equals the
+  pending's → shred, exit 0, no API call.
+- **Expired staged access token** (decode via `decodeJwtExp`; refresh when
+  `exp - now < 60`): refresh via `buildTokenClient(...).refreshAccessToken()`,
+  then **immediately re-`stagePending` the rotated pair** before discovery;
+  refresh failure → exit 3 with the discard-and-re-auth fix text.
+- Exit-6/8/11 `symptom`/`fix` strings: from the Book (`save-login`
+  troubleshooting, Appendix A) — `setup-headless.ts` **imports** the exit-8
+  `confirmQuestion`/`directive` strings from the Book step content; tests
+  assert them **verbatim-equal** to the Book's, not merely present.
+- [ ] **Step 1: failing tests — one per contract row (~17)** incl. the mode
+  gate, mixed-flag rejection, clean-bare-resume-to-exit-0, and
+  rotated-pair-rewrite (assert the pending file's tokens changed before the
+  discovery stub ran).
+- [ ] **Steps 2–4** → **Commit** — `feat: --add-login branches, mode-gated resume grammar, crash-idempotent short-circuit`
 
 ### Task 10: `--reauth` + `--discard-pending`
 
-**Files:**
-- Modify: `scripts/setup-headless.ts`
-- Test: `test/headless-reauth.test.ts`
-
-**Interfaces (spec verb table row):** name must exist (else USAGE 2 pointing at `--add-login`); exchange → stage `mode:"reauth"`; discover; **set-containment** (stored accountId ∈ membership accountIds; blank stored accountId → skip with stderr warning); mismatch → exit 12, pending KEPT; discovery throw → exit 11, pending kept; resume = `--reauth --name N` (no discovery-skip form — deliberate, spec exit-11 row); match → `replaceProfileTokens` (T4) + **shred `<profilePath>.rescue` if present** (precedence rule) + duplicate-token guard vs OTHER profiles (scan, reuse `writeNewProfile`'s loop logic via a small exported `assertNoForeignDuplicate(profilesDir, name, refreshToken)` added to `setup-core`) + shred pending + emitOk. Server-lock check first: `isServerLockFresh(lockPathFor(rootDir))` → stderr warning verbatim from spec ("restart Claude after re-auth…"), never refuse. `--discard-pending --name N`: shred + `{name, discarded:true}` + the honest no-server-side-revoke note in human output.
-
-- [ ] **Step 1: Failing tests** — happy 2-business containment pass; mismatch → 12 + pending kept; blank accountId → warn + proceed; lock-fresh fixture (write `.server.lock` with own pid) → warning present, exit 0; rescue file present → shredded after replace; discard-pending round trip; reauth on nonexistent name → 2.
-- [ ] **Step 2–4** → **Step 5: Commit** — `feat: --reauth with set-containment + staging, --discard-pending`
+As plan v1, plus: mode gate (`mode:"reauth"` pendings only, mirror of T9);
+the rescue shred lives inside `replaceProfileTokens` (T4), not the verb
+handler; quarantine-persists sentence in the success output when the profile
+is quarantined (string from Appendix A `save-login`/reauth troubleshooting);
+`assertNoForeignDuplicate` before the replace; exit-12 keeps the pending; the
+`.server.lock` warning text from the Book (`restart`-adjacent string, spec
+§verb table verbatim).
+- [ ] Steps as v1 + mode-gate test. Commit `feat: --reauth with set-containment + staging; --discard-pending`.
 
 ### Task 11: `--install` + `--print-config`
 
-**Files:**
-- Modify: `scripts/setup-headless.ts`, `src/mcp-config.ts`
-- Test: `test/headless-install.test.ts`
-
-**Interfaces:**
-- `src/mcp-config.ts`: `buildClaudeServerConfig(projectDir, commandPath?: string)` — `command: commandPath ?? "node"` (default unchanged for existing callers).
-- `selectCommandPath(opts: { assumeSandbox: boolean; override?: string }): { command: string; caveat?: string }` in `setup-headless.ts`: override wins; else non-sandbox → `process.execPath`; else probe `["/opt/homebrew/bin/node","/usr/local/bin/node","/usr/bin/node"]` via `existsSync` → first hit; else `"node"` + caveat string. `--headless` runs pass `assumeSandbox: true` unless `--trust-exec-path` (rung-1 agents set it; documented in agentGuidance) — simpler: flag `--command-path <abs>` and `--trust-exec-path`; default probes.
-- `--install desktop`: reuse `upsertClaudeDesktopConfig` logic but returning structured results — refactor `scripts/setup.ts:131-153` into `setup-core.ts` `installDesktop(projectDir, commandPath?): { ok: true; path: string; mtimeMs: number } | { ok: false; reason: string }` (wizard calls it too — keep wizard output identical). Invalid existing JSON → `ok:false` → exit 10 with `{configBlock, path}`. `--install code`: `claude` CLI present (`isClaudeCliAvailable`, moved to core) → add-json path; else write `.mcp.json` + emit the open-this-folder script line; failures → exit 10. `both` → run desktop then code, one JSON object per line each. `--print-config <target>`: exit 0, `{target, path, configBlock}` — **no read of existing config**; same `selectCommandPath`.
-- [ ] **Step 1: Failing tests** — tmp HOME fixture for the desktop path (point `resolveDesktopConfigPath` via env override — add `CLAUDE_DESKTOP_CONFIG_PATH` env override to `src/config-paths.ts`, test-only, documented in-code); merge preserves foreign `mcpServers` entries byte-identical; invalid-JSON fixture → exit 10 + block in payload; print-config never opens the existing file (spy on fs.readFileSync scoped); `both` emits two lines; probe order.
-- [ ] **Step 2–4** → **Step 5: Commit** — `feat: --install/--print-config with command selection and exit-10 payloads`
+As plan v1, with the review's corrections:
+- Path injection: `installDesktop(paths, commandPath?)` etc. — **no
+  `CLAUDE_DESKTOP_CONFIG_PATH` env var**; tests pass a tmp `SetupPaths`.
+- Targets: `desktop | code | mcp-json | both` (spec verb table — `mcp-json`
+  writes only the project `.mcp.json`; `code` = CLI-if-present else mcp-json +
+  the open-this-folder script; `both` = desktop + code, **one JSON object per
+  target, one per line**).
+- `selectCommandPath({ trustExecPath, override })`: override → it; trustExecPath
+  → `process.execPath`; else probe `/opt/homebrew/bin/node`,
+  `/usr/local/bin/node`, `/usr/bin/node`; else `"node"` + caveat. Flags
+  `--command-path`/`--trust-exec-path` (both in HEADLESS_VERBS, T1).
+- `--print-config <target>`: same selection rule; **never reads the existing
+  config** (structural read-only claim); exit 0 payload
+  `{target, path, configBlock}`.
+- [ ] Steps as v1 (tmp fixtures; foreign-entry byte-preservation; invalid-JSON
+  → exit 10 + block; `fs.readFileSync` spy proving print-config reads nothing).
+  Commit `feat: --install/--print-config with command selection and exit-10 payloads`.
 
 ### Task 12: `--doctor`
 
-**Files:**
-- Modify: `scripts/setup-headless.ts`
-- Test: `test/headless-doctor.test.ts`
+As plan v1, with: `runDoctor(paths: SetupPaths)`; the fixture matrix gains
+**malformed profile** (parse-fail file) per spec §Testing; the
+`~/.claude.json` check's definition: a resolvable entry =
+`mcpServers.freshbooks` object whose `command` is non-empty and whose `args[0]`
+exists on disk (best-effort read of `paths` — for tests, a `claudeJsonPath`
+added to `SetupPaths`); **content assertions** for the two agent-critical fix
+texts (sandbox hypothesis; two-cause command warn) — verbatim from the Book
+strings (Appendix A `verify` troubleshooting). Zero profiles → fail(stepId
+`save-login`), exit 1.
+- [ ] Steps as v1 + the added fixtures/assertions. Commit `feat: --doctor with Book-keyed checks`.
 
-**Interfaces:** `runDoctor(ctx): { ok: boolean; checks: Check[] }`, `Check = { id, stepId, status: "pass"|"warn"|"fail", detail, fix }`. Checks, each keyed per spec `--doctor` row: node ≥18 (`process.versions.node`); node_modules; `dist/index.js`; `.env` presence/format (parse, never echo values); unmigrated-legacy → fail(stepId `migrate-legacy`); per-profile `inspectTokenHealth` + registry quarantine (fresh `discoverProfiles`, not the memoized registry); pendings via `listPendings` (>24 h → warn, fix = bare resume or `--discard-pending`); `.rescue` scan (each profile path + base `.env`) → fail with the adopts-or-clears fix text; `.client-secret.tmp` lingering → warn; config entries (desktop file read-if-present, `.mcp.json`, `~/.claude.json` best-effort) — per-location info, fail only if none resolvable, missing-config fix carries the sandbox-hypothesis text verbatim (spec); non-absolute command → warn (two-cause text), absolute-missing → fail; configured dist path exists; 0600 perms on `.env`/profiles (warn; skip win32). Zero profiles → fail(stepId `save-login`), overall exit 1 never 2.
-- [ ] **Step 1: Failing tests** — fixture matrix per spec Testing section: healthy / expiring / unmigrated / stale pending (both modes) / rescue present / secret-tmp / missing build / relative command / absolute-missing command / zero profiles. Assert stepIds, statuses, exit codes, and **no token substrings in output** (canary fixtures).
-- [ ] **Step 2–4** → **Step 5: Commit** — `feat: --doctor with Book-keyed checks`
+### Task 13: Security hardening — 0600 + rescue lifecycle
 
-### Task 13: Security hardening in `src/` — 0600 + rescue lifecycle
+**Files:** Modify `src/atomic-write.ts`, `src/freshbooks-client.ts`; Test `test/rescue-lifecycle.test.ts`
 
-**Files:**
-- Modify: `src/atomic-write.ts` (`writeAtomic`: `writeFileSync(tmp, content, { mode: 0o600 })`; after `copyFileSync` bak: `chmodSync(bak, 0o600)` in try/catch no-op), `src/freshbooks-client.ts` (`persistTokens` + `refreshAndPersist`), `scripts/setup.ts` (`writeEnvFile` mode)
-- Test: `test/rescue-lifecycle.test.ts`
-
-**Interfaces (spec §Security hardening, all three rules):**
-
-```ts
-// freshbooks-client.ts additions
-function rescuePathFor(filePath: string): string;                    // `${filePath}.rescue`
-function writeRescue(filePath: string, access: string, refresh: string): boolean; // 0600; false on failure
-function tryAdoptRescue(profile: ProfileState): void;
-// called in refreshAndPersist AFTER preflightEnvFile(:183), BEFORE the U3 read (:194):
-// if rescue exists: parse; compare decodeJwtExp/iat of rescue.access vs profile.config.accessToken
-//   — newer → (a) applyTokensToEnv+writeAtomic+verify into profile file,
-//             (b) profile.config.* = rescue pair AND client.accessToken/refreshToken = rescue pair,
-//             (c) rmSync rescue;
-//   — equal/older → rmSync rescue + console.error warning (superseded), never adopt.
-// persistTokens failure path: writeRescue first; print ONLY the path; full-token stderr
-// print ONLY when writeRescue returned false (keep existing text for that last resort).
-```
-
-- [ ] **Step 1: Failing tests** — (a) persist-failure (unwritable profile file fixture) creates `.rescue`, stderr has the path and NO tokens; (b) persist-failure AND unwritable rescue dir → the existing loud print fires (tokens allowed here — assert present, this is the sanctioned exception); (c) adoption: profile file holds old pair, rescue holds newer pair (fixture JWTs with iat now vs -1d) → after `refreshIfNeeded` with stubbed SDK, file + config + client all hold the rescue pair, rescue gone, NO `refreshAccessToken` call (assert stub); (d) stale rescue (older iat) → shredded with warning, no adopt; (e) `writeAtomic` tmp created 0600 (statSync mode check, skip win32); (f) `replaceProfileTokens` (reauth) shreds a rescue (integration with T10's hook — assert via the core function directly).
-- [ ] **Step 2–4** → **Step 5: Commit** — `feat: rescue-file lifecycle + 0600-at-creation credential writes`
-
-### Task 14: Token-hygiene sweep suite
-
-**Files:**
-- Create: `test/setup-hygiene.test.ts`
-
-**Contract (spec §Security testing):** canary-JWT fixtures (3-segment base64url, distinctive bodies) driven through EVERY headless verb's success AND failure paths (stubbed core), capturing stdout+stderr, asserting via the 8-char sliding-window method (copy the helper from `test/refresh-tokens-redaction.test.ts`) that no canary substring appears — including `--doctor` on the full fixture matrix and one exchange-rejection whose error object embeds a canary in `error.config.data` (proves the envelope projection drops it). The sanctioned exception (T13 test b) is asserted in T13, not here — this suite must have zero exceptions.
-
-- [ ] **Steps: write (FAIL if any leak) → fix any leaks found → PASS → Commit** — `test: token-hygiene sweep across every headless verb`
-
-### Task 15: `renderSetupStepMd` + help `setup` topic
-
-**Files:**
-- Create: `src/docs/render-setup.ts`
-- Modify: `src/tools/help.ts` (enum + sections + `renderIndexTopic` line), `src/docs/content.ts` (overview closing list: add `reports` AND `setup` — fixes the standing omission)
-- Test: extend `test/setup-flow.test.ts` + a new topic-index test file `test/help-topics.test.ts`
-
-**Interfaces:**
+**Interfaces (fully specified control flow — the review found the v1 sketch
+contradicted its own test):**
 
 ```ts
-export function renderSetupStepMd(step: SetupStep): string;
-// Deterministic markdown per spec §Enforcement render rules: documentation ctx
-// (symbolic "<project folder>"; literal redirect URI); heading = step.title;
-// "The setup program shows this step only if …" prefix when appliesIf;
-// capability-keyed role headings ("If Claude can run commands on your computer:" /
-// "If you are typing every command yourself:"); successCheck; troubleshooting table.
-export function renderSetupTopic(): string;  // all docs-surface steps + KICKOFF_PROMPT + SECRETS_RULES table
+// src/freshbooks-client.ts
+export function decodeJwtIat(token: string): number | null;   // NEW — same shape as
+  // decodeJwtExp (src/freshbooks-client.ts:31-41) but reads payload.iat
+function rescuePathFor(filePath: string): string;             // `${filePath}.rescue`
+function writeRescue(filePath: string, access: string, refresh: string): boolean;
+  // two dotenv token lines (parseProfileConfig-compatible), writeFileSync mode 0600
+function tryAdoptRescue(profile: ProfileState): boolean;      // returns adopted?
+  // Called in refreshAndPersist AFTER preflightEnvFile (:183), BEFORE the U3
+  // read (:194). If rescue exists:
+  //   iatR = decodeJwtIat(rescue.access); iatD = decodeJwtIat(profile.config.accessToken)
+  //   — either undecodable → DO NOT adopt, DO NOT shred; console.error warning
+  //     (doctor keeps flagging it; fail closed)
+  //   — iatR <= iatD → superseded: rmSync rescue + warning; return false
+  //   — iatR > iatD → adopt BOTH halves: applyTokensToEnv+writeAtomic+readTokenMarkers
+  //     verify into profile.filePath, THEN profile.config.* AND client.accessToken/
+  //     refreshToken = rescue pair (hand-rolled — do NOT recurse into persistTokens),
+  //     rmSync rescue; return true. Write failure: keep rescue, throw (loud).
+// refreshAndPersist flow change:
+//   const adopted = tryAdoptRescue(profile);
+//   if (adopted && isTokenFresh(profile.config.accessToken, bufferSeconds)) {
+//     console.error(`[freshbooks] adopted rescue pair for "${profile.name}"; skipping refresh`);
+//     return;                                    // the post-adoption early return —
+//   }                                            // without it the U3 gate no longer
+//                                                // fires and rotation would run anyway
+//   … existing U3 read + rotation (a stale adopted pair correctly falls through
+//   and rotates WITH the adopted refresh token — the overnight-restart case)
+// persistTokens SUCCESS path: rmSync(rescuePathFor(profile.filePath), {force:true})
+//   — the spec's every-guarded-write-shreds-rescue rule (replaceProfileTokens
+//   carries it for reauth, T4).
+// persistTokens FAILURE path: writeRescue first; print ONLY the path; the full-token
+//   stderr print ONLY when writeRescue returned false (existing text kept).
 ```
 
-- [ ] **Step 1: Failing tests** — snapshot-free structural asserts: render contains the two capability headings for a docs step; appliesIf prefix only on `migrate-legacy`; `renderSetupTopic()` contains every docs-surface step title; `test/help-topics.test.ts`: every `sections` enum key appears in `renderIndexTopic()` and in the overview's closing list (this FAILS today for `reports` — the fix lands here).
-- [ ] **Step 2–4** (annotation note: `freshbooks_help` already allow-listed in `test/tool-inventory.test.ts` — unchanged) → **Step 5: Commit** — `feat: help setup topic + renderSetupStepMd; fix overview topic-list omission`
+`writeAtomic`: `writeFileSync(tmp, content, { mode: 0o600 })` + best-effort
+`chmodSync(bak, 0o600)`. `scripts/setup.ts` `writeEnvFile`: mode 0600.
 
-### Task 16: README + SETUP.md agent path + scoped drift test
+- [ ] **Step 1: failing tests** — (a) persist-failure creates `.rescue`
+  (fixture: **a directory squatting at `<filePath>.tmp`** so `writeAtomic`'s
+  rename fails while the rescue write, at a different name, succeeds), stderr
+  has the path and NO tokens; (b) persist-failure AND rescue-write failure
+  (squat both `.tmp` and `.rescue`) → sanctioned loud print (tokens present —
+  the ONE allowed leak); (c) fresh rescue (iat now vs −1 day) → adoption:
+  file+config+client hold the rescue pair, rescue gone, `refreshAccessToken`
+  stub NOT called; (d) stale rescue (older iat) → shredded, warning, no adopt,
+  rotation proceeds; (e) undecodable-iat rescue → kept, warned, not adopted;
+  (f) `replaceProfileTokens` shreds a rescue (direct core-function test);
+  (g) `persistTokens` success shreds a lingering rescue; (h) tmp/bak modes
+  0600 (skip win32); (i) adopted-but-stale pair → rotation runs WITH the
+  adopted refresh token (assert the stub received it).
+- [ ] **Steps 2–4** → **Commit** — `feat: rescue-file lifecycle (adopt-newer, shred-superseded) + 0600 credential writes`
 
-**Files:**
-- Modify: `README.md` (kickoff fenced block + expected-heading line + no-web sidebar, copy from spec §Enforcement), `SETUP.md` (insert `<!-- setup-step:<id> BEGIN/END -->` fenced generated blocks for the docs-surface steps — content = `renderSetupStepMd` output committed verbatim; retitle + gate the token-exchange appendix section; move manual config blocks inside the `install-config` fence; append the sentinel line; keep the tool-total sentence matching `test/doc-tool-count.test.ts`'s pattern exactly once)
-- Create: `test/setup-flow-docs.test.ts`
+### Task 14: Token-hygiene sweep
 
-**Drift test (spec §Enforcement, scoped for PR 2):**
+As plan v1, plus the explicit note: the refresh CLIs' hygiene is already
+covered by `test/refresh-tokens-redaction.test.ts` (landed `4f607fd`) — this
+suite covers every `setup-headless` verb (success + failure fixtures + doctor
+matrix + the `config.data` canary rejection) and asserts zero exceptions (the
+sanctioned loud print is asserted in T13 test b only). Commit
+`test: token-hygiene sweep across every headless verb`.
 
-```ts
-it("every docs-surface step has exactly one fence pair, in Book order", ...);
-it("every fence id in SETUP.md matches a live Book id", ...);
-it("each fenced region equals renderSetupStepMd(step) byte-for-byte", ...);
-it("docPhrases appear inside their step's region", ...);
-it("README contains KICKOFF_PROMPT verbatim + the expected-heading line", ...);
-it("SETUP.md ends with the sentinel line and carries the appendix gate sentence", ...);
-it("all --flags inside setup fences are in HEADLESS_VERBS (allowlist: --profile, --scope, --version)", ...);
-```
+### Task 15: `renderSetupStepMd` + help topic
 
-Also: split `test/doc-inventory.test.ts` — add a second describe for SETUP.md asserting only no-unregistered-names.
+As plan v1, with the review's corrections: `renderSetupStepMd(step)` renders
+with `DOC_CTX` (T1) and — per spec Enforcement rule (b) — for docs-surface
+steps emits BOTH capability-keyed role headings, and for `app-credentials`
+embeds the `SECRETS_RULES` rows table AND `selfTest` line in the block;
+`appliesIf` steps open with the "shows this step only if" line. Topic-index
+test exclusions (feasibility review): `renderIndexTopic()` must list every
+enum topic EXCEPT `index`; the overview closing list must list every topic
+except `index` and `overview` — this fails today for `reports` (the fix) and
+after this task both lists include `setup`. Commit
+`feat: help setup topic + renderSetupStepMd; fix overview topic-list omission`.
 
-- [ ] **Steps: write drift test (FAIL) → rewrite README/SETUP.md until green → full suite (doc-tool-count must stay green — adjust the total sentence placement, not the tuple) → Commit** — `docs: agent-path SETUP.md with committed generated blocks + README kickoff; drift tests` → **Open PR 2** (`feat/setup-rework-headless`). CHANGELOG entry under Unreleased.
+### Task 16: Docs generation + README/SETUP.md agent path + drift tests
+
+**Files:** Create `scripts/generate-setup-docs.ts`, `test/setup-flow-docs.test.ts`; Modify `README.md`, `SETUP.md`, `test/doc-inventory.test.ts`
+
+- **The generation workflow (review demanded one):**
+  `scripts/generate-setup-docs.ts` — ts-node script importing `SETUP_FLOW` +
+  `renderSetupStepMd`; for each docs-surface step, replaces the region between
+  `<!-- setup-step:<id> BEGIN -->` and `<!-- setup-step:<id> END -->` in
+  SETUP.md (region = the lines strictly between the marker lines; markers each
+  on their own line; region ends with exactly one trailing newline). Run it
+  after every Book edit; the drift test verifies the committed result by
+  calling the SAME renderer — no hand-pasting ever.
+- README: `KICKOFF_PROMPT` in a fenced block; directly below it the
+  expected-heading line (drift test: the quoted heading **equals SETUP.md's
+  first `#` line**, read live by the test — rot-proof against T19's rewrite)
+  and `SIDEBAR_TEXT` (containment-tested).
+- SETUP.md: fences per docs-surface step (generated); appendix retitled
+  **"Appendix — manual setup (humans only)"** with the drift-tested literal
+  gate sentence *"Installing agents must never use this section — it handles
+  raw tokens."* scoped to the token-exchange section (the manual config blocks
+  render inside the `install-config` fence via the Book, T1); the sentinel
+  line `— end of setup guide —` last; the tool total stated exactly once in
+  `doc-tool-count`'s matchable form; **a link to README's kickoff prompt
+  instead of a duplicate**.
+- Drift tests (full list): fence-pairs ↔ ids both directions + order;
+  byte-equality per region via the renderer; docPhrases in-region; README
+  contains KICKOFF_PROMPT + SIDEBAR_TEXT + heading-line == SETUP.md first
+  heading; sentinel last line; gate sentence present; scoped verb sweep
+  (fenced regions only; allowlist `--profile --scope --version`);
+  doc-inventory split (SETUP.md → no-unregistered-names class).
+- [ ] **Steps: write tests (FAIL) → write generator → generate + author framing prose → green (incl. doc-tool-count) → Commit** — `docs: generated agent-path SETUP.md + README kickoff; drift tests + generator` → CHANGELOG entry → **Open PR 2**.
 
 ---
 
-# Phase 3 — PR 3: wizard re-render + human path
+# Phase 3 — PR 3: wizard + human path
 
-### Task 17: `prompt()` helper + checklist renderer
+### Task 17: `formatPrompt` + `renderChecklist`
 
-**Files:**
-- Modify: `scripts/setup.ts` (replace `ask`/`isYes` call sites progressively), new pure functions co-located
-- Test: `test/wizard-render.test.ts`
+As plan v1; note per review: `renderChecklist` takes `doneIds` computed by the
+wizard from each step's `check(ctx)` (single-sourcing — the wizard never
+re-implements a check that exists on the Book step). Commit
+`feat: prompt formatter + append-only checklist renderer`.
 
-**Interfaces:**
+### Task 18: Wizard re-render — orchestrator with injected I/O
+
+**Files:** Modify `scripts/setup.ts`; Test extend `test/wizard-render.test.ts`
+
+The review (human-outcomes F2) requires the wizard's SEQUENCING to be
+machine-verified. Restructure `main()` into
+`runWizard(io: { ask(q: string): Promise<string>; out(line: string): void }, paths: SetupPaths)`
+— the real `main()` wires readline + console; tests drive `runWizard` with a
+scripted `ask` stub and capture `out` calls in order. The flow (spec Surface
+1): migration gate (Book `migrate-legacy` text) → credentials (Book
+`app-credentials` humanScript incl. the never-into-this-chat line at the
+prompt) → per-login loop: nickname (motivated, availability pre-checked) →
+auth URL + **just-in-time checklist printed AT the paste prompt** →
+`validateCallbackPaste` loop (hint on scheme-less paste) → save (same-account
+confirm → `markDistinctLogin`) → summary → checklist reprint → base env →
+build (STEP 4 kept) → install prompts (STEP 5 kept) → **restart parting note
+rendered from the Book, printed last**. No raw stacks: the top-level catch
+prints message + the failing step's troubleshooting pointer.
+
+- [ ] **Step 1: failing transcript-order tests:**
 
 ```ts
-export function formatPrompt(question: string, def: "yes" | "no" | null): string;
-// "yes" → `${question} (Enter = yes, n = no): `   "no" → `${question} (y = yes, Enter = no): `
-export function renderChecklist(steps: SetupStep[], ctx: SetupCtx, doneIds: string[], currentId: string, loginCount: number): string;
-// append-only block: ✓ done / ▶ current / ○ pending, appliesIf-filtered,
-// per-login steps annotated "(login N)" when loginCount > 1
+const t = await runScripted([...answers]);       // helper: runWizard with stubs, returns out[] joined
+const idx = (s: string) => t.indexOf(s);
+expect(idx("Nickname")).toBeLessThan(idx("https://auth.freshbooks.com"));      // nickname before OAuth
+expect(idx("CAN'T BE REACHED")).toBeGreaterThan(idx("https://auth.freshbooks.com"));
+expect(idx("CAN'T BE REACHED")).toBeLessThan(idx("Paste the full address"));   // just-in-time
+expect(t).toContain("never into this chat");                                    // at the credential prompt
+expect(idx("Our conversation is saved")).toBeGreaterThan(idx("DONE"));          // parting note last
+// scheme-less paste path: answers include "localhost" once → hint printed, re-prompted
+expect(t).toContain("part of the address");
 ```
 
-- [ ] **Step 1: failing tests for both renderings + filtering/repeats** → **2–4** → **5: Commit** — `feat: prompt formatter + append-only checklist renderer`
+- [ ] **Steps 2–4** (implement reorder; stubs make the OAuth/core calls fake via `vi.mock`) → **Commit** — `feat: wizard rendered from the Book with transcript-order tests`
 
-### Task 18: Wizard re-render from the Book
+### Task 19: Human-path docs + honesty + full drift + probe
 
-**Files:**
-- Modify: `scripts/setup.ts` — `main()` flow reordered per spec Surface 1: nickname-before-OAuth (availability pre-check via `normalizeProfileName` + exists), just-in-time OAuth checklist printed AT the paste prompt (strings from the Book's `authorize` step), paste validator (scheme-less/query-less input → the spec's "part of the address" message, then re-prompt), plain-English migration gate (Book `migrate-legacy` humanScript), same-account confirm → `saveProfile(..., {onSameAccount:"warn"})` + `markDistinctLogin`, per-login summary, checklist printed at each stage boundary. STEP 4 build and STEP 5 install prompts KEPT (Book `build`/`install-config` wizard surface). All prompts via `formatPrompt`.
-- Test: extend `test/wizard-render.test.ts` with the pure pieces (paste validator function `validateCallbackPaste(input): { ok: true; code: string } | { ok: false; hint: string }` extracted and unit-tested); decoupling test untouched and green.
-
-- [ ] **Steps: extract validator (test-first) → reorder main() → manual smoke: `npm run setup` reaches the auth-url print with a test .env then Ctrl-C (document expected transcript in the commit body) → full suite → Commit** — `feat: wizard rendered from the Book — nickname-first, just-in-time OAuth copy`
-
-### Task 19: SETUP.md human path + honesty + full drift
-
-**Files:**
-- Modify: `SETUP.md` (human framing prose outside fences: per-rung time honesty + touchpoint floor in limitations; incognito tip; Desktop tool-cache row in beginner words; troubleshooting completion incl. closed-tab row, truncated-secret row), `CLAUDE.md` (three-surface contract + doc-maintenance rows verbatim from spec §Docs impact), `docs/claude-project-system-prompt.md` if tool names shifted (none should)
-- Modify: `test/setup-flow-docs.test.ts` — un-scope to the full assertion set.
-- **Probe step (manual, blocking):** the exit-11 "where to find your account ID" pointer — run one live `freshbooks_get_client`-style check of the FreshBooks web UI (owner account), record the location + date in the Book's `save-login` troubleshooting entry (REPORT_PARAMS discipline; do NOT guess).
-- [ ] **Steps: prose edits → probe + record → drift tests green → doc-tool-count/doc-inventory green → Commit** — `docs: human-path SETUP.md, honesty sections, CLAUDE.md contract`
+As plan v1, plus content pins (human-outcomes F7): `test/setup-flow-docs.test.ts`
+gains substring asserts for the two honesty sentences ("15 minutes if Claude
+can run commands", "35–40") in SETUP.md's framing prose; the account-ID probe
+records into the Book's `save-login` troubleshooting (replacing Appendix A's
+recorded interim sentence) and regenerates the fences. Commit
+`docs: human-path SETUP.md, honesty pins, probed account-ID pointer`.
 
 ### Task 20: Release hygiene
 
-- [ ] CHANGELOG Unreleased entries complete for all three PRs; `npm run build && npm test && npm run lint` clean; **Open PR 3** (`feat/setup-rework-wizard`). No version bump (release is a separate decision per CLAUDE.md).
+As plan v1 (CHANGELOG complete; full suite; **Open PR 3**; no version bump).
 
 ---
 
-## Self-review (author, per writing-plans)
+## Appendix A — Book content (the canonical strings this plan owns)
 
-- **Spec coverage:** every spec section maps: Book/enforcement → T1/T15/T16/T19; ladder+kickoff → T1/T16; secrets → T1/T7/T14; Surface 1 → T17/T18; Surface 2 verbs → T7–T12; state machine → T8/T9; typed errors → T2/T3; install choreography → T11 (+Book strings T1); doctor → T12; security → T6/T13/T14; docs impact → T5/T15/T16/T19; testing section → T14 + per-task suites; sequencing → the three phases. Gap check: exit-8/exit-6 relay scripts live in Book strings (T1) and are exercised by T9's payload tests — covered.
-- **Placeholders:** none found (verbatim-copy rule replaces string duplication by design, stated in Global Constraints).
-- **Type consistency:** `saveProfile` opts type = `writeNewProfile`'s (T2) via `Parameters<>`; `PendingRecord` consistent across T6/T8/T9/T10; `EXIT` names match spec codes 0–12; `selectCommandPath` consumed by both `--install` and `--print-config` (T11).
+Rules: text in quotes is **verbatim Book content** — copy exactly. Items
+marked *(spec §X)* are NOT restated here — copy them verbatim from that spec
+section. `PROBE:` markers are filled by T1 Step 1 (never guessed). Each step
+lists: Title · humanScript (H) · agentGuidance (A) · successCheck (SC) ·
+docPhrases (DP) · troubleshooting (TR).
+
+**choose-claude** — Title: "Which Claude will you use?"
+H: "Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?" · "If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it — you'll need the Claude desktop app or Claude Code. This setup guide can still get you ready for either."
+A: Ask the target question exactly; never infer the target from your own runtime. If the answer is claude.ai-web, deliver the isn't-supported script honestly (kickoff rule 4's exception). If the user pastes SETUP.md instead of you fetching it, confirm the paste by quoting its opening heading and final line — and name the mismatch if you received the README instead ("that looks like the project README — I need the file called SETUP.md; on the repository page click it, then use the copy button").
+SC: "You know which Claude the server will be installed into."
+DP: ["Dock", "isn't supported", "name the mismatch"]
+TR: symptom "Claude can't read the web" → fix: the README sidebar text *(spec §Enforcement — SIDEBAR_TEXT)*.
+
+**get-project** — Title: "Get the project onto the computer"
+H: "Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type `cd ` and drag the folder onto the Terminal window. Windows: copy the folder's path from the Explorer address bar."
+A: "I'll ask your approval between eight and ten times during this install — each time, I'll tell you first what the dialog will say and why it's safe." (state this BEFORE the first command; number every later pre-brief "approval N of about 9"; if the degraded path adds dialogs, say so and restate the remaining count). Fetch without git: `mkdir FreshBooks-MCP && curl -L https://github.com/kanjidoc/FreshBooks-MCP/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C FreshBooks-MCP`. Re-extracting over an existing folder is credential-safe (`.env`/`profiles/` are not in the tarball).
+SC: "A folder containing package.json exists." check(): `ctx.exists(projectDir + "/package.json")`, detail "package.json present/missing at <project folder>".
+DP: ["between eight and ten", "drag the folder onto the Terminal window"]
+TR: "git asks to install developer tools" → "You don't need git — use the download command above (or the ZIP)."
+
+**node-install** — Title: "Install Node.js (the engine)"
+H: "First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet." · "Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again."
+A: Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)
+SC: "`node --version` prints v18 or higher."
+DP: ["that's the expected answer", "that's the normal installer, not me"]
+TR: "still command not found after installing" → "Close the Terminal window completely and open a new one — it reads the new installation only on startup."
+
+**npm-install** — Title: "Install the building blocks and build"
+H: "In the project folder run: `npm install && npm run build` — one command, a few minutes. Near the end npm may print a line about vulnerabilities; that's a routine npm notice, not a problem with your setup."
+A: One pre-briefed approval for the combined command.
+SC: "It ends without red ERR lines; a dist folder now exists." check(): `ctx.exists(projectDir+"/node_modules")`, detail "node_modules present/missing".
+DP: ["routine npm notice"]
+TR: "Cannot find module 'ts-node'... MODULE_NOT_FOUND" → "npm install hasn't run (or didn't finish) in this folder — run `npm install` and retry."
+
+**build** — Title: "Build the server"
+H: "If you ran the combined command above, this already happened. Otherwise: `npm run build`."
+A: Normally folded into npm-install's combined command.
+SC: "dist/index.js exists." check(): `ctx.exists(projectDir+"/dist/index.js")`, detail "dist/index.js present/missing".
+DP: [] · TR: "Cannot find module .../dist/index.js" → "Run `npm run build` in the project folder."
+
+**developer-app** — Title: "Create your FreshBooks app connection"
+H: "Sign in at freshbooks.com with your normal FreshBooks email — if FreshBooks emails you a code, that's their sign-in check, not part of this setup." · "Open the Developer Portal: my.freshbooks.com/#/developer, click Create an App." · PROBE: one line per form field with a suggested literal (Application name: "My Claude Connection — the name doesn't matter"; description filler; the exact scope checkboxes to tick) + probe date. · "Set the Redirect URI to exactly: https://localhost/callback — then read it back to yourself character by character." · "Any field these steps don't mention: leave it as-is." · "Already created this app once? Open it instead of creating another — reveal the secret, and confirm the Redirect URI is still exactly https://localhost/callback." · "Keep this page open — the next step needs the Client ID and Client Secret shown on it."
+A: Relay one numbered item at a time; wait for confirmation each time.
+SC: "The app page shows a Client ID and a (hidden) Client Secret, and the Redirect URI reads exactly https://localhost/callback."
+DP: ["leave it as-is", "that's their sign-in check", "https://localhost/callback"]
+TR: "the form shows something these steps don't mention" → "Read Claude any red text first, then the labels of the boxes you're asked to fill, top to bottom — skip menus and banners."
+
+**app-credentials** — Title: "Hand over the app credentials"
+H (rung-3 variant): "Copy the Client ID and Client Secret from the portal page and paste them only into the setup window — never into this chat." · (rungs-1–2 variant, and the secrets table): *(spec §Secrets — SECRETS_RULES rows, self-test, honesty notes, and the secret-file choreography paragraph as amended in v3.2)*
+A: Confirm receipt by shape, never echo: "that looks right — about 32 characters — I won't repeat it again." If the user volunteers the secret in chat on rung 3: acknowledge, never repeat it, and offer rotation — before the credentials are entered into the setup program, rotate freely; after, rotate and then redo this step. Rung-3 wizard handoff (this is the first wizard-owned stretch): "The setup program is the guide now — follow its questions; I'll stand by until it prints DONE or something surprises you." Never pre-narrate the wizard's prompts.
+SC: "The setup program (or --init) reports the credentials saved."
+DP: ["never into this chat", "I won't repeat it again", "the setup program is the guide now"]
+TR: "pasted value much shorter than ~32 characters" → "The paste truncated — reveal the secret again and copy the whole value."
+
+**migrate-legacy** — Title: "Move an older single-login setup into a named profile"
+H: "You have tokens from an older version of this project stored in the main .env file; the setup moves them into their own profile file, keeping everything you had." · "Before saying yes: fully quit Claude (and any other program running this FreshBooks server). Here's why, in plain terms: FreshBooks hands out a one-time key that gets swapped for a new one every time it's used. If two programs hold the same key and both try to use it, FreshBooks locks the whole chain and you'd have to reconnect from scratch. Quitting first makes sure only the setup holds the key." · "Answering no just skips the move for now — nothing is deleted."
+A: Headless verbs refuse this state (exit 9); tell the user to run `npm run setup`, wait for their confirmation, then resume with `--doctor`.
+SC: "The wizard prints Migrated existing tokens → profiles/<name>.env."
+DP: ["one-time key", "nothing is deleted"]
+TR: "migration says a server appears to be running" → "Something still holds the tokens — fully quit Claude Desktop (Cmd+Q) and any Claude Code sessions, then re-run `npm run setup`."
+
+**nickname** — Title: "Name this login"
+H: "Pick a short nickname for this FreshBooks login — lowercase letters and digits, like acme. You'll use it in chat forever when you have more than one login: 'list unpaid invoices for acme'. With a single login you'll never need to type it."
+A: First login: choose `main` yourself and inform ("I'll call this login main — you'd only ever type it if you add a second account"); ask only when profiles already exist. Validate + check availability BEFORE issuing the auth URL.
+SC: "The name is accepted (no already-exists message)."
+DP: [] · TR: "name already taken" → "That login may already be connected — ask Claude to run the setup doctor; to reconnect it, the command is --reauth."
+
+**authorize** — Title: "Sign in and approve the connection"
+H: "1. Open the sign-in link. 2. Sign in (use a private/incognito window if connecting a second account) and click Allow. 3. Your browser will land on a page that CAN'T BE REACHED — that's normal and means it worked. The address bar now holds a one-time code. 4. Click once inside the address bar so the whole address highlights, press Cmd+C (Ctrl+C on Windows), and paste it back. 5. After you paste, stay with me — I need one more approval from you within a minute or two."
+A: Issue `--auth-url` only after the nickname is validated; never open a browser yourself.
+SC: "You pasted a long address starting with https://localhost/callback?code=..."
+DP: ["CAN'T BE REACHED", "click once inside the address bar", "stay with me"]
+TR: "Closed the tab before copying?" → "Click the sign-in link again and re-Allow — no harm done." · "the wizard says the address looks incomplete" → "That was only part of the address — click once in the address bar so the whole thing highlights, then copy again."
+
+**save-login** — Title: "Save the login"
+A: Run `--add-login` immediately upon receiving the pasted address — the code lives minutes. Pre-brief its approval dialog: "the dialog will show the address you just pasted, including the long code — that's expected; it works only once and only with this approval." If it asks which business (exit 6): relay labels only, numbered, never IDs — "Which business is this for: (1) …, (2) …?" — and map the answer to `--business-id` yourself. If it reports the company is already connected (exit 8): relay the question exactly *(spec §"Exit 8, fully drafted")* and obey its directive.
+H: "The setup finds this login's account details and saves them into its own profile file."
+SC: "It prints the login's nickname, company, and account ID (never tokens)."
+DP: ["including the long code", "Which business is this for", "immediately"]
+TR: "exit 11 / could not look up the account details" → "Retry first — lookups usually fail transiently. If it keeps failing: your Account ID is shown in FreshBooks (exact location recorded during PR 3's probe — until then, retry or ask Claude to run the doctor)." · "quarantined profile mentioned" → "Two profiles share one company; the extra safety stays on until the duplicate is resolved — the doctor explains which file to remove or mark."
+
+**install-config** — Title: "Connect the server to your Claude"
+H + A: *(spec §"The install-config choreography" — ALL of it verbatim: the pre-brief, the range/countdown rules, the extended re-ask script, the disclosure line, the two-branch merge protocol, the self-contained insertion script, the rung-2 mandatory confirmation incl. absent-entry-means-virtualized)* plus H: the manual Desktop and Code config JSON blocks (current content of SETUP.md's manual sections, updated paths — these render inside this fence and are the degraded path's raw material).
+SC: "Claude's config lists the freshbooks server (the install prints the exact file path it wrote)."
+DP: ["you never edit a file by hand", "access keys for other connectors", "select all, paste over everything, press Cmd+S", "Want me to ask again?", "changes nothing on disk"]
+TR: "Edit Config opened a folder window, not an editor" → "That's right — double-click the highlighted file and it opens in TextEdit."
+
+**verify** — Title: "Check everything"
+H: "Ask Claude (or run) the setup doctor — every line should say pass."
+A: Run `--doctor`; read failing checks' fix texts aloud; act only within them.
+SC: "Doctor exits with all checks passing."
+DP: []
+TR: "config entry missing but a previous session said install succeeded" → "The write was virtualized by the sandbox — use the manual Edit Config route now; do NOT re-run --install." · "command isn't an absolute path" → "Either a legacy entry (re-run --install) or the deliberate sandbox fallback ('node') — the doctor's line says which."
+
+**restart** — Title: "Restart Claude and say hello"
+H (Desktop): "Our conversation is saved — nothing is lost when you quit. 1. Quit Claude completely: Cmd+Q, not just closing the window. 2. Reopen it. 3. The first time a FreshBooks tool runs you'll see one more permission dialog — Allow it. 4. Type: List my recent FreshBooks invoices." (Code): "Start a new session in this folder; if asked to enable the freshbooks server, say yes; then type the test sentence."
+A: Deliver the ENTIRE parting note before the user restarts (your session may end with it). Failure lines, per rung — rung 2: "open a new chat in this folder and paste: Run the FreshBooks setup doctor and follow SETUP.md's troubleshooting for whatever it reports." · rung 3: "open a new chat, paste the same kickoff prompt you started with, and add: The install finished but the test failed after restart."
+SC: "Claude lists your invoices."
+DP: ["Our conversation is saved", "paste the same kickoff prompt", "Cmd+Q"]
+TR: "no FreshBooks tools after restart" → "Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect."
+
+---
+
+## Self-review (v2)
+
+- **Spec coverage re-check:** the 13 round-1 fidelity gaps each landed: SECRETS_RULES-in-block (T15 + T16 tests), plural exit-9 (T7 dispatcher), mcp-json target (T11), general rescue-shred (T13 persistTokens-success + T4 replaceProfileTokens), exit-6 relay + immediately (Appendix A save-login + T1 manifest), sidebar drift (T16), kickoff link-not-duplicate (T16), malformed fixture (T12), quarantine-persists (T10 + Appendix A), exit-11 fix text (Appendix A), PR-1 CHANGELOG (T5), refresh-CLI hygiene note (T14), wizard no-raw-stack (T18).
+- **Reconciliations:** all three landed in spec v3.2; `--trust-exec-path` in HEADLESS_VERBS (T1); env-var override replaced by `SetupPaths` (T7/T11/T12); citation labels fixed (T3, T14 now cite §Typed errors / §Security hardening "Hygiene tests" + §Testing).
+- **Placeholder scan:** the three deliberation residues are flattened; the only `PROBE:` markers are in Appendix A `developer-app` with an owning, blocking probe step (T1 Step 1) — a specified data-collection step, not a placeholder; the exit-11 pointer carries drafted interim text with its PR-3 replacement step (T19).
+- **Type consistency:** `SECRETS_RULES` shape is `{rows, selfTest, honestyNotes}` everywhere; `tryAdoptRescue` returns boolean matching its flow and tests; `runHeadless(argv, paths?)` threading matches T12's `runDoctor(paths)` and T10's lock check; file-structure task labels corrected.
