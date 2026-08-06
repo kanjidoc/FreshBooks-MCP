@@ -24,6 +24,27 @@ import { lockPathFor, isServerLockFresh } from "./server-lock";
  */
 export const MIGRATED_MARKER = "FRESHBOOKS_MIGRATED";
 
+/** The machine-readable reasons `writeNewProfile` refuses to write a profile. */
+export type ProfileWriteErrorCode = "NAME_TAKEN" | "DUPLICATE_TOKEN" | "SAME_ACCOUNT";
+
+/**
+ * A refusal from a profile-write guard, carrying a `code` callers can branch on.
+ *
+ * The codes exist so headless callers can map a refusal onto an exit code without
+ * parsing prose. The MESSAGES are deliberately unchanged from the untyped throws
+ * they replace: `scripts/setup.ts` prints `err.message` verbatim to the user and
+ * the existing suite matches on that text, so reword nothing here.
+ */
+export class ProfileWriteError extends Error {
+  constructor(
+    public readonly code: ProfileWriteErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProfileWriteError";
+  }
+}
+
 export function isMigrated(baseEnvContent: string): boolean {
   return new RegExp(`^${MIGRATED_MARKER}=`, "m").test(baseEnvContent);
 }
@@ -168,8 +189,20 @@ export function runMigration(opts: {
  *
  * Shared by `runMigration` AND the setup add-login loop (Task 10) so neither path can
  * silently destroy another login's refresh token. Verifies the write by re-reading.
+ *
+ * Every refusal throws a `ProfileWriteError` whose `code` names the guard; the message
+ * text is unchanged from the untyped throws. `opts.onSameAccount` selects what the
+ * duplicate-accountId condition does: the default `"warn"` is today's behavior (warn,
+ * then write); `"refuse"` throws `SAME_ACCOUNT` BEFORE anything is written, for callers
+ * that must first get a human to confirm this really is a different person's login.
+ * Marking the resulting group as distinct logins is the caller's job (`markDistinctLogin`).
  */
-export function writeNewProfile(profilesDir: string, rawName: string, config: ProfileConfig): string {
+export function writeNewProfile(
+  profilesDir: string,
+  rawName: string,
+  config: ProfileConfig,
+  opts?: { onSameAccount?: "warn" | "refuse" },
+): string {
   const name = normalizeProfileName(rawName);
   const profilePath = join(profilesDir, `${name}.env`);
 
@@ -182,12 +215,22 @@ export function writeNewProfile(profilesDir: string, rawName: string, config: Pr
       const other = parseProfileConfig(readFileSync(join(profilesDir, file), "utf8"));
       if (!other) continue;
       if (other.refreshToken === config.refreshToken) {
-        throw new Error(
+        throw new ProfileWriteError(
+          "DUPLICATE_TOKEN",
           `Refresh token already present in profiles/${file} — refusing to write profiles/${name}.env. ` +
             `Two profile files sharing one refresh token guarantee a double-rotation lockout.`,
         );
       }
       if (config.accountId && other.accountId === config.accountId) {
+        if (opts?.onSameAccount === "refuse") {
+          // Refuse BEFORE any write: the caller wants a human to confirm this is a
+          // different person's login for the same company first.
+          throw new ProfileWriteError(
+            "SAME_ACCOUNT",
+            `profiles/${file} already uses accountId ${config.accountId} — refusing to write ` +
+              `profiles/${name}.env without confirmation that this is a DISTINCT login.`,
+          );
+        }
         console.warn(
           `Warning: profiles/${file} already uses accountId ${config.accountId}. ` +
             `Writing profiles/${name}.env as a DISTINCT login that shares that company.`,
@@ -197,7 +240,8 @@ export function writeNewProfile(profilesDir: string, rawName: string, config: Pr
   }
 
   if (existsSync(profilePath)) {
-    throw new Error(
+    throw new ProfileWriteError(
+      "NAME_TAKEN",
       `profiles/${name}.env already exists — refusing to overwrite. Choose a different name.`,
     );
   }
