@@ -632,6 +632,29 @@ example prompts and limitations list; `src/docs/content.ts` prose topics;
 `CHANGELOG.md`. When you add a capability, grep these for the affected
 resource before shipping.
 
+### Claude Desktop caches the tool list (stale-subset symptom)
+
+Claude Desktop caches an MCP connector's `tools/list` keyed by the server
+**name** in `claude_desktop_config.json`, and does not reliably refresh it when
+this server's tool set changes (anthropics/claude-code#38324 and #40025,
+anthropics/claude-ai-mcp#137). After a release adds tools, Desktop can expose a
+stale subset — the observed signature (2026-08-06, the 2.2.0 upgrade) is
+*inverted*: only the newly added tools show, because old names stay pinned to
+the stale cached record while unknown new names default in. Claude Code and
+claude.ai web fetch fresh per session and are unaffected.
+
+Diagnose before suspecting the server:
+`~/Library/Logs/Claude/mcp-server-<name>.log` shows the client's actual
+handshake, and a manual stdio `initialize` + `tools/list` against
+`dist/index.js` proves the server returns the full registry in a single page
+(no `nextCursor`). Per-tool toggles in Desktop's UI and plain app restarts do
+**not** clear this cache — the toggles sit downstream of the stale manifest.
+The fix: quit Desktop → remove the server's entry from
+`claude_desktop_config.json` → launch once without it → quit → restore the
+entry verbatim → relaunch (fresh handshake visible in the log). Renaming the
+server key also busts the cache but changes the connector's identity — prefer
+the remove/restore cycle.
+
 ## Shareability
 
 This project is designed so any FreshBooks user can use it:
