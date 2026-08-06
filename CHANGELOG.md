@@ -5,6 +5,24 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **`check-tokens`/`refresh-tokens` `--json` no longer emits token material.**
+  Both `npm run check-tokens -- --json` and `npm run refresh-tokens -- --json`
+  serialized the full `TokenHealth` struct, which carried the profile's
+  complete access AND refresh tokens — handing both live credentials to any
+  agent or script capturing the CLI's output. The human-readable mode also
+  printed a token suffix (still a credential fragment). `TokenHealth` now
+  carries presence booleans (`hasAccessToken`/`hasRefreshToken`) instead of
+  token strings, so no serialization site can emit token material, and a
+  regression test (`test/refresh-tokens-redaction.test.ts`) drives every CLI
+  output path over canary JWTs asserting no token fragment reaches stdout or
+  stderr. The one deliberate exception is unchanged: the loud-failure recovery
+  path that prints freshly rotated tokens to stderr when the post-refresh disk
+  write fails (CLAUDE.md "Token persistence safety", invariant 4).
+
 ## [2.2.0] - 2026-07-29
 
 The Tier 2 release: 76 → 97 tools, opening every safely-verifiable FreshBooks
