@@ -26,11 +26,20 @@ import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
 import * as dotenv from "dotenv";
-import { Client } from "@freshbooks/api";
+import type { Client } from "@freshbooks/api";
 import { resolveDesktopConfigPath } from "../src/config-paths";
 import { buildClaudeServerConfig, buildClaudeCodeServerJson } from "../src/mcp-config";
-import { runMigration, isMigrated, writeNewProfile, MIGRATED_MARKER } from "../src/migrate";
+import { runMigration, isMigrated, MIGRATED_MARKER } from "../src/migrate";
 import { normalizeProfileName, type ProfileConfig } from "../src/profiles";
+import {
+  buildAuthUrl,
+  buildOAuthClient,
+  buildTokenClient,
+  discoverMemberships,
+  exchangeCode,
+  extractCodeFromUrl,
+  saveProfile,
+} from "./setup-core";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const ENV_PATH = path.resolve(PROJECT_DIR, ".env");
@@ -66,19 +75,6 @@ function openBrowser(url: string) {
   // title argument — without it, cmd treats the URL itself as the title.
   else if (platform === "win32") execFile("cmd", ["/c", "start", "", url]);
   else execFile("xdg-open", [url]);
-}
-
-function extractCodeFromUrl(urlString: string): string | null {
-  try {
-    // Handle both full URLs and just the code value
-    if (!urlString.startsWith("http")) {
-      return urlString; // User pasted just the code
-    }
-    const url = new URL(urlString);
-    return url.searchParams.get("code");
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -320,40 +316,30 @@ async function discoverIds(
   let businessId = "";
 
   try {
-    const meResponse = await authedClient.users.me();
-    if (meResponse.ok && meResponse.data) {
-      const user = meResponse.data as any;
-      console.log(
-        `   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`,
-      );
+    const { user, list } = await discoverMemberships(authedClient);
+    console.log(
+      `   Logged in as: ${user.firstName ?? ""} ${user.lastName ?? ""} (${user.email ?? ""})\n`,
+    );
 
-      const memberships: any[] = Array.isArray(user.businessMemberships)
-        ? user.businessMemberships
-        : [];
+    if (list.length > 0) {
+      let chosen = list[0];
 
-      if (memberships.length > 0) {
-        let chosen = memberships[0];
-
-        if (memberships.length > 1) {
-          console.log("   This login is a member of multiple businesses. Choose one for");
-          console.log("   this profile:\n");
-          memberships.forEach((m, i) => {
-            const b = m?.business;
-            const label = b?.name ?? m?.business?.name ?? "(unnamed business)";
-            const acc = String(b?.accountId ?? m?.accountId ?? "");
-            const biz = String(b?.id ?? m?.businessId ?? "");
-            console.log(`     ${i + 1}) ${label}  (accountId=${acc}, businessId=${biz})`);
-          });
-          console.log("");
-          chosen = memberships[await askBusinessChoice(memberships.length)];
-        }
-
-        const business = chosen?.business;
-        accountId = String(business?.accountId ?? chosen?.accountId ?? "");
-        businessId = String(business?.id ?? chosen?.businessId ?? "");
-        console.log(`\n   Account ID:  ${accountId}`);
-        console.log(`   Business ID: ${businessId || "(none — accounting-only)"}\n`);
+      if (list.length > 1) {
+        console.log("   This login is a member of multiple businesses. Choose one for");
+        console.log("   this profile:\n");
+        list.forEach((m, i) => {
+          console.log(
+            `     ${i + 1}) ${m.label}  (accountId=${m.accountId}, businessId=${m.businessId})`,
+          );
+        });
+        console.log("");
+        chosen = list[await askBusinessChoice(list.length)];
       }
+
+      accountId = chosen.accountId;
+      businessId = chosen.businessId;
+      console.log(`\n   Account ID:  ${accountId}`);
+      console.log(`   Business ID: ${businessId || "(none — accounting-only)"}\n`);
     }
   } catch (err: any) {
     console.log(`   Warning: Could not auto-detect IDs (${err.message}).`);
@@ -375,7 +361,8 @@ async function discoverIds(
 /**
  * Run one OAuth flow and persist the resulting login as `profiles/<name>.env`.
  *
- * The profile file is written ONLY through `writeNewProfile`, which normalizes
+ * The profile file is written ONLY through `saveProfile` — the setup-core
+ * pass-through to the shared guarded `writeNewProfile`, which normalizes
  * the name and hard-refuses a duplicate refresh token or an existing profile
  * name (Amendments A6/A7/R2) — so a clashing name can never silently clobber
  * another login's tokens. On refusal we surface the message and re-prompt for a
@@ -383,9 +370,9 @@ async function discoverIds(
  * forever). Returns true if a login was saved.
  */
 async function addLogin(clientId: string, clientSecret: string): Promise<boolean> {
-  const fbClient = new Client(clientId, { clientSecret, redirectUri: REDIRECT_URI });
+  const fbClient = buildOAuthClient(clientId, clientSecret, REDIRECT_URI);
 
-  const authUrl = fbClient.getAuthRequestUrl();
+  const authUrl = buildAuthUrl(fbClient);
   console.log(`
    Opening your browser to authorize this login...
    Authorization URL:
@@ -406,8 +393,10 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
 `);
 
   // One loop covers both a bad paste (no code) and a rejected/expired code, so
-  // a single mistake re-prompts instead of aborting the whole wizard.
-  let tokens: any = null;
+  // a single mistake re-prompts instead of aborting the whole wizard. A response
+  // the SDK could not turn into tokens rejects too (`exchangeCode`), and its
+  // reason lands inside the same message.
+  let tokens: { accessToken: string; refreshToken: string } | null = null;
   while (!tokens) {
     const input = await ask("   Paste the redirect URL (or just the code): ");
     const code = extractCodeFromUrl(input);
@@ -416,10 +405,7 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
       continue;
     }
     try {
-      tokens = await fbClient.getAccessToken(code);
-      if (!tokens) {
-        console.log("   FreshBooks returned no tokens — paste the redirect URL again.\n");
-      }
+      tokens = await exchangeCode(fbClient, code);
     } catch (err: any) {
       console.log(
         `   That authorization code was rejected (${err?.message ?? err}).\n` +
@@ -431,12 +417,13 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
 
   console.log("\n   Access token obtained! Fetching your Account ID and Business ID...\n");
 
-  const authedClient = new Client(clientId, {
-    accessToken: tokens.accessToken,
-    refreshToken: tokens.refreshToken,
+  const authedClient = buildTokenClient(
+    clientId,
     clientSecret,
-    redirectUri: REDIRECT_URI,
-  });
+    REDIRECT_URI,
+    tokens.accessToken,
+    tokens.refreshToken,
+  );
 
   const { accountId, businessId } = await discoverIds(authedClient);
 
@@ -462,7 +449,7 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
       continue;
     }
     try {
-      const profilePath = writeNewProfile(PROFILES_DIR, name, config);
+      const profilePath = saveProfile(PROFILES_DIR, name, config);
       console.log(`   Saved login -> ${profilePath}\n`);
       return true;
     } catch (err: any) {
