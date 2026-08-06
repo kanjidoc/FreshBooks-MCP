@@ -40,13 +40,21 @@ import {
   extractCodeFromUrl,
   saveProfile,
 } from "./setup-core";
+import { runHeadless } from "./setup-headless";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const ENV_PATH = path.resolve(PROJECT_DIR, ".env");
 const PROFILES_DIR = path.resolve(PROJECT_DIR, "profiles");
 const MCP_JSON_PATH = path.resolve(PROJECT_DIR, ".mcp.json");
 const CLAUDE_DESKTOP_CONFIG_PATH = resolveDesktopConfigPath();
-const REDIRECT_URI = "https://localhost/callback";
+/**
+ * The one OAuth redirect URI this project uses, everywhere: the wizard's
+ * `Client`, the base `.env` it writes, the headless `--init`/`--auth-url`, and
+ * the Book's `developer-app` instructions ("set the Redirect URI to exactly
+ * …"). Exported so `scripts/setup-headless.ts` uses this definition rather
+ * than a second copy that could drift.
+ */
+export const REDIRECT_URI = "https://localhost/callback";
 
 function ask(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -462,6 +470,15 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
 }
 
 async function main() {
+  // The headless (agent) surface shares this entry point: `--headless <verb>`
+  // hands the whole run to the verb dispatcher and the wizard never starts.
+  // `process.exitCode` rather than `process.exit()` — the latter can truncate a
+  // piped `--json` stdout before it flushes.
+  if (process.argv.includes("--headless")) {
+    process.exitCode = await runHeadless(process.argv.slice(2));
+    return;
+  }
+
   console.log(`
 ${"=".repeat(70)}
    FreshBooks MCP Server — Setup
