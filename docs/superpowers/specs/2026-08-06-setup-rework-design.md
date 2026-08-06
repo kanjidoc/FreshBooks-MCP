@@ -269,8 +269,10 @@ Plain `readline`, rendered from the Book's `wizard`-surface steps:
 - Nickname before OAuth, motivated; availability pre-checked; guards backstop
   (`src/migrate.ts:184-203`).
 - Just-in-time OAuth checklist (dead-page reassurance, address-bar click,
-  pacing). Paste validator: a scheme-less paste gets *"that looks like part of
-  the address — click once in the address bar to reveal the whole thing."*
+  pacing). Paste validator: a scheme-less paste gets *"That was only part of the
+  address — click once in the address bar so the whole thing highlights,
+  then copy again."* (single canonical hint, shared with the `authorize`
+  troubleshooting row).
 - One `prompt()` helper; both default renderings specified:
   `(y = yes, Enter = no)` and `(Enter = yes, n = no)`.
 - Plain-English migration gate.
@@ -737,7 +739,7 @@ into this v3.1.
 | Sec N3-2 (print-config command selection) | Fixed — same rule bound to the verb |
 | Sec N3-3 (third-party secrets transit chat) | Fixed — disclosure line + foreign-entries-byte-identical rule + structural read-only note |
 | Sec N3-4 (role-label discriminator) | Fixed — capability-keyed headings + self-test line |
-| Sec N3-5 (secret-file residuals) | Fixed — honest window sentence; unlink-and-recreate at 0600; run-from-projectDir |
+| Sec N3-5 (secret-file residuals) | Fixed — honest window sentence; unlink-and-recreate at 0600 *(superseded in v3.2: read-once-then-immediately-delete)*; run-from-projectDir |
 | Arch-1 MAJOR (adoption must set memory too) | Fixed — adoption sets `profile.config` + client, placed after preflight, before the U3 read |
 | Arch-3 (TOCTOU in reauth rationale) | Fixed — folded into the warning rationale |
 | Arch-4 (resume entry implicit) | Fixed — resume-entry rules stated |

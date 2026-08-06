@@ -25,7 +25,9 @@ spec reconciliations (now landed as spec v3.2).
 - **Headless convention:** human-readable → stderr; `--json` → stdout; `--json` is a per-verb flag.
 - **No surface serializes a caught error object or HTTP body** — allowlist envelope only.
 - **Every profile write goes through `writeNewProfile` / `applyTokensToEnv`+`writeAtomic`.**
-- **Copy rule:** user-facing strings come from exactly two sources — (1) the spec sections a task cites, verbatim, for strings the spec drafts (KICKOFF_PROMPT §ladder; the exit-8 question + directive §"Exit 8, fully drafted"; the extended re-ask script, pre-briefs, disclosure line, insertion script §install-config choreography; SECRETS_RULES rows + honesty notes §Secrets; the sentinel + gate sentences §Enforcement); (2) **Appendix A of this plan**, verbatim, for everything the spec describes but does not draft (step titles, humanScript sentences, successChecks, troubleshooting rows, docPhrase selections). Do not paraphrase either source. KICKOFF_PROMPT's canonical form uses logical lines (no mid-phrase hard wraps), so substring assertions in tests hold.
+- **Copy rule:** user-facing strings come from exactly two sources — (1) the spec sections a task cites, verbatim, for strings the spec drafts (KICKOFF_PROMPT §ladder; the exit-8 question + directive §"Exit 8, fully drafted"; the extended re-ask script, pre-briefs, disclosure line, insertion script §install-config choreography; SECRETS_RULES rows + honesty notes §Secrets; the sentinel + gate sentences §Enforcement); (2) **Appendix A of this plan**, verbatim, for everything the spec describes but does not draft (step titles, humanScript sentences, successChecks, troubleshooting rows, docPhrase selections). Do not paraphrase either source. **Precedence on collision:** the spec's *titled verbatim blocks* (the list above) outrank Appendix A; the spec's *italicized fragments inside descriptive prose* are illustrative only and Appendix A outranks them. KICKOFF_PROMPT's canonical form uses logical lines (no mid-phrase hard wraps), so substring assertions hold.
+- **"As plan v1" references** resolve to commit `9b0471e` (`git show 9b0471e:docs/superpowers/plans/2026-08-06-setup-rework.md`) — those task bodies remain normative where v2 doesn't amend them.
+- **Step `summary` fields** are copied verbatim from the spec step-list table's summary column (first sentence).
 - **Phase-1 behavior freeze:** PR 1 is behavior-identical; the existing suite must pass unchanged.
 - **Injectable paths for tests:** every headless entry point takes a `SetupPaths` ctx (T7) — tests never touch the developer's real `.env`/`profiles/`/Desktop config.
 - **Commit style:** `feat:`/`fix:`/`test:`/`docs:` + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. `npm run build && npm test && npm run lint` green before every commit.
@@ -62,9 +64,8 @@ CHANGELOG.md (T5, T16, T20)
 
 Build note: `scripts/` is outside the server `tsc` build; `src/setup-flow.ts`
 is in `src/` because `src/docs/render-setup.ts` (compiled, served by
-`freshbooks_help`) imports it — it must stay pure data (its only import:
-`node:path` types are not needed; it imports NOTHING). `SetupCtx.exists` is an
-injected function so the module never touches `fs`.
+`freshbooks_help`) imports it — it must stay pure data with zero imports.
+`SetupCtx.exists` is an injected function so the module never touches `fs`.
 
 ---
 
@@ -128,14 +129,17 @@ via `check()` consumed by `--doctor`, not a surface value.
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { SETUP_FLOW, KICKOFF_PROMPT, SECRETS_RULES, SIDEBAR_TEXT, HEADLESS_VERBS } from "../src/setup-flow";
+import { SETUP_FLOW, KICKOFF_PROMPT, SECRETS_RULES, SIDEBAR_TEXT,
+  HEADLESS_VERBS, FOREIGN_FLAG_ALLOWLIST } from "../src/setup-flow";
 
 const IDS = ["choose-claude","get-project","node-install","npm-install","build",
   "developer-app","app-credentials","migrate-legacy","nickname","authorize",
   "save-login","install-config","verify","restart"];
 const step = (id: string) => SETUP_FLOW.find(s => s.id === id)!;
+// NOTE: docPhrases are deliberately EXCLUDED from allText — including them
+// would make the substring assertions below vacuously true.
 const allText = (s: any) => [s.title, s.summary, ...s.humanScript, s.agentGuidance,
-  s.successCheck, ...(s.docPhrases ?? []), ...s.troubleshooting.flatMap((t: any) => [t.symptom, t.fix])].join("\n");
+  s.successCheck, ...s.troubleshooting.flatMap((t: any) => [t.symptom, t.fix])].join("\n");
 
 describe("structure", () => {
   it("ids/order", () => expect(SETUP_FLOW.map(s => s.id)).toEqual(IDS));
@@ -154,7 +158,11 @@ describe("structure", () => {
     for (const s of SETUP_FLOW) {
       for (const v of s.verbs ?? []) expect(HEADLESS_VERBS).toContain(v);
       for (const m of allText(s).match(/--[a-z-]+/g) ?? [])
-        expect([...HEADLESS_VERBS, "--profile", "--scope", "--version"]).toContain(m);
+        expect([...HEADLESS_VERBS, ...FOREIGN_FLAG_ALLOWLIST]).toContain(m);
+      // FOREIGN_FLAG_ALLOWLIST = ["--profile","--scope","--version","--strip-components"]
+      // — exported from src/setup-flow.ts; T16's fence sweep uses the SAME list.
+      // --strip-components is a tar option inside the blessed get-project
+      // command, not a verb; it must never enter HEADLESS_VERBS.
     }
   });
   it("docPhrases are substrings of their step's own text", () => {
@@ -166,29 +174,42 @@ describe("structure", () => {
 describe("persona-string manifest (content pins — the strings the design exists for)", () => {
   const M: [string, string][] = [
     ["authorize",      "CAN'T BE REACHED"],
-    ["authorize",      "click once inside the address bar"],
-    ["authorize",      "stay with me"],
+    ["authorize",      "Click once inside the address bar"],
+    ["authorize",      "stay with me"],                       // agentGuidance (rungs 1-2 only)
     ["authorize",      "no harm done"],                       // closed-tab row
+    ["authorize",      "sign-in link the setup program just printed"],
     ["app-credentials","never into this chat"],               // rung-3 secrets row
     ["app-credentials","I won't repeat it again"],            // shape-confirm
-    ["app-credentials","the setup program is the guide now"], // wizard handoff
+    ["app-credentials","designed to be handed to me"],        // rungs-1-2 reassurance (scam-moment fix)
+    ["app-credentials","The setup program is the guide now"], // wizard handoff
+    ["app-credentials","npm run setup"],                      // rung-3 wizard launch
+    ["app-credentials","will not contain it"],                // secret-file pre-brief
     ["developer-app",  "leave it as-is"],
     ["developer-app",  "that's their sign-in check"],         // 2FA wall
+    ["developer-app",  "Reveal (eye) toggle"],                // reveal beat, main path
     ["get-project",    "between eight and ten"],              // dialog range
+    ["get-project",    "of about 9"],                         // countdown format
+    ["node-install",   "press Cmd+Space, type Terminal"],     // Terminal opener
+    ["nickname",       "I'll call this login main"],          // n=1 auto-pick
     ["save-login",     "including the long code"],            // auth-code pre-brief
     ["save-login",     "Which business is this for"],         // exit-6 labels-only relay
-    ["save-login",     "immediately"],                        // run-add-login-now rule
+    ["save-login",     "the code lives minutes"],             // run-add-login-now rule
     ["install-config", "you never edit a file by hand"],
     ["install-config", "access keys for other connectors"],   // disclosure
     ["install-config", "select all, paste over everything, press Cmd+S"],
     ["install-config", "Want me to ask again?"],              // re-ask script
     ["migrate-legacy", "one-time key"],                       // plain-English gate
     ["restart",        "Our conversation is saved"],
+    ["restart",        "open this same chat"],                // restored spec beat
     ["restart",        "paste the same kickoff prompt"],      // rung-3 failure line
     ["choose-claude",  "Dock"],                               // visual cue
-    ["choose-claude",  "isn't supported"],                    // honest stop
-    ["choose-claude",  "name the mismatch"],                  // paste-confirmation script
+    ["choose-claude",  "claude.ai/download"],                 // actionable honest stop
+    ["choose-claude",  "looks like the project README"],      // paste-mismatch script
   ];
+  it("kickoff rule 4 exception + rule 6 no-transmit survive edits", () => {
+    expect(KICKOFF_PROMPT).toContain("isn't supported");
+    expect(KICKOFF_PROMPT).toContain("transmits my token files");
+  });
   for (const [id, phrase] of M)
     it(`${id} carries "${phrase}"`, () => expect(allText(step(id))).toContain(phrase));
   it("kickoff: six rules, pinned URL, heading+last-line quote-back", () => {
@@ -261,7 +282,7 @@ As plan v1 (`PendingRecord {mode, stagedAt, accessToken, refreshToken}`; plain `
 
 ### Task 7: Dispatcher + `SetupPaths` ctx + `--init` + `--auth-url`
 
-**Files:** Create `scripts/setup-headless.ts`; Modify `scripts/setup.ts` (top of `main()`: `if (process.argv.includes("--headless")) return process.exit(await runHeadless(process.argv.slice(2)))`); Test `test/headless-init.test.ts`
+**Files:** Create `scripts/setup-headless.ts`; Modify `scripts/setup.ts` (top of `main()`: `if (process.argv.includes("--headless")) { process.exitCode = await runHeadless(process.argv.slice(2)); return; }` — never `process.exit()`, which can truncate piped `--json` stdout before it flushes); Test `test/headless-init.test.ts`
 
 **Interfaces (Produces):**
 
@@ -272,6 +293,8 @@ export interface SetupPaths {           // EVERY verb resolves paths through thi
   profilesDir: string;                  // repo root / .env / profiles/ /
   desktopConfigPath: string;            // resolveDesktopConfigPath() / .mcp.json
   mcpJsonPath: string;
+  claudeJsonPath: string;               // default os.homedir()/.claude.json — the
+                                        // doctor's Code user-scope check (T12)
 }
 export function defaultPaths(): SetupPaths;
 export const EXIT = { OK:0, FAIL:1, USAGE:2, CODE_REJECTED:3, NAME_TAKEN:4, DUP_PAIR:5,
@@ -324,7 +347,8 @@ As plan v1's contract, plus the review's rules — all normative:
   USAGE 2 naming `--reauth --name N` (and vice-versa in T10). This closes the
   cross-verb shred hazard.
 - **Mixed flags:** `--callback-url` combined with any resume-only flag
-  (`--business-id`/`--account-id`/`--distinct-login`) → USAGE 2.
+  (`--business-id`/`--account-id`/`--distinct-login`/`--confirm-different-user`)
+  → USAGE 2.
 - **Bare resume** re-runs discovery on the staged pair; **clean discovery
   proceeds to save → exit 0** (that is exit-11's recovery working); branch
   conditions re-emit their exits. The confirmed distinct-login resume
@@ -338,9 +362,12 @@ As plan v1's contract, plus the review's rules — all normative:
   then **immediately re-`stagePending` the rotated pair** before discovery;
   refresh failure → exit 3 with the discard-and-re-auth fix text.
 - Exit-6/8/11 `symptom`/`fix` strings: from the Book (`save-login`
-  troubleshooting, Appendix A) — `setup-headless.ts` **imports** the exit-8
-  `confirmQuestion`/`directive` strings from the Book step content; tests
-  assert them **verbatim-equal** to the Book's, not merely present.
+  troubleshooting, Appendix A). The exit-8 question and directive live as
+  named exports in `src/setup-flow.ts` — `EXIT8_QUESTION` /
+  `EXIT8_DIRECTIVE` (spec §"Exit 8, fully drafted", verbatim) — referenced by
+  the `save-login` step's agentGuidance and **imported** by
+  `setup-headless.ts`; tests assert the payload fields **strictly equal** the
+  exports.
 - [ ] **Step 1: failing tests — one per contract row (~17)** incl. the mode
   gate, mixed-flag rejection, clean-bare-resume-to-exit-0, and
   rotated-pair-rewrite (assert the pending file's tokens changed before the
@@ -381,7 +408,11 @@ As plan v1, with the review's corrections:
 ### Task 12: `--doctor`
 
 As plan v1, with: `runDoctor(paths: SetupPaths)`; the fixture matrix gains
-**malformed profile** (parse-fail file) per spec §Testing; the
+**malformed profile** (parse-fail file) per spec §Testing; the rescue-file
+check flags **any** lingering `.rescue` (not only undecodable ones) and its
+fix text names the force command (`npm run refresh-tokens -- --profile <n>`)
+plus the self-heal note (a JWT-fresh file pair defers adoption up to ~10
+minutes); the
 `~/.claude.json` check's definition: a resolvable entry =
 `mcpServers.freshbooks` object whose `command` is non-empty and whose `args[0]`
 exists on disk (best-effort read of `paths` — for tests, a `claudeJsonPath`
@@ -406,9 +437,16 @@ function rescuePathFor(filePath: string): string;             // `${filePath}.re
 function writeRescue(filePath: string, access: string, refresh: string): boolean;
   // two dotenv token lines (parseProfileConfig-compatible), writeFileSync mode 0600
 function tryAdoptRescue(profile: ProfileState): boolean;      // returns adopted?
-  // Called in refreshAndPersist AFTER preflightEnvFile (:183), BEFORE the U3
-  // read (:194). If rescue exists:
-  //   iatR = decodeJwtIat(rescue.access); iatD = decodeJwtIat(profile.config.accessToken)
+  // Called in refreshAndPersist AFTER preflightEnvFile (:183) and after
+  // getOrCreateClient (:184 — it mutates client.*), BEFORE the U3 read (:194).
+  // If rescue exists:
+  //   iatR = decodeJwtIat(rescue.access);
+  //   iatD = decodeJwtIat(readTokenMarkers(profile.filePath).access ?? "")
+  //   — compare against the ON-DISK token, NEVER profile.config: in the
+  //     same-process persist-failure case A10 (:164-165) already synced config
+  //     to the rescue pair, so a config comparison reads "equal" and would
+  //     shred the rescue while the DISK still holds the revoked pair — the
+  //     exact lockout the rescue exists to prevent.
   //   — either undecodable → DO NOT adopt, DO NOT shred; console.error warning
   //     (doctor keeps flagging it; fail closed)
   //   — iatR <= iatD → superseded: rmSync rescue + warning; return false
@@ -447,7 +485,8 @@ function tryAdoptRescue(profile: ProfileState): boolean;      // returns adopted
   (f) `replaceProfileTokens` shreds a rescue (direct core-function test);
   (g) `persistTokens` success shreds a lingering rescue; (h) tmp/bak modes
   0600 (skip win32); (i) adopted-but-stale pair → rotation runs WITH the
-  adopted refresh token (assert the stub received it).
+  adopted refresh token (`refreshAccessToken()` takes no args — assert
+  `client.refreshToken` equals the adopted token at stub call time).
 - [ ] **Steps 2–4** → **Commit** — `feat: rescue-file lifecycle (adopt-newer, shred-superseded) + 0600 credential writes`
 
 ### Task 14: Token-hygiene sweep
@@ -498,10 +537,13 @@ after this task both lists include `setup`. Commit
   instead of a duplicate**.
 - Drift tests (full list): fence-pairs ↔ ids both directions + order;
   byte-equality per region via the renderer; docPhrases in-region; README
-  contains KICKOFF_PROMPT + SIDEBAR_TEXT + heading-line == SETUP.md first
-  heading; sentinel last line; gate sentence present; scoped verb sweep
-  (fenced regions only; allowlist `--profile --scope --version`);
-  doc-inventory split (SETUP.md → no-unregistered-names class).
+  contains KICKOFF_PROMPT + SIDEBAR_TEXT, and the line immediately following
+  the kickoff code fence matches `Claude's first reply should quote: "<H>"`
+  where `<H>` == SETUP.md's live first `#` line (anchored, not bare
+  containment); **SETUP.md does NOT contain KICKOFF_PROMPT** (link, not
+  duplicate); sentinel last line; gate sentence present; scoped verb sweep
+  (fenced regions only; allowlist = `FOREIGN_FLAG_ALLOWLIST`, the same export
+  T1 uses); doc-inventory split (SETUP.md → no-unregistered-names class).
 - [ ] **Steps: write tests (FAIL) → write generator → generate + author framing prose → green (incl. doc-tool-count) → Commit** — `docs: generated agent-path SETUP.md + README kickoff; drift tests + generator` → CHANGELOG entry → **Open PR 2**.
 
 ---
@@ -538,14 +580,20 @@ prints message + the failing step's troubleshooting pointer.
 
 ```ts
 const t = await runScripted([...answers]);       // helper: runWizard with stubs, returns out[] joined
-const idx = (s: string) => t.indexOf(s);
-expect(idx("Nickname")).toBeLessThan(idx("https://auth.freshbooks.com"));      // nickname before OAuth
+const idx = (s: string) => { const i = t.indexOf(s);
+  expect(i, `missing: ${s}`).toBeGreaterThanOrEqual(0); return i; };  // no vacuous −1 ordering
+// All asserted strings are Book/Appendix-A-owned (wizard prompt literals
+// "Name this login", "Paste the full address here", "DONE!" are drafted in
+// Appendix A — the test owns nothing):
+expect(idx("Name this login")).toBeLessThan(idx("https://auth.freshbooks.com"));
 expect(idx("CAN'T BE REACHED")).toBeGreaterThan(idx("https://auth.freshbooks.com"));
-expect(idx("CAN'T BE REACHED")).toBeLessThan(idx("Paste the full address"));   // just-in-time
-expect(t).toContain("never into this chat");                                    // at the credential prompt
-expect(idx("Our conversation is saved")).toBeGreaterThan(idx("DONE"));          // parting note last
-// scheme-less paste path: answers include "localhost" once → hint printed, re-prompted
-expect(t).toContain("part of the address");
+expect(idx("CAN'T BE REACHED")).toBeLessThan(idx("Paste the full address here"));
+expect(t).toContain("never into this chat");
+expect(idx("Our conversation is saved")).toBeGreaterThan(idx("DONE!"));
+expect(t).toContain("That was only part of the address");   // validator hint (canonical form)
+// no-raw-stack: a run whose stubbed core throws prints the step's
+// troubleshooting fix and no stack frames:
+expect(tFailing).not.toMatch(/^\s+at /m);
 ```
 
 - [ ] **Steps 2–4** (implement reorder; stubs make the OAuth/core calls fake via `vi.mock`) → **Commit** — `feat: wizard rendered from the Book with transcript-order tests`
@@ -574,21 +622,21 @@ lists: Title · humanScript (H) · agentGuidance (A) · successCheck (SC) ·
 docPhrases (DP) · troubleshooting (TR).
 
 **choose-claude** — Title: "Which Claude will you use?"
-H: "Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?" · "If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it — you'll need the Claude desktop app or Claude Code. This setup guide can still get you ready for either."
-A: Ask the target question exactly; never infer the target from your own runtime. If the answer is claude.ai-web, deliver the isn't-supported script honestly (kickoff rule 4's exception). If the user pastes SETUP.md instead of you fetching it, confirm the paste by quoting its opening heading and final line — and name the mismatch if you received the README instead ("that looks like the project README — I need the file called SETUP.md; on the repository page click it, then use the copy button").
+H: "Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?" · "If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it. Download the Claude desktop app from claude.ai/download, then come back and continue from here — this guide gets you ready for it."
+A: Ask the target question exactly; never infer the target from your own runtime. If the answer is claude.ai-web, deliver the isn't-supported script honestly (kickoff rule 4's exception). If the user pastes SETUP.md instead of you fetching it, confirm the paste by quoting its opening heading and final line — and if you received the wrong file say: "that looks like the project README — I need the file called SETUP.md; on the repository page click it, then use the copy button."
 SC: "You know which Claude the server will be installed into."
 DP: ["Dock", "isn't supported", "name the mismatch"]
 TR: symptom "Claude can't read the web" → fix: the README sidebar text *(spec §Enforcement — SIDEBAR_TEXT)*.
 
 **get-project** — Title: "Get the project onto the computer"
-H: "Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type `cd ` and drag the folder onto the Terminal window. Windows: copy the folder's path from the Explorer address bar."
+H: "Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type cd, then a space, then drag the folder onto the Terminal window. Windows: copy the folder's path from the Explorer address bar."
 A: "I'll ask your approval between eight and ten times during this install — each time, I'll tell you first what the dialog will say and why it's safe." (state this BEFORE the first command; number every later pre-brief "approval N of about 9"; if the degraded path adds dialogs, say so and restate the remaining count). Fetch without git: `mkdir FreshBooks-MCP && curl -L https://github.com/kanjidoc/FreshBooks-MCP/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C FreshBooks-MCP`. Re-extracting over an existing folder is credential-safe (`.env`/`profiles/` are not in the tarball).
 SC: "A folder containing package.json exists." check(): `ctx.exists(projectDir + "/package.json")`, detail "package.json present/missing at <project folder>".
 DP: ["between eight and ten", "drag the folder onto the Terminal window"]
 TR: "git asks to install developer tools" → "You don't need git — use the download command above (or the ZIP)."
 
 **node-install** — Title: "Install Node.js (the engine)"
-H: "First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet." · "Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again."
+H: "Open Terminal: press Cmd+Space, type Terminal, press Enter (Windows: open the Start menu, type cmd, press Enter)." · "First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet." · "Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again."
 A: Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)
 SC: "`node --version` prints v18 or higher."
 DP: ["that's the expected answer", "that's the normal installer, not me"]
@@ -608,17 +656,17 @@ SC: "dist/index.js exists." check(): `ctx.exists(projectDir+"/dist/index.js")`, 
 DP: [] · TR: "Cannot find module .../dist/index.js" → "Run `npm run build` in the project folder."
 
 **developer-app** — Title: "Create your FreshBooks app connection"
-H: "Sign in at freshbooks.com with your normal FreshBooks email — if FreshBooks emails you a code, that's their sign-in check, not part of this setup." · "Open the Developer Portal: my.freshbooks.com/#/developer, click Create an App." · PROBE: one line per form field with a suggested literal (Application name: "My Claude Connection — the name doesn't matter"; description filler; the exact scope checkboxes to tick) + probe date. · "Set the Redirect URI to exactly: https://localhost/callback — then read it back to yourself character by character." · "Any field these steps don't mention: leave it as-is." · "Already created this app once? Open it instead of creating another — reveal the secret, and confirm the Redirect URI is still exactly https://localhost/callback." · "Keep this page open — the next step needs the Client ID and Client Secret shown on it."
+H: "Sign in at freshbooks.com with your normal FreshBooks email — if FreshBooks emails you a code, that's their sign-in check, not part of this setup." · "Open the Developer Portal: my.freshbooks.com/#/developer, click Create an App." · PROBE: one line per form field with a suggested literal (Application name: "My Claude Connection — the name doesn't matter"; description filler; the exact scope checkboxes to tick) + probe date. · "Set the Redirect URI to exactly: https://localhost/callback — then read it back to yourself character by character." · "Any field these steps don't mention: leave it as-is." · "After saving, the page shows your Client ID and Client Secret. The Client Secret is hidden behind a Reveal (eye) toggle — click it before copying." · "Already created this app once? Open it instead of creating another — click the Reveal (eye) toggle, and confirm the Redirect URI is still exactly https://localhost/callback." · "Keep this page open — the next step needs both values."
 A: Relay one numbered item at a time; wait for confirmation each time.
-SC: "The app page shows a Client ID and a (hidden) Client Secret, and the Redirect URI reads exactly https://localhost/callback."
+SC: "The app page shows a Client ID and a revealed Client Secret, and the Redirect URI reads exactly https://localhost/callback."
 DP: ["leave it as-is", "that's their sign-in check", "https://localhost/callback"]
-TR: "the form shows something these steps don't mention" → "Read Claude any red text first, then the labels of the boxes you're asked to fill, top to bottom — skip menus and banners."
+TR: "the form shows something these steps don't mention" → "Read any red text to Claude first, then the labels of the boxes you're asked to fill, top to bottom — skip menus and banners."
 
 **app-credentials** — Title: "Hand over the app credentials"
-H (rung-3 variant): "Copy the Client ID and Client Secret from the portal page and paste them only into the setup window — never into this chat." · (rungs-1–2 variant, and the secrets table): *(spec §Secrets — SECRETS_RULES rows, self-test, honesty notes, and the secret-file choreography paragraph as amended in v3.2)*
-A: Confirm receipt by shape, never echo: "that looks right — about 32 characters — I won't repeat it again." If the user volunteers the secret in chat on rung 3: acknowledge, never repeat it, and offer rotation — before the credentials are entered into the setup program, rotate freely; after, rotate and then redo this step. Rung-3 wizard handoff (this is the first wizard-owned stretch): "The setup program is the guide now — follow its questions; I'll stand by until it prints DONE or something surprises you." Never pre-narrate the wizard's prompts.
+H (rung-3 variant): "In the same Terminal window type `npm run setup` and press Enter — the setup program starts and asks its questions right there." · "Copy the Client ID and Client Secret from the portal page and paste these only into the setup window — never into this chat." · (the secrets table): *(spec §Secrets — SECRETS_RULES rows, self-test, honesty notes, and the secret-file choreography paragraph as amended in v3.2)*
+A (rungs 1–2): The reassurance line, delivered at exactly the paste prompt: "The portal tells you to keep this secret — correct. This is the one credential designed to be handed to me: I'll pass it straight to the setup program, never repeat it, and it can't touch your books by itself." Then the secret-file pre-brief: "one longer command; your secret is read from a scratch file the setup program deletes itself — the dialog will not contain it." Confirm receipt by shape, never echo: "that looks right — about 32 characters — I won't repeat it again." If the user volunteers the secret in chat on rung 3: acknowledge, never repeat it, and offer rotation — before the credentials are entered into the setup program, rotate freely; after, rotate and then redo this step. Rung-3 wizard handoff (this is the first wizard-owned stretch): "The setup program is the guide now — follow its questions; I'll stand by until it prints DONE! or something surprises you." Never pre-narrate the wizard's prompts.
 SC: "The setup program (or --init) reports the credentials saved."
-DP: ["never into this chat", "I won't repeat it again", "the setup program is the guide now"]
+DP: ["never into this chat", "I won't repeat it again", "The setup program is the guide now"]
 TR: "pasted value much shorter than ~32 characters" → "The paste truncated — reveal the secret again and copy the whole value."
 
 **migrate-legacy** — Title: "Move an older single-login setup into a named profile"
@@ -629,24 +677,24 @@ DP: ["one-time key", "nothing is deleted"]
 TR: "migration says a server appears to be running" → "Something still holds the tokens — fully quit Claude Desktop (Cmd+Q) and any Claude Code sessions, then re-run `npm run setup`."
 
 **nickname** — Title: "Name this login"
-H: "Pick a short nickname for this FreshBooks login — lowercase letters and digits, like acme. You'll use it in chat forever when you have more than one login: 'list unpaid invoices for acme'. With a single login you'll never need to type it."
+H: "Pick a short nickname for this FreshBooks login — lowercase letters and digits, like acme. From then on, when you have more than one login, you'll use it in chat: 'list unpaid invoices for acme'. With a single login you'll never need to type it."
 A: First login: choose `main` yourself and inform ("I'll call this login main — you'd only ever type it if you add a second account"); ask only when profiles already exist. Validate + check availability BEFORE issuing the auth URL.
 SC: "The name is accepted (no already-exists message)."
 DP: [] · TR: "name already taken" → "That login may already be connected — ask Claude to run the setup doctor; to reconnect it, the command is --reauth."
 
 **authorize** — Title: "Sign in and approve the connection"
-H: "1. Open the sign-in link. 2. Sign in (use a private/incognito window if connecting a second account) and click Allow. 3. Your browser will land on a page that CAN'T BE REACHED — that's normal and means it worked. The address bar now holds a one-time code. 4. Click once inside the address bar so the whole address highlights, press Cmd+C (Ctrl+C on Windows), and paste it back. 5. After you paste, stay with me — I need one more approval from you within a minute or two."
-A: Issue `--auth-url` only after the nickname is validated; never open a browser yourself.
+H: "1. Open the sign-in link the setup program just printed — copy it into your browser (or hold Cmd and double-click it). 2. Sign in (use a private/incognito window if connecting a second account) and click Allow. 3. Your browser will land on a page that CAN'T BE REACHED — that's normal and means it worked. The address bar now holds a one-time code. 4. Click once inside the address bar so the whole address highlights, press Cmd+C (Ctrl+C on Windows), and paste it back."
+A: Issue `--auth-url` only after the nickname is validated; never open a browser yourself. After relaying the checklist, add (rungs 1–2 only — an approval dialog follows the paste there): "After you paste, stay with me — I need one more approval from you within a minute or two."
 SC: "You pasted a long address starting with https://localhost/callback?code=..."
-DP: ["CAN'T BE REACHED", "click once inside the address bar", "stay with me"]
+DP: ["CAN'T BE REACHED", "Click once inside the address bar", "stay with me"]
 TR: "Closed the tab before copying?" → "Click the sign-in link again and re-Allow — no harm done." · "the wizard says the address looks incomplete" → "That was only part of the address — click once in the address bar so the whole thing highlights, then copy again."
 
 **save-login** — Title: "Save the login"
 A: Run `--add-login` immediately upon receiving the pasted address — the code lives minutes. Pre-brief its approval dialog: "the dialog will show the address you just pasted, including the long code — that's expected; it works only once and only with this approval." If it asks which business (exit 6): relay labels only, numbered, never IDs — "Which business is this for: (1) …, (2) …?" — and map the answer to `--business-id` yourself. If it reports the company is already connected (exit 8): relay the question exactly *(spec §"Exit 8, fully drafted")* and obey its directive.
 H: "The setup finds this login's account details and saves them into its own profile file."
 SC: "It prints the login's nickname, company, and account ID (never tokens)."
-DP: ["including the long code", "Which business is this for", "immediately"]
-TR: "exit 11 / could not look up the account details" → "Retry first — lookups usually fail transiently. If it keeps failing: your Account ID is shown in FreshBooks (exact location recorded during PR 3's probe — until then, retry or ask Claude to run the doctor)." · "quarantined profile mentioned" → "Two profiles share one company; the extra safety stays on until the duplicate is resolved — the doctor explains which file to remove or mark."
+DP: ["including the long code", "Which business is this for", "the code lives minutes"]
+TR: "exit 11 / could not look up the account details" → "Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor." *(T19's probe appends the where-to-find-your-Account-ID sentence here — user-safe interim text ships until then.)* · "quarantined profile mentioned" → "Two profiles share one company; the extra safety stays on until the duplicate is resolved — the doctor explains which file to remove or mark."
 
 **install-config** — Title: "Connect the server to your Claude"
 H + A: *(spec §"The install-config choreography" — ALL of it verbatim: the pre-brief, the range/countdown rules, the extended re-ask script, the disclosure line, the two-branch merge protocol, the self-contained insertion script, the rung-2 mandatory confirmation incl. absent-entry-means-virtualized)* plus H: the manual Desktop and Code config JSON blocks (current content of SETUP.md's manual sections, updated paths — these render inside this fence and are the degraded path's raw material).
@@ -655,17 +703,24 @@ DP: ["you never edit a file by hand", "access keys for other connectors", "selec
 TR: "Edit Config opened a folder window, not an editor" → "That's right — double-click the highlighted file and it opens in TextEdit."
 
 **verify** — Title: "Check everything"
-H: "Ask Claude (or run) the setup doctor — every line should say pass."
+H: "Ask Claude to run the setup doctor — or in Terminal, from the project folder: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass."
 A: Run `--doctor`; read failing checks' fix texts aloud; act only within them.
 SC: "Doctor exits with all checks passing."
 DP: []
 TR: "config entry missing but a previous session said install succeeded" → "The write was virtualized by the sandbox — use the manual Edit Config route now; do NOT re-run --install." · "command isn't an absolute path" → "Either a legacy entry (re-run --install) or the deliberate sandbox fallback ('node') — the doctor's line says which."
 
 **restart** — Title: "Restart Claude and say hello"
-H (Desktop): "Our conversation is saved — nothing is lost when you quit. 1. Quit Claude completely: Cmd+Q, not just closing the window. 2. Reopen it. 3. The first time a FreshBooks tool runs you'll see one more permission dialog — Allow it. 4. Type: List my recent FreshBooks invoices." (Code): "Start a new session in this folder; if asked to enable the freshbooks server, say yes; then type the test sentence."
+H (Desktop): "Our conversation is saved — nothing is lost when you quit. 1. Quit Claude completely: Cmd+Q, not just closing the window (Windows: quit from the system-tray icon). 2. Reopen it and open this same chat. 3. The first time a FreshBooks tool runs you'll see one more permission dialog — Allow it. 4. Type: List my recent FreshBooks invoices." (Code): "Start a new session in this folder; if asked to enable the freshbooks server, say yes; then type: List my recent FreshBooks invoices."
 A: Deliver the ENTIRE parting note before the user restarts (your session may end with it). Failure lines, per rung — rung 2: "open a new chat in this folder and paste: Run the FreshBooks setup doctor and follow SETUP.md's troubleshooting for whatever it reports." · rung 3: "open a new chat, paste the same kickoff prompt you started with, and add: The install finished but the test failed after restart."
 SC: "Claude lists your invoices."
-DP: ["Our conversation is saved", "paste the same kickoff prompt", "Cmd+Q"]
+DP: ["Our conversation is saved", "open this same chat", "paste the same kickoff prompt", "Cmd+Q"]
+
+**Wizard prompt literals (owned here; T18's transcript test asserts them):**
+the nickname prompt prints the step title "Name this login"; the paste prompt
+is "Paste the full address here (it starts with https://localhost/callback):";
+the completion banner is "DONE!". Windows note for `install-config`'s
+insertion script: the Mac string is canonical and pinned; the rendered block
+appends "(Windows: the file opens in Notepad — select all, paste, Ctrl+S)".
 TR: "no FreshBooks tools after restart" → "Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect."
 
 ---
