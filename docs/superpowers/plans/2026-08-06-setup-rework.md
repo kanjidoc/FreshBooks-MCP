@@ -27,7 +27,7 @@ spec reconciliations (now landed as spec v3.2).
 - **Every profile write goes through `writeNewProfile` / `applyTokensToEnv`+`writeAtomic`.**
 - **Copy rule:** user-facing strings come from exactly two sources — (1) the spec sections a task cites, verbatim, for strings the spec drafts (KICKOFF_PROMPT §ladder; the exit-8 question + directive §"Exit 8, fully drafted"; the extended re-ask script, pre-briefs, disclosure line, insertion script §install-config choreography; SECRETS_RULES rows + honesty notes §Secrets; the sentinel + gate sentences §Enforcement); (2) **Appendix A of this plan**, verbatim, for everything the spec describes but does not draft (step titles, humanScript sentences, successChecks, troubleshooting rows, docPhrase selections). Do not paraphrase either source. **Precedence on collision:** the spec's *titled verbatim blocks* (the list above) outrank Appendix A; the spec's *italicized fragments inside descriptive prose* are illustrative only and Appendix A outranks them. KICKOFF_PROMPT's canonical form uses logical lines (no mid-phrase hard wraps), so substring assertions hold.
 - **"As plan v1" references** resolve to commit `9b0471e` (`git show 9b0471e:docs/superpowers/plans/2026-08-06-setup-rework.md`) — those task bodies remain normative where v2 doesn't amend them.
-- **Step `summary` fields** are copied verbatim from the spec step-list table's summary column (first sentence).
+- **Step `summary` fields** are short plain-prose one-liners the implementer writes, guided by the spec step-table's summary cells — never copied verbatim from the table (its cells carry escapes, citations, and cross-references that must not enter the Book). Nothing pins summaries; they must contain no `--flags` beyond the allowlists and no markdown artifacts.
 - **Phase-1 behavior freeze:** PR 1 is behavior-identical; the existing suite must pass unchanged.
 - **Injectable paths for tests:** every headless entry point takes a `SetupPaths` ctx (T7) — tests never touch the developer's real `.env`/`profiles/`/Desktop config.
 - **Commit style:** `feat:`/`fix:`/`test:`/`docs:` + `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`. `npm run build && npm test && npm run lint` green before every commit.
@@ -106,6 +106,10 @@ export const HEADLESS_VERBS: string[];     // canonical flag list — MUST inclu
 export const DOC_CTX: SetupCtx;            // { projectDir: "<project folder>",
                                            //   redirectUri: "https://localhost/callback" }
                                            // the documentation render ctx (spec render rule a)
+export const FOREIGN_FLAG_ALLOWLIST: string[]; // ["--profile","--scope","--version","--strip-components"]
+export const EXIT8_QUESTION: string;       // spec §"Exit 8, fully drafted", verbatim
+export const EXIT8_DIRECTIVE: string;      // ditto — referenced by save-login's
+                                           // agentGuidance, imported by setup-headless (T9)
 ```
 
 Authoring constraints (bind T15/T16 — stated here so the Book is written
@@ -402,7 +406,7 @@ As plan v1, with the review's corrections:
   config** (structural read-only claim); exit 0 payload
   `{target, path, configBlock}`.
 - [ ] Steps as v1 (tmp fixtures; foreign-entry byte-preservation; invalid-JSON
-  → exit 10 + block; `fs.readFileSync` spy proving print-config reads nothing).
+  → exit 10 + block; `fs.readFileSync` spy scoped to the config-file paths, proving print-config reads no existing config — the dispatcher's exit-9 precondition legitimately reads `baseEnvPath` first).
   Commit `feat: --install/--print-config with command selection and exit-10 payloads`.
 
 ### Task 12: `--doctor`
@@ -415,8 +419,7 @@ plus the self-heal note (a JWT-fresh file pair defers adoption up to ~10
 minutes); the
 `~/.claude.json` check's definition: a resolvable entry =
 `mcpServers.freshbooks` object whose `command` is non-empty and whose `args[0]`
-exists on disk (best-effort read of `paths` — for tests, a `claudeJsonPath`
-added to `SetupPaths`); **content assertions** for the two agent-critical fix
+exists on disk (best-effort read of `paths.claudeJsonPath`); **content assertions** for the two agent-critical fix
 texts (sandbox hypothesis; two-cause command warn) — verbatim from the Book
 strings (Appendix A `verify` troubleshooting). Zero profiles → fail(stepId
 `save-login`), exit 1.
@@ -584,7 +587,7 @@ const idx = (s: string) => { const i = t.indexOf(s);
   expect(i, `missing: ${s}`).toBeGreaterThanOrEqual(0); return i; };  // no vacuous −1 ordering
 // All asserted strings are Book/Appendix-A-owned (wizard prompt literals
 // "Name this login", "Paste the full address here", "DONE!" are drafted in
-// Appendix A — the test owns nothing):
+// Appendix A) except the auth-URL prefix, which is stub-owned:
 expect(idx("Name this login")).toBeLessThan(idx("https://auth.freshbooks.com"));
 expect(idx("CAN'T BE REACHED")).toBeGreaterThan(idx("https://auth.freshbooks.com"));
 expect(idx("CAN'T BE REACHED")).toBeLessThan(idx("Paste the full address here"));
@@ -625,11 +628,11 @@ docPhrases (DP) · troubleshooting (TR).
 H: "Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?" · "If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it. Download the Claude desktop app from claude.ai/download, then come back and continue from here — this guide gets you ready for it."
 A: Ask the target question exactly; never infer the target from your own runtime. If the answer is claude.ai-web, deliver the isn't-supported script honestly (kickoff rule 4's exception). If the user pastes SETUP.md instead of you fetching it, confirm the paste by quoting its opening heading and final line — and if you received the wrong file say: "that looks like the project README — I need the file called SETUP.md; on the repository page click it, then use the copy button."
 SC: "You know which Claude the server will be installed into."
-DP: ["Dock", "isn't supported", "name the mismatch"]
+DP: ["Dock", "isn't supported", "looks like the project README"]
 TR: symptom "Claude can't read the web" → fix: the README sidebar text *(spec §Enforcement — SIDEBAR_TEXT)*.
 
 **get-project** — Title: "Get the project onto the computer"
-H: "Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type cd, then a space, then drag the folder onto the Terminal window. Windows: copy the folder's path from the Explorer address bar."
+H: "Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type cd, then a space, then drag the folder onto the Terminal window — then press Enter. Windows: type cd, a space, paste the folder's path from the Explorer address bar, then press Enter."
 A: "I'll ask your approval between eight and ten times during this install — each time, I'll tell you first what the dialog will say and why it's safe." (state this BEFORE the first command; number every later pre-brief "approval N of about 9"; if the degraded path adds dialogs, say so and restate the remaining count). Fetch without git: `mkdir FreshBooks-MCP && curl -L https://github.com/kanjidoc/FreshBooks-MCP/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C FreshBooks-MCP`. Re-extracting over an existing folder is credential-safe (`.env`/`profiles/` are not in the tarball).
 SC: "A folder containing package.json exists." check(): `ctx.exists(projectDir + "/package.json")`, detail "package.json present/missing at <project folder>".
 DP: ["between eight and ten", "drag the folder onto the Terminal window"]
@@ -680,7 +683,7 @@ TR: "migration says a server appears to be running" → "Something still holds t
 H: "Pick a short nickname for this FreshBooks login — lowercase letters and digits, like acme. From then on, when you have more than one login, you'll use it in chat: 'list unpaid invoices for acme'. With a single login you'll never need to type it."
 A: First login: choose `main` yourself and inform ("I'll call this login main — you'd only ever type it if you add a second account"); ask only when profiles already exist. Validate + check availability BEFORE issuing the auth URL.
 SC: "The name is accepted (no already-exists message)."
-DP: [] · TR: "name already taken" → "That login may already be connected — ask Claude to run the setup doctor; to reconnect it, the command is --reauth."
+DP: [] · TR: "name already taken" → "That login may already be connected — ask Claude to run the setup doctor, and to reconnect it if needed."
 
 **authorize** — Title: "Sign in and approve the connection"
 H: "1. Open the sign-in link the setup program just printed — copy it into your browser (or hold Cmd and double-click it). 2. Sign in (use a private/incognito window if connecting a second account) and click Allow. 3. Your browser will land on a page that CAN'T BE REACHED — that's normal and means it worked. The address bar now holds a one-time code. 4. Click once inside the address bar so the whole address highlights, press Cmd+C (Ctrl+C on Windows), and paste it back."
@@ -714,8 +717,10 @@ H (Desktop): "Our conversation is saved — nothing is lost when you quit. 1. Qu
 A: Deliver the ENTIRE parting note before the user restarts (your session may end with it). Failure lines, per rung — rung 2: "open a new chat in this folder and paste: Run the FreshBooks setup doctor and follow SETUP.md's troubleshooting for whatever it reports." · rung 3: "open a new chat, paste the same kickoff prompt you started with, and add: The install finished but the test failed after restart."
 SC: "Claude lists your invoices."
 DP: ["Our conversation is saved", "open this same chat", "paste the same kickoff prompt", "Cmd+Q"]
+SC: "Claude lists your invoices."
+TR: "no FreshBooks tools after restart" → "Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect."
 
-**Wizard prompt literals (owned here; T18's transcript test asserts them):**
+**Wizard prompt literals — a standalone Appendix A section, not part of the restart step (owned here; T18's transcript test asserts them):**
 the nickname prompt prints the step title "Name this login"; the paste prompt
 is "Paste the full address here (it starts with https://localhost/callback):";
 the completion banner is "DONE!". Windows note for `install-config`'s

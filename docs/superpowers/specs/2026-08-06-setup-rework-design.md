@@ -1,4 +1,4 @@
-# Setup Rework — One Book, Three Surfaces (v3.1)
+# Setup Rework — One Book, Three Surfaces (v3.2)
 
 **Date:** 2026-08-06
 **Status:** v3.2 — v3.1 plus three reconciliations from the implementation-plan
