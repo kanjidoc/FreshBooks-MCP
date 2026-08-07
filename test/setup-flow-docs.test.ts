@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SETUP_FLOW,
@@ -15,6 +16,7 @@ import {
   docsSurfaceSteps,
   generateSetupDocs,
   readStepRegion,
+  regenerateSetupMd,
   replaceStepRegion,
 } from "../scripts/generate-setup-docs";
 
@@ -259,5 +261,26 @@ describe("the generator itself", () => {
 
   it("renders exactly the docs-surface steps, in Book order", () => {
     expect(docsSurfaceSteps().map((s) => s.id)).toEqual(DOCS_STEPS.map((s) => s.id));
+  });
+
+  // The one function that touches disk, driven against a throwaway copy — never
+  // the repo's own SETUP.md.
+  it("writes a stale document and reports which blocks it rewrote", () => {
+    const dir = mkdtempSync(join(tmpdir(), "fbmcp-setupdocs-"));
+    const path = join(dir, "SETUP.md");
+    const skeleton = [
+      "# Setup",
+      "",
+      ...docsSurfaceSteps().flatMap((s) => [beginMarker(s.id), endMarker(s.id), ""]),
+    ].join("\n");
+    writeFileSync(path, skeleton);
+
+    expect(regenerateSetupMd(path)).toBe(docsSurfaceSteps().length);
+    const written = readFileSync(path, "utf8");
+    expect(written).toBe(generateSetupDocs(skeleton));
+
+    // Second run: nothing left to do, and the file is left exactly as it was.
+    expect(regenerateSetupMd(path)).toBe(0);
+    expect(readFileSync(path, "utf8")).toBe(written);
   });
 });
