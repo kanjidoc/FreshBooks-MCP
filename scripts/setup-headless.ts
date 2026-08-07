@@ -33,14 +33,26 @@
  * Exit codes are the spec's table (§"Exit codes"), exported as `EXIT`.
  */
 
-import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as dotenv from "dotenv";
 import { resolveDesktopConfigPath } from "../src/config-paths";
-import { isMigrated, MIGRATED_MARKER } from "../src/migrate";
-import { SETUP_FLOW } from "../src/setup-flow";
-import { buildAuthUrl, buildOAuthClient } from "./setup-core";
+import { isMigrated, MIGRATED_MARKER, ProfileWriteError } from "../src/migrate";
+import { normalizeProfileName, parseProfileConfig, type ProfileConfig } from "../src/profiles";
+import { EXIT8_DIRECTIVE, EXIT8_QUESTION, SETUP_FLOW } from "../src/setup-flow";
+import {
+  buildAuthUrl,
+  buildOAuthClient,
+  buildTokenClient,
+  discoverMemberships,
+  exchangeCode,
+  extractCodeFromUrl,
+  saveProfile,
+  shredPending,
+  stagePending,
+  type Memberships,
+} from "./setup-core";
 // The wizard owns these three; importing them here (rather than re-deriving
 // them) keeps ONE definition of what a base `.env` contains. This is a module
 // cycle — `scripts/setup.ts` imports `runHeadless` from this file — and it is
@@ -268,6 +280,29 @@ function stepIdForVerb(verbFlag: string, fallback: string): string {
   return SETUP_FLOW.find((s) => s.verbs?.includes(verbFlag))?.id ?? fallback;
 }
 
+/**
+ * The Book's own fix text for one troubleshooting row, looked up by a fragment
+ * of its symptom.
+ *
+ * Envelope `fix` strings are normally written here, but where the Book already
+ * words a state for a human — a truncated callback address, a failed account
+ * lookup — the envelope quotes the Book rather than paraphrasing it, so the CLI
+ * and SETUP.md can never say two different things about the same failure (and a
+ * later edit to the row flows into the envelope for free). Missing rows throw:
+ * a silent fallback would be exactly the drift this exists to prevent, and the
+ * dispatcher turns the throw into a safe envelope.
+ */
+function bookFix(stepId: string, symptomFragment: string): string {
+  const row = stepFor(stepId).troubleshooting.find((t) => t.symptom.includes(symptomFragment));
+  if (!row) {
+    throw new Error(
+      `Book step "${stepId}" has no troubleshooting row matching "${symptomFragment}" — ` +
+        "src/setup-flow.ts and this file disagree.",
+    );
+  }
+  return row.fix;
+}
+
 // ---------------------------------------------------------------------------
 // The legacy-`.env` predicate
 // ---------------------------------------------------------------------------
@@ -346,6 +381,14 @@ const BOOL_FLAGS = new Set([
 const VERB_FLAGS: Record<string, string[]> = {
   "--init": ["--client-id", "--client-secret", "--client-secret-file", "--client-secret-stdin"],
   "--auth-url": [],
+  "--add-login": [
+    "--name",
+    "--callback-url",
+    "--business-id",
+    "--account-id",
+    "--distinct-login",
+    "--confirm-different-user",
+  ],
 };
 
 interface ParsedArgs {
@@ -620,32 +663,56 @@ function safeRead(path: string): string {
 // Verb: --auth-url
 // ---------------------------------------------------------------------------
 
-function runAuthUrl(emit: Emit, paths: SetupPaths): number {
-  const verb = "auth-url";
-  const credentialsStep = stepFor("app-credentials");
+/** The shared app credentials, or null when `--init` has not run. */
+interface AppCredentials {
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+}
 
+/**
+ * Read the base `.env`'s app credentials. Returns null when either credential is
+ * missing — the `app-credentials` precondition every FreshBooks-touching verb
+ * shares. The values are returned, never printed: the secret is a credential the
+ * emitters must never see.
+ */
+function readAppCredentials(paths: SetupPaths): AppCredentials | null {
   const env = existsSync(paths.baseEnvPath) ? dotenv.parse(safeRead(paths.baseEnvPath)) : {};
   const clientId = (env.FRESHBOOKS_CLIENT_ID ?? "").trim();
   const clientSecret = (env.FRESHBOOKS_CLIENT_SECRET ?? "").trim();
+  if (!clientId || !clientSecret) return null;
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: (env.FRESHBOOKS_REDIRECT_URI ?? "").trim() || REDIRECT_URI,
+  };
+}
 
-  if (!clientId || !clientSecret) {
-    emitErr(
-      emit,
-      verb,
-      EXIT.PRECONDITION,
-      credentialsStep.id,
-      `No app credentials: ${paths.baseEnvPath} is missing or carries no ` +
-        "FRESHBOOKS_CLIENT_ID / FRESHBOOKS_CLIENT_SECRET.",
-      "Run --init with the Client ID and Client Secret from the FreshBooks Developer Portal first.",
-      `${paths.baseEnvPath} does not provide both app credentials.`,
-    );
-    return EXIT.PRECONDITION;
-  }
+/** Exit 7 for a verb that needs app credentials it does not have. */
+function missingCredentials(emit: Emit, verb: string, paths: SetupPaths): number {
+  emitErr(
+    emit,
+    verb,
+    EXIT.PRECONDITION,
+    stepFor("app-credentials").id,
+    `No app credentials: ${paths.baseEnvPath} is missing or carries no ` +
+      "FRESHBOOKS_CLIENT_ID / FRESHBOOKS_CLIENT_SECRET.",
+    "Run --init with the Client ID and Client Secret from the FreshBooks Developer Portal first.",
+    `${paths.baseEnvPath} does not provide both app credentials.`,
+  );
+  return EXIT.PRECONDITION;
+}
 
-  const redirectUri = (env.FRESHBOOKS_REDIRECT_URI ?? "").trim() || REDIRECT_URI;
+function runAuthUrl(emit: Emit, paths: SetupPaths): number {
+  const verb = "auth-url";
+
+  const credentials = readAppCredentials(paths);
+  if (!credentials) return missingCredentials(emit, verb, paths);
 
   try {
-    const url = buildAuthUrl(buildOAuthClient(clientId, clientSecret, redirectUri));
+    const url = buildAuthUrl(
+      buildOAuthClient(credentials.clientId, credentials.clientSecret, credentials.redirectUri),
+    );
     emitOk(emit, verb, { url });
     return EXIT.OK;
   } catch (err) {
@@ -661,6 +728,336 @@ function runAuthUrl(emit: Emit, paths: SetupPaths): number {
     );
     return EXIT.FAIL;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Verb: --add-login (the fresh-authorization form)
+// ---------------------------------------------------------------------------
+//
+// The spec's `--add-login` state machine, in the order it draws it:
+//
+//   name validated (normalize + availability)  → exit 4, NO code consumed
+//   exchange(code)                             → exit 3, nothing staged
+//   STAGE profiles/<name>.env.pending          ← before anything that can fail
+//   discover (users.me on the staged pair)     → exit 11 / 6 / 8, pending KEPT
+//   save via writeNewProfile                   → exit 8 (refused), pending KEPT
+//   shred pending                              → exit 0
+//
+// Two orderings carry the whole design and must not be "tidied":
+//
+//   1. THE NAME GATE PRECEDES THE EXCHANGE. An authorization code is single-use
+//      and lives minutes; discovering the name clash after spending it would
+//      send the user back through a browser round-trip for a mistake we could
+//      see beforehand.
+//   2. STAGING PRECEDES DISCOVERY. Everything after the exchange can fail —
+//      a multi-business login, an already-connected company, a 503, a crash —
+//      and every one of those failures must leave a resumable token pair on
+//      disk rather than a burned grant. That is why the pending is written
+//      first and shredded only after the profile write is verified.
+//
+// The resume forms (`--add-login --name N` with no `--callback-url`) are not
+// part of this build yet; they land with the branch-exit resume grammar.
+
+/** Flags that belong to a resume, not to the `--callback-url` form. */
+const RESUME_ONLY_FLAGS = [
+  "--business-id",
+  "--account-id",
+  "--distinct-login",
+  "--confirm-different-user",
+];
+
+async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promise<number> {
+  const verb = "add-login";
+  const saveStep = stepFor("save-login");
+  const nameStep = stepFor("nickname");
+  const authorizeStep = stepFor("authorize");
+
+  const callbackUrl = parsed.flags.get("--callback-url");
+  if (typeof callbackUrl !== "string") {
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      "--add-login needs the address the user pasted back from FreshBooks; the resume forms are " +
+        "not implemented in this build.",
+      "Re-run as --add-login --name <nickname> --callback-url '<the pasted address>' — " +
+        "single-quoted, because the address contains ? and =.",
+    );
+  }
+  for (const flag of RESUME_ONLY_FLAGS) {
+    if (parsed.flags.has(flag)) {
+      return usage(
+        emit,
+        verb,
+        saveStep.id,
+        `${flag} belongs to a resume, not to the --callback-url form.`,
+        `Re-run --add-login with --name and --callback-url only, and drop ${flag}.`,
+      );
+    }
+  }
+
+  const rawName = parsed.flags.get("--name");
+  if (typeof rawName !== "string") {
+    return usage(
+      emit,
+      verb,
+      nameStep.id,
+      "--add-login needs a nickname for this login.",
+      "Re-run with --name <nickname> — lowercase letters and digits, like acme.",
+    );
+  }
+
+  const credentials = readAppCredentials(paths);
+  if (!credentials) return missingCredentials(emit, verb, paths);
+
+  // --- The name gate: both halves run BEFORE the code is spent ---
+  let name: string;
+  try {
+    name = normalizeProfileName(rawName);
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.NAME_TAKEN,
+      nameStep.id,
+      `"${rawName}" is not a usable name for a login.`,
+      "Pick a short nickname of lowercase letters and digits, like acme, and re-run --add-login " +
+        "with it. No authorization code was spent, so the pasted address is still good.",
+      errorMessage(err),
+    );
+    return EXIT.NAME_TAKEN;
+  }
+
+  if (existsSync(join(paths.profilesDir, `${name}.env`))) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.NAME_TAKEN,
+      nameStep.id,
+      `A login named "${name}" is already saved, and this would overwrite its tokens.`,
+      "Pick a different nickname — already yours? run --doctor; reconnecting? use --reauth. " +
+        "No authorization code was spent.",
+      `${join(paths.profilesDir, `${name}.env`)} already exists.`,
+    );
+    return EXIT.NAME_TAKEN;
+  }
+
+  // --- The exchange: the one step that consumes the code ---
+  const code = extractCodeFromUrl(callbackUrl);
+  if (!code) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.CODE_REJECTED,
+      authorizeStep.id,
+      "The pasted address carries no authorization code.",
+      `${bookFix("authorize", "looks incomplete")} Then re-run --add-login with the whole address.`,
+      "No code parameter was found in the --callback-url value.",
+    );
+    return EXIT.CODE_REJECTED;
+  }
+
+  let tokens: { accessToken: string; refreshToken: string };
+  try {
+    tokens = await exchangeCode(
+      buildOAuthClient(credentials.clientId, credentials.clientSecret, credentials.redirectUri),
+      code,
+    );
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.CODE_REJECTED,
+      authorizeStep.id,
+      "FreshBooks rejected that authorization code.",
+      "Codes are single-use and live only minutes: run --auth-url again, have the user approve " +
+        "the connection afresh, and pass the new address straight to --add-login.",
+      errorMessage(err),
+    );
+    return EXIT.CODE_REJECTED;
+  }
+
+  // --- Staging: from here on, every exit leaves a resumable pair on disk ---
+  try {
+    stagePending(paths.profilesDir, name, {
+      mode: "add",
+      stagedAt: new Date().toISOString(),
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
+  } catch (err) {
+    // The grant exists but nothing holds it, so say so plainly rather than let
+    // a resume look possible. The pair itself never reaches the output.
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      saveStep.id,
+      `The new login could not be staged in ${paths.profilesDir}, so it cannot be saved or resumed.`,
+      "Make sure the project's profiles folder exists and is writable, then run --auth-url and " +
+        "--add-login again with a fresh address.",
+      errorMessage(err),
+    );
+    return EXIT.FAIL;
+  }
+
+  let memberships: Memberships;
+  try {
+    memberships = await discoverMemberships(
+      buildTokenClient(
+        credentials.clientId,
+        credentials.clientSecret,
+        credentials.redirectUri,
+        tokens.accessToken,
+        tokens.refreshToken,
+      ),
+    );
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.DISCOVERY_FAILED,
+      saveStep.id,
+      "This login's account details could not be read from FreshBooks.",
+      `${bookFix("save-login", "exit 11")} The login stays staged, so the authorization is not lost.`,
+      errorMessage(err),
+    );
+    return EXIT.DISCOVERY_FAILED;
+  }
+
+  // An EMPTY list is not a failure — it is an accounting-only login, which
+  // legitimately carries no businessId. Only more than one membership is a
+  // question, and it is the user's to answer, never this CLI's.
+  if (memberships.list.length > 1) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.BUSINESS_CHOICE,
+      saveStep.id,
+      "This login belongs to more than one business, so which one this profile means is the " +
+        "user's choice.",
+      "Ask which business this login is for — relay the labels only, numbered, never the IDs — " +
+        "then resume this login with that membership's --business-id.",
+      `The login returned ${memberships.list.length} business memberships.`,
+      { memberships: memberships.list },
+    );
+    return EXIT.BUSINESS_CHOICE;
+  }
+
+  // `chosen` is genuinely absent for an accounting-only login (the empty list),
+  // which is why every read of it is optional even though TypeScript types the
+  // index access as present: blank IDs are a valid profile, and they throw at
+  // call time only if a tool actually needs them.
+  const chosen = memberships.list[0];
+  const config: ProfileConfig = {
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    accountId: chosen?.accountId ?? "",
+    businessId: chosen?.businessId ?? "",
+  };
+
+  try {
+    // `onSameAccount: "refuse"` on every UNCONFIRMED path: a company that is
+    // already connected must reach a human before a second token family for it
+    // is written, because un-quarantining a superseded family is a lockout
+    // vector. Only the confirmed distinct-login resume passes "warn".
+    const profilePath = saveProfile(paths.profilesDir, name, config, { onSameAccount: "refuse" });
+    shredPending(paths.profilesDir, name);
+    emitOk(emit, verb, {
+      name,
+      company: chosen?.label,
+      accountId: config.accountId,
+      businessId: config.businessId,
+      profilePath,
+    });
+    return EXIT.OK;
+  } catch (err) {
+    if (err instanceof ProfileWriteError && err.code === "SAME_ACCOUNT") {
+      return sameAccountRefusal(emit, verb, paths, name, config.accountId, chosen?.label ?? "");
+    }
+    // Anything else — a name/duplicate-token collision that only a resume can
+    // adjudicate, or a genuine write failure — leaves the pending in place and
+    // travels to the dispatcher's envelope (message only, never the object).
+    // Keeping the pair staged through an unexplained failure is exactly why it
+    // is staged.
+    throw err;
+  }
+}
+
+/**
+ * Exit 8 — this FreshBooks company is already connected under another profile.
+ *
+ * The payload is Book-authored on purpose (the typed `code`, never the writer's
+ * message): `confirmQuestion` is the spec's fully drafted question with the two
+ * placeholders filled, and `directive` is the MUST-NOT rule that travels with
+ * it. The pending is deliberately left staged — all three recovery branches
+ * consume it.
+ */
+function sameAccountRefusal(
+  emit: Emit,
+  verb: string,
+  paths: SetupPaths,
+  name: string,
+  accountId: string,
+  company: string,
+): number {
+  const saveStep = stepFor("save-login");
+  const existingProfile = findProfileWithAccountId(paths.profilesDir, accountId);
+
+  if (!existingProfile) {
+    // The writer refused on a profile that a fresh scan cannot find: the
+    // directory changed underneath us. Report it as the unexpected state it is
+    // rather than ask a human a question with a blank in it.
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      saveStep.id,
+      "The save was refused as an already-connected company, but no profile carries that " +
+        "account any more.",
+      "Run --doctor to see the current profiles, then resume or discard this staged login.",
+      `No profiles/*.env in ${paths.profilesDir} carries accountId ${accountId}.`,
+    );
+    return EXIT.FAIL;
+  }
+
+  emitErr(
+    emit,
+    verb,
+    EXIT.SAME_ACCOUNT,
+    saveStep.id,
+    `This FreshBooks company is already connected as "${existingProfile}".`,
+    `Relay confirmQuestion to the user word for word, then obey the directive: ${EXIT8_DIRECTIVE}.`,
+    `profiles/${name}.env was not written: accountId ${accountId} already belongs to ` +
+      `profiles/${existingProfile}.env.`,
+    {
+      existingProfile,
+      confirmQuestion: EXIT8_QUESTION.replace("<company>", company).replace(
+        "<existing profile>",
+        existingProfile,
+      ),
+      directive: EXIT8_DIRECTIVE,
+    },
+  );
+  return EXIT.SAME_ACCOUNT;
+}
+
+/**
+ * The name of the first saved profile using `accountId`, or null.
+ *
+ * A FRESH directory scan, never the memoized registry — the same rule
+ * `markDistinctLogin` follows, and for the same reason: a snapshot taken before
+ * this run would miss a profile written since. Only `*.env` files are read, so
+ * a staged `<name>.env.pending` can never name itself as the incumbent.
+ */
+function findProfileWithAccountId(profilesDir: string, accountId: string): string | null {
+  if (!accountId || !existsSync(profilesDir)) return null;
+  for (const file of readdirSync(profilesDir).sort()) {
+    if (!file.endsWith(".env")) continue;
+    const config = parseProfileConfig(safeRead(join(profilesDir, file)));
+    if (config?.accountId === accountId) return file.slice(0, -".env".length);
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -776,6 +1173,8 @@ async function dispatch(
       return runInit(parsed, emit, paths);
     case "--auth-url":
       return runAuthUrl(emit, paths);
+    case "--add-login":
+      return runAddLogin(parsed, emit, paths);
     default:
       // A verb the Book already names but this build does not implement yet
       // (the remaining Phase-2 tasks fill these in).
