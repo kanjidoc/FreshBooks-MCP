@@ -94,6 +94,7 @@ import {
   saveProfile,
   shredPending,
   stagePending,
+  writeCredentialFile,
   type Memberships,
   type PendingRecord,
 } from "./setup-core";
@@ -566,6 +567,56 @@ function firstLine(raw: string): string {
 }
 
 /**
+ * The one wording for "the secret file is still on disk and only you can remove
+ * it". Shared by the read path and every refusal path so a user who hits either
+ * is told the same thing about the same file.
+ */
+function warnSecretFileSurvived(file: string, detail: string): void {
+  console.error(
+    `FATAL: could not delete the client-secret file ${file} (${detail}) — ` +
+      "it still holds your app secret. Delete it yourself now.",
+  );
+}
+
+/**
+ * The value of `--client-secret-file` as it appears in raw argv.
+ *
+ * Read from argv rather than the parsed flags because the earliest refusal —
+ * an invocation that does not parse at all — has no parsed flags, and that run
+ * received the file just the same. The last occurrence wins, mirroring the
+ * parser, and a value that is itself part of the grammar is rejected the same
+ * way the parser rejects it (so `--client-secret-file --json` deletes nothing).
+ */
+function secretFileArg(argv: string[]): string | undefined {
+  for (let i = argv.length - 1; i >= 0; i -= 1) {
+    if (argv[i] !== "--client-secret-file") continue;
+    const value = argv[i + 1];
+    return value !== undefined && !isKnownToken(value) ? value : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Delete a `--client-secret-file` on a path that is REFUSING before the
+ * read-once-then-delete choreography could run.
+ *
+ * SECRETS_RULES promises the CLI deletes the file itself, and every refusal here
+ * means "come back later" — which is exactly how long a live app secret would
+ * otherwise sit at whatever permissions the agent's shell gave it. The refusal's
+ * own exit code still stands: a failed delete is reported loudly rather than
+ * turned into a different verdict, because what the user must act on is the
+ * refusal AND the leftover file, not one instead of the other.
+ */
+function shredUnreadSecretFile(file: string | undefined): void {
+  if (file === undefined) return;
+  try {
+    rmSync(file, { force: true });
+  } catch (err) {
+    warnSecretFileSurvived(file, errorMessage(err));
+  }
+}
+
+/**
  * Read the agent-written secret file ONCE and delete it immediately — the
  * spec's read-once-then-delete choreography (§Secrets). The delete runs in a
  * `finally`, so it happens whether or not the read succeeded, before the secret
@@ -611,8 +662,16 @@ async function runInit(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promi
   const verb = "init";
   const step = stepFor("app-credentials");
 
+  // Both refusals below happen BEFORE the secret file would be read, so each
+  // shreds it itself — the file must not outlive a run that told the caller to
+  // fix its invocation and come back.
+  const secretFile = parsed.flags.has("--client-secret-file")
+    ? String(parsed.flags.get("--client-secret-file"))
+    : undefined;
+
   const clientId = String(parsed.flags.get("--client-id") ?? "").trim();
   if (!clientId) {
+    shredUnreadSecretFile(secretFile);
     return usage(
       emit,
       verb,
@@ -627,6 +686,7 @@ async function runInit(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promi
     parsed.flags.has(f),
   );
   if (sources.length !== 1) {
+    shredUnreadSecretFile(secretFile);
     return usage(
       emit,
       verb,
@@ -644,10 +704,7 @@ async function runInit(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promi
     if (result.rmError) {
       // Loud, unconditionally, on both output modes: the file still holds the
       // app secret and only the user can remove it now.
-      console.error(
-        `FATAL: could not delete the client-secret file ${file} (${result.rmError}) — ` +
-          "it still holds your app secret. Delete it yourself now.",
-      );
+      warnSecretFileSurvived(file, result.rmError);
       emitErr(
         emit,
         verb,
@@ -707,9 +764,10 @@ async function runInit(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promi
   const vars = buildBaseEnvVars(clientId, secret, REDIRECT_URI, isMigrated(existing));
 
   try {
-    // 0600 AT CREATION (Security §Permissions) — a chmod-after would leave a
-    // window in which the app secret is world-readable.
-    writeFileSync(paths.baseEnvPath, serializeEnv(vars), { mode: 0o600 });
+    // 0600 AT CREATION, and an existing file tightened BEFORE the new secret
+    // lands (Security §Permissions) — both live in `writeCredentialFile` so the
+    // wizard's own `.env` write cannot drift from this one.
+    writeCredentialFile(paths.baseEnvPath, serializeEnv(vars));
   } catch (err) {
     emitErr(
       emit,
@@ -723,9 +781,10 @@ async function runInit(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promi
     return EXIT.FAIL;
   }
 
-  // `mode` applies at creation only, so an overwritten pre-existing file keeps
-  // its old (possibly looser) permissions without this. Best-effort: a failure
-  // here leaves a working install, and `--doctor` reports loose modes.
+  // `writeCredentialFile` already tightened the file, before and at creation.
+  // This re-assert exists only to SAY SO when the mode did not stick — a file
+  // we do not own, an exotic filesystem — because the secret is on disk by now
+  // and silence would be the one thing the user cannot recover from.
   try {
     chmodSync(paths.baseEnvPath, 0o600);
   } catch (err) {
@@ -3294,6 +3353,9 @@ export async function runHeadless(
   const emit: Emit = { json: argv.includes("--json") };
 
   if (!parseResult.ok) {
+    // The invocation never parsed, so nothing downstream will ever read (and
+    // therefore delete) a secret file it carried. Read the path off raw argv.
+    shredUnreadSecretFile(secretFileArg(argv));
     // No verb resolved, so no Book step owns this failure: the envelope keeps
     // its fixed shape with an empty `stepId` rather than naming a step at random.
     return usage(
@@ -3323,6 +3385,10 @@ export async function runHeadless(
   // the spec fixes the doctor's exits at 0 or 1. Refusing it here would make the
   // state undiagnosable by the very verb sent to diagnose it.
   if (parsed.verb !== "--doctor" && legacyEnvNeedsMigration(paths.baseEnvPath)) {
+    // This refusal sends the user to the wizard — minutes at least, and the
+    // whole point is that they come back later. A live app secret must not wait
+    // that long in a file the CLI promised to delete.
+    shredUnreadSecretFile(secretFileArg(argv));
     const step = stepFor("migrate-legacy");
     emitErr(
       emit,
@@ -3341,6 +3407,8 @@ export async function runHeadless(
   if (allowedFlags) {
     for (const flag of parsed.flags.keys()) {
       if (!allowedFlags.includes(flag)) {
+        // A verb that does not take `--client-secret-file` will never read it.
+        shredUnreadSecretFile(secretFileArg(argv));
         return usage(
           emit,
           verbName,

@@ -25,10 +25,11 @@
  * stdout/stderr or embeds one in a thrown message. Profile files are written
  * ONLY through `writeNewProfile` (via `saveProfile`) or
  * `applyTokensToEnv` + `writeAtomic` (via `replaceProfileTokens`) — never with a
- * bare `writeFileSync`. The one bare `writeFileSync` in this file is
- * `stagePending`, and a pending is deliberately NOT a profile file: see the
+ * bare `writeFileSync`. Exactly two functions here write credential material
+ * directly, and neither writes a profile file: `stagePending` (see the
  * staged-pending section at the bottom for why atomicity is the wrong tool
- * there.
+ * there) and `writeCredentialFile`, which writes the base `.env` — app
+ * credentials, never tokens. Both create at mode 0600.
  */
 
 import { execFileSync } from "node:child_process";
@@ -180,6 +181,33 @@ export async function discoverMemberships(authed: Client): Promise<Memberships> 
       };
     }),
   };
+}
+
+/**
+ * Write a credential-bearing file at mode 0600 — the base `.env`, whose
+ * `FRESHBOOKS_CLIENT_SECRET` is as sensitive as any token.
+ *
+ * The tighten happens BEFORE the content lands, which is the whole point:
+ * `writeFileSync`'s `mode` applies at CREATION only, so overwriting a
+ * pre-existing world-readable file with `{mode: 0o600}` leaves it world-readable
+ * with the new secret already in it (Security §Permissions — "0600 at creation …
+ * a chmod-after leaves a window"). Tightening first also means a `.env` someone
+ * hardened to 0400 by hand is rewritable rather than a hard failure.
+ *
+ * The chmod is best-effort (Windows has no meaningful mode bits, and a file we
+ * do not own cannot be chmodded) but the WRITE is not: its failure is thrown to
+ * the caller, which knows how to report it.
+ */
+export function writeCredentialFile(path: string, content: string): void {
+  if (existsSync(path)) {
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      // Best-effort: fall through to the write; `--doctor`'s permission check
+      // reports a file that is still loose afterwards.
+    }
+  }
+  writeFileSync(path, content, { mode: 0o600 });
 }
 
 /**

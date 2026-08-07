@@ -494,6 +494,8 @@ describe("--init", () => {
     ).toBe(EXIT.USAGE);
     // Rejected on grammar alone — nothing was written.
     expect(existsSync(paths.baseEnvPath)).toBe(false);
+    // …and the secret file does not outlive the refusal that never read it.
+    expect(existsSync(secretFile)).toBe(false);
   });
 
   it("rejects an unreadable secret file and an empty secret", async () => {
@@ -524,6 +526,109 @@ describe("--init", () => {
     expect(existsSync(blank)).toBe(false);
     expect(existsSync(paths.baseEnvPath)).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "tightens a read-only existing base .env BEFORE the new secret lands",
+    async () => {
+      const paths = fixture();
+      seedBaseEnv(paths, "FRESHBOOKS_CLIENT_ID=old\n");
+      // 0400: the write itself is impossible until the file has been tightened,
+      // so a run that only chmods AFTERWARDS cannot pass this.
+      chmodSync(paths.baseEnvPath, 0o400);
+      const secretFile = seedSecretFile(paths.rootDir);
+
+      const code = await runHeadless(
+        ["--headless", "--init", "--client-id", "cid", "--client-secret-file", secretFile],
+        paths,
+      );
+
+      expect(code).toBe(EXIT.OK);
+      expect(statSync(paths.baseEnvPath).mode & 0o777).toBe(0o600);
+      expect(readFileSync(paths.baseEnvPath, "utf8")).toMatch(
+        new RegExp(`^FRESHBOOKS_CLIENT_SECRET=${CANARY_SECRET}$`, "m"),
+      );
+    },
+  );
+});
+
+/**
+ * A `--client-secret-file` is written by an agent at default permissions and is
+ * deleted by this CLI — that is the contract SECRETS_RULES sells. A refusal that
+ * returns BEFORE the read-once-then-delete choreography would otherwise leave a
+ * live app secret on disk with nobody told, and the whole point of these
+ * refusals is "come back later", which is exactly how long the file would sit.
+ */
+describe("a refusal never lets the secret file outlive it", () => {
+  it("shreds it on the exit-9 unmigrated refusal", async () => {
+    const paths = fixture();
+    seedBaseEnv(paths, LEGACY_ENV);
+    const secretFile = seedSecretFile(paths.rootDir);
+
+    const code = await runHeadless(
+      ["--headless", "--init", "--client-id", "cid", "--client-secret-file", secretFile, "--json"],
+      paths,
+    );
+
+    expect(code).toBe(EXIT.UNMIGRATED);
+    expect(existsSync(secretFile)).toBe(false);
+    expect(envelope().stepId).toBe("migrate-legacy");
+    // The legacy tokens are still untouched — shredding is all that changed.
+    expect(readFileSync(paths.baseEnvPath, "utf8")).toBe(LEGACY_ENV);
+    expectNoSecretMaterial(allOutput(), CANARY_SECRET);
+  });
+
+  it("shreds it on a usage error that never reaches the read", async () => {
+    const paths = fixture();
+
+    // A verb that does not take the flag.
+    const wrongVerb = seedSecretFile(paths.rootDir);
+    expect(
+      await runHeadless(["--headless", "--auth-url", "--client-secret-file", wrongVerb], paths),
+    ).toBe(EXIT.USAGE);
+    expect(existsSync(wrongVerb)).toBe(false);
+
+    // An invocation that does not even parse.
+    const unparsed = seedSecretFile(paths.rootDir);
+    expect(
+      await runHeadless(
+        ["--headless", "--init", "--client-id", "cid", "--client-secret-file", unparsed, "--nope"],
+        paths,
+      ),
+    ).toBe(EXIT.USAGE);
+    expect(existsSync(unparsed)).toBe(false);
+
+    // `--init` with no client id: the refusal precedes the secret read.
+    const noId = seedSecretFile(paths.rootDir);
+    expect(
+      await runHeadless(["--headless", "--init", "--client-secret-file", noId], paths),
+    ).toBe(EXIT.USAGE);
+    expect(existsSync(noId)).toBe(false);
+
+    expectNoSecretMaterial(allOutput(), CANARY_SECRET);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "says so loudly when the file cannot be deleted, keeping the refusal's exit code",
+    async () => {
+      const paths = fixture();
+      seedBaseEnv(paths, LEGACY_ENV);
+      const ro = join(paths.rootDir, "ro");
+      mkdirSync(ro);
+      const secretFile = seedSecretFile(ro);
+      chmodSync(ro, 0o555);
+
+      const code = await runHeadless(
+        ["--headless", "--init", "--client-id", "cid", "--client-secret-file", secretFile],
+        paths,
+      );
+
+      expect(code).toBe(EXIT.UNMIGRATED); // the refusal is still the verdict
+      expect(existsSync(secretFile)).toBe(true);
+      expect(stderr()).toContain(secretFile);
+      expect(stderr()).toMatch(/FATAL/);
+      expectNoSecretMaterial(allOutput(), CANARY_SECRET);
+    },
+  );
 });
 
 describe("--auth-url", () => {

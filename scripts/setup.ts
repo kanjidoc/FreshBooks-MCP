@@ -42,6 +42,7 @@ import {
   installDesktop,
   isClaudeCliAvailable,
   saveProfile,
+  writeCredentialFile,
 } from "./setup-core";
 import { runHeadless } from "./setup-headless";
 
@@ -123,7 +124,10 @@ export function serializeEnv(vars: Record<string, string>): string {
 }
 
 function writeEnvFile(vars: Record<string, string>) {
-  fs.writeFileSync(ENV_PATH, serializeEnv(vars));
+  // The base `.env` carries the app secret, so it is written 0600 at creation
+  // and an existing file is tightened BEFORE the new content lands — the shared
+  // writer the headless `--init` uses, so the two cannot drift.
+  writeCredentialFile(ENV_PATH, serializeEnv(vars));
 }
 
 function writeMcpJson(projectDir: string) {
