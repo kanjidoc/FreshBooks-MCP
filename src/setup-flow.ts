@@ -611,13 +611,24 @@ export const SETUP_FLOW: SetupStep[] = [
     verbs: ["--doctor"],
     summary: "Run the setup doctor and confirm every check passes.",
     humanScript: [
-      "Ask Claude to run the setup doctor — or in Terminal, from the project folder: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass.",
+      // Observed 2026-08-07: a first-time user ran the doctor from their home
+      // folder and got a raw ts-node stack. Terminal always opens there, so the
+      // navigation move is spelled out here rather than assumed from get-project.
+      "Ask Claude to run the setup doctor — or do it yourself in Terminal. First point Terminal at the project folder: type cd, then a space, then drag the project folder onto the Terminal window — then press Enter.",
+      "Then run: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass.",
     ],
     agentGuidance:
       "Run `--doctor`; read failing checks' fix texts aloud; act only within them.",
     successCheck: "Doctor exits with all checks passing.",
-    docPhrases: [],
+    docPhrases: ["point Terminal at the project folder"],
     troubleshooting: [
+      {
+        // Observed 2026-08-07: the exact symptom when the command runs outside
+        // the project folder — distinct from npm-install's MODULE_NOT_FOUND row
+        // (right folder, missing deps).
+        symptom: "Cannot find module './setup.ts'",
+        fix: "Terminal isn't in the project folder — type cd, then a space, drag the project folder onto the Terminal window, press Enter, and run the command again.",
+      },
       {
         symptom: "config entry missing but a previous session said install succeeded",
         fix: "The write was virtualized by the sandbox — use the manual Edit Config route now; do NOT re-run `--install`.",

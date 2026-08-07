@@ -507,7 +507,9 @@ Run `--doctor`; read failing checks' fix texts aloud; act only within them.
 
 ### If you are typing every command yourself:
 
-Ask Claude to run the setup doctor — or in Terminal, from the project folder: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass.
+Ask Claude to run the setup doctor — or do it yourself in Terminal. First point Terminal at the project folder: type cd, then a space, then drag the project folder onto the Terminal window — then press Enter.
+
+Then run: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass.
 
 **How to check it worked:** Doctor exits with all checks passing.
 
@@ -515,6 +517,7 @@ Ask Claude to run the setup doctor — or in Terminal, from the project folder: 
 
 | If you see | Do this |
 |---|---|
+| Cannot find module './setup.ts' | Terminal isn't in the project folder — type cd, then a space, drag the project folder onto the Terminal window, press Enter, and run the command again. |
 | config entry missing but a previous session said install succeeded | The write was virtualized by the sandbox — use the manual Edit Config route now; do NOT re-run `--install`. |
 | command isn't an absolute path | Either a legacy entry (re-run `--install`) or the deliberate sandbox fallback ('node') — the doctor's line says which. |
 <!-- setup-step:verify END -->
