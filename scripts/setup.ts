@@ -31,6 +31,7 @@ import { resolveDesktopConfigPath } from "../src/config-paths";
 import { buildClaudeServerConfig, buildClaudeCodeServerJson } from "../src/mcp-config";
 import { runMigration, isMigrated, MIGRATED_MARKER } from "../src/migrate";
 import { normalizeProfileName, type ProfileConfig } from "../src/profiles";
+import type { SetupCtx, SetupStep } from "../src/setup-flow";
 import {
   buildAuthUrl,
   buildOAuthClient,
@@ -75,6 +76,103 @@ function isYes(answer: string, defaultYes = false): boolean {
   const a = answer.trim().toLowerCase();
   if (a === "") return defaultYes;
   return a === "y" || a === "yes";
+}
+
+/**
+ * The wizard's ONE prompt renderer. Pure — it produces the string `ask()` hands
+ * to readline and nothing else, which is why it is unit-testable without any
+ * I/O stub.
+ *
+ * Both yes/no renderings are drafted by the design spec (§Surface 1: "One
+ * `prompt()` helper; both default renderings specified: `(y = yes, Enter = no)`
+ * and `(Enter = yes, n = no)`") and must not be paraphrased — a prompt that
+ * shows the wrong default silently inverts a consent. `def` names what a bare
+ * Enter means, so it always agrees with the `isYes(answer, defaultYes)` call it
+ * is paired with; `null` is a free-text prompt (no hint).
+ *
+ * The question text is emitted verbatim, leading indentation included — the
+ * caller owns the wizard's house style, this function owns only the suffix.
+ */
+export function formatPrompt(question: string, def: "yes" | "no" | null): string {
+  const hint =
+    def === "yes" ? " (Enter = yes, n = no)" : def === "no" ? " (y = yes, Enter = no)" : "";
+  return `${question}${hint}: `;
+}
+
+/**
+ * The checklist's three markers (plan Task 17): a check mark for done, a
+ * right-pointing triangle for where we are, a hollow circle for still to come.
+ */
+const CHECK_DONE = "✓";
+const CHECK_CURRENT = "▶";
+const CHECK_PENDING = "○";
+
+/**
+ * The append-only progress checklist — the wizard reprints this whole block at
+ * each stage boundary rather than redrawing the cursor (spec §Decisions: "Plain
+ * sequential text; append-only rendering").
+ *
+ * Pure, and deliberately so: it renders the `wizard`-surface steps of the Book
+ * it is handed, `appliesIf`-filtered against `ctx` and `repeats`-expanded, and
+ * it asks nothing of the filesystem. In particular it NEVER calls a step's
+ * `check()` — completion arrives as `doneIds`, which the wizard computes once
+ * from those same `check(ctx)` functions. That single-sourcing is the point:
+ * the wizard must never re-implement a check the Book already carries, and two
+ * evaluation sites would be two chances to disagree.
+ *
+ * - `doneIds` / `currentId` are step ids. `currentId` wins over `doneIds` when
+ *   both match: on a re-run a step's check can already pass while the user is
+ *   standing on it, and where-we-are is the more useful thing to show.
+ * - `loginCount` is the login currently being worked on (1 while the first is
+ *   in flight), not a total known up front — the wizard's add-login loop has no
+ *   such total. So the per-login group is emitted `loginCount` times,
+ *   annotated `(login N)` once there is more than one, and every group before
+ *   the last renders as done: the wizard only moves the counter after finishing
+ *   a login. 0 (no login started yet) renders one un-annotated pending group so
+ *   the user can still see the work that is coming.
+ * - Surface filtering happens here, so `renderChecklist(SETUP_FLOW, …)` is the
+ *   natural call; handing in an already-wizard-filtered list is identical.
+ * - Returns the block with no trailing newline — the caller owns the spacing.
+ */
+export function renderChecklist(
+  steps: SetupStep[],
+  ctx: SetupCtx,
+  doneIds: string[],
+  currentId: string,
+  loginCount: number,
+): string {
+  const visible = steps.filter(
+    (step) => step.surfaces.includes("wizard") && (step.appliesIf ? step.appliesIf(ctx) : true),
+  );
+  const done = new Set(doneIds);
+  const markerFor = (id: string) =>
+    id === currentId ? CHECK_CURRENT : done.has(id) ? CHECK_DONE : CHECK_PENDING;
+
+  // A non-finite or sub-1 count still owes the user one pending group.
+  const iterations = Math.max(1, Number.isFinite(loginCount) ? Math.floor(loginCount) : 1);
+
+  const out: string[] = [];
+  for (let i = 0; i < visible.length; i++) {
+    if (visible[i].repeats !== "per-login") {
+      out.push(`${markerFor(visible[i].id)} ${visible[i].title}`);
+      continue;
+    }
+    // A maximal contiguous run of per-login steps is one login's worth of work,
+    // so the RUN repeats — nickname/authorize/save-login of login 1, then of
+    // login 2 — which is the order they actually happen in.
+    let end = i;
+    while (end + 1 < visible.length && visible[end + 1].repeats === "per-login") end++;
+    const run = visible.slice(i, end + 1);
+    for (let n = 1; n <= iterations; n++) {
+      const suffix = iterations > 1 ? ` (login ${n})` : "";
+      for (const step of run) {
+        const marker = n < iterations ? CHECK_DONE : markerFor(step.id);
+        out.push(`${marker} ${step.title}${suffix}`);
+      }
+    }
+    i = end;
+  }
+  return out.join("\n");
 }
 
 function openBrowser(url: string) {
@@ -250,7 +348,10 @@ gated on you confirming nothing is attached.
 
   const stopped = isYes(
     await ask(
-      "   Have you fully stopped Claude / any running FreshBooks MCP server? [y/N]: ",
+      formatPrompt(
+        "   Have you fully stopped Claude / any running FreshBooks MCP server?",
+        "no",
+      ),
     ),
   );
 
@@ -520,7 +621,7 @@ STEP 2: Authorize your FreshBooks login(s)
   let savedAny = migrated;
   let again = true;
   if (migrated) {
-    again = isYes(await ask("   Add another FreshBooks login now? [y/N]: "));
+    again = isYes(await ask(formatPrompt("   Add another FreshBooks login now?", "no")));
   }
   while (again) {
     if (await addLogin(clientId, clientSecret)) savedAny = true;
@@ -528,9 +629,9 @@ STEP 2: Authorize your FreshBooks login(s)
       console.log(
         "\n   No login has been saved yet — the server needs at least one to work.\n",
       );
-      again = isYes(await ask("   Add a login now? [Y/n]: "), true);
+      again = isYes(await ask(formatPrompt("   Add a login now?", "yes")), true);
     } else {
-      again = isYes(await ask("   Add another login? [y/N]: "));
+      again = isYes(await ask(formatPrompt("   Add another login?", "no")));
     }
   }
 
@@ -572,7 +673,7 @@ STEP 5: Connecting to Claude
 `);
 
   let desktopInstalled = false;
-  if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "), true)) {
+  if (isYes(await ask(formatPrompt("   Add the server to Claude Desktop?", "yes")), true)) {
     desktopInstalled = upsertClaudeDesktopConfig();
     if (desktopInstalled) {
       console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
@@ -581,7 +682,12 @@ STEP 5: Connecting to Claude
 
   let codeInstalled = false;
   if (isClaudeCliAvailable()) {
-    if (isYes(await ask("   Add the server to Claude Code, for all your projects? [Y/n]: "), true)) {
+    if (
+      isYes(
+        await ask(formatPrompt("   Add the server to Claude Code, for all your projects?", "yes")),
+        true,
+      )
+    ) {
       codeInstalled = installIntoClaudeCode(PROJECT_DIR);
       if (codeInstalled) {
         console.log(`   Claude Code: registered the "freshbooks" server at user scope.\n`);
