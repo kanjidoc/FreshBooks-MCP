@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Headless setup surface for agents.** `npx ts-node scripts/setup.ts --headless <verb>` —
+  `--init`, `--auth-url`, `--add-login` (staged pendings, resumable branches),
+  `--reauth`, `--discard-pending`, `--install`/`--print-config`, and a
+  Book-keyed `--doctor`; typed exit codes and token-free JSON envelopes.
+- **Agent-path docs, generated from the Book.** SETUP.md's setup steps are now
+  generated blocks rendered from `src/setup-flow.ts` (drift-tested
+  byte-for-byte); README gains the kickoff prompt; `freshbooks_help` gains a
+  `setup` topic.
+
 ### Changed
 
 - internal: setup flow extracted into a data-driven core; no behavior change
@@ -41,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stderr. The one deliberate exception is unchanged: the loud-failure recovery
   path that prints freshly rotated tokens to stderr when the post-refresh disk
   write fails (CLAUDE.md "Token persistence safety", invariant 4).
+
+### Security
+
+- Credential files are written 0600-at-creation; a rescue-file lifecycle
+  preserves rotated tokens through failed writes (adopt-newer,
+  shred-superseded); token-hygiene tests sweep every headless verb's output
+  streams.
 
 ## [2.2.0] - 2026-07-29
 
