@@ -15,10 +15,11 @@
  *     caller. That is what lets the test suite drive the real dispatcher over a
  *     temp directory instead of the developer's `.env` / `profiles/` / Claude
  *     configs.
- *  2. OUTPUT IS AN ALLOWLIST. `emitOk`/`emitErr` are the ONLY output surface,
- *     and each projects its fields onto a fixed key list (spec §"--json
- *     shapes"). A caught error object, an axios response, or a stray token
- *     handed to an emitter is dropped rather than printed — an axios error
+ *  2. OUTPUT IS AN ALLOWLIST. `emitOk`/`emitErr`/`emitDoctor` are the ONLY
+ *     structured output surface, and each projects its fields onto a fixed key
+ *     list (spec §"--json shapes"). A caught error object, an axios response,
+ *     or a stray token handed to an emitter is dropped rather than printed —
+ *     an axios error
  *     carries `config.data` (client_secret, code, refresh_token) and an
  *     `Authorization` header, so "just serialize the error" is a credential
  *     leak, not a debugging convenience.
@@ -47,10 +48,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { basename, isAbsolute, join, resolve } from "node:path";
 import * as dotenv from "dotenv";
 import { resolveDesktopConfigPath } from "../src/config-paths";
-import { decodeJwtExp } from "../src/freshbooks-client";
+import { decodeJwtExp, inspectTokenHealth } from "../src/freshbooks-client";
 import { buildClaudeServerConfig } from "../src/mcp-config";
 import {
   isMigrated,
@@ -62,10 +63,18 @@ import {
   discoverProfiles,
   normalizeProfileName,
   parseProfileConfig,
+  PROFILE_NAME_RE,
+  type DiscoveryResult,
   type ProfileConfig,
+  type ProfileState,
 } from "../src/profiles";
 import { isServerLockFresh, lockPathFor } from "../src/server-lock";
-import { EXIT8_DIRECTIVE, EXIT8_QUESTION, SETUP_FLOW } from "../src/setup-flow";
+import {
+  EXIT8_DIRECTIVE,
+  EXIT8_QUESTION,
+  SETUP_FLOW,
+  type SetupCtx,
+} from "../src/setup-flow";
 import {
   assertNoForeignDuplicate,
   buildAuthUrl,
@@ -260,6 +269,40 @@ export function emitOk(e: Emit, verb: string, fields: Record<string, unknown>): 
 }
 
 /**
+ * The doctor's report — the one emission whose `ok` is DATA rather than the
+ * run's success (spec §"--json shapes": `doctor: {ok, checks:[…]}`). A doctor
+ * that found problems still ran correctly, so it is neither an `emitOk` (which
+ * hardcodes `ok: true`) nor an `emitErr` (whose single `stepId`/`symptom`/`fix`
+ * envelope cannot carry a list of checks).
+ *
+ * It goes through the SAME `project` allowlist as the other two emitters — the
+ * check objects are plain data by construction, and the projection is what keeps
+ * that true if a future check ever tried to carry something richer.
+ */
+export function emitDoctor(e: Emit, report: DoctorReport): void {
+  const projected = project({ checks: report.checks }, SUCCESS_FIELDS);
+  if (e.json) {
+    console.log(JSON.stringify({ ok: report.ok, verb: "doctor", ...projected }));
+    return;
+  }
+
+  const counts = { pass: 0, warn: 0, fail: 0 };
+  for (const c of report.checks) counts[c.status] += 1;
+  // Only non-empty buckets are named: the Book's `verify` step promises "Every
+  // line should say pass", and a summary reading "0 fail" on a clean run would
+  // put the word on a line that is supposed to be reassuring.
+  const tally = [`${counts.pass} pass`];
+  if (counts.warn) tally.push(`${counts.warn} warn`);
+  if (counts.fail) tally.push(`${counts.fail} fail`);
+  console.error(`doctor: ${report.ok ? "OK" : "ISSUES FOUND"} — ${tally.join(", ")}`);
+
+  for (const c of report.checks) {
+    console.error(`  ${c.status.padEnd(4)} ${c.id} [${c.stepId}]: ${c.detail}`);
+    if (c.fix) console.error(`       fix: ${c.fix}`);
+  }
+}
+
+/**
  * A verb failed. The envelope is fixed (spec §"--json shapes"): `stepId` keys
  * the failure to a Book step, `symptom`/`fix` are the Book's own words for that
  * state where the Book has them, and `message` is the terse technical detail.
@@ -431,6 +474,9 @@ const VERB_FLAGS: Record<string, string[]> = {
   "--install": ["--command-path", "--trust-exec-path"],
   "--print-config": ["--command-path", "--trust-exec-path"],
   "--discard-pending": ["--name"],
+  // The doctor takes no flags: it reports on everything it can see, and a
+  // `--name` on it would look like a filter this surface does not offer.
+  "--doctor": [],
 };
 
 interface ParsedArgs {
@@ -2403,6 +2449,822 @@ function runDiscardPending(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): n
 }
 
 // ---------------------------------------------------------------------------
+// Verb: --doctor
+// ---------------------------------------------------------------------------
+//
+// The `verify` step, as a machine. Every check is KEYED TO A BOOK STEP: the
+// `stepId` is what tells a driving agent which part of SETUP.md a failure sends
+// it back to, and where the Book already words a state for a human the check
+// quotes that row rather than paraphrasing it (`bookFix`), so SETUP.md and the
+// doctor can never say two different things about the same failure.
+//
+// Four rulings hold this section together:
+//
+//   1. IT WRITES NOTHING AND CALLS NOTHING. No network, no token rotation, no
+//      file creation — which is what makes it safe to run in any state,
+//      including the unmigrated-legacy state every other verb refuses (see the
+//      carve-out in `runHeadless`).
+//   2. WARN IS ADVISORY; ONLY `fail` MOVES THE EXIT CODE (spec: "0 all-pass /
+//      1 issues"). The rung-2 bare-`node` command is the reason: it is
+//      EXPECTED there, the Book says so out loud, and a doctor that failed on
+//      it would send an agent into the install→doctor→install loop the spec
+//      exists to prevent.
+//   3. NOTHING IT READS IS ECHOED. Credential files are inspected for PRESENCE
+//      and expiry only, never for values; a config file that will not parse is
+//      DESCRIBED, never quoted (V8 embeds a ~20-character window of the
+//      document in its parse errors, and that file is shared with every other
+//      MCP connector the user has installed — `scripts/setup-core.ts`'s
+//      `parseFailureDetail` comment has the full account).
+//   4. EVERY SCAN IS DEFENSIVE. A doctor that throws while diagnosing is worse
+//      than useless, so each group of checks catches its own failure and
+//      reports it as a check.
+
+/** How a single check came out. Only `fail` makes the run exit 1. */
+export type DoctorStatus = "pass" | "warn" | "fail";
+
+/** One line of the doctor's report (spec §"--json shapes"). */
+export interface DoctorCheck {
+  /** Stable identifier for this check — what a test or an agent looks up. */
+  id: string;
+  /** The Book step this check belongs to; always a real `SETUP_FLOW` id. */
+  stepId: string;
+  status: DoctorStatus;
+  /** What was observed. Never a credential value, never a quoted file byte. */
+  detail: string;
+  /** What to do about it; empty when there is nothing to do. */
+  fix: string;
+}
+
+export interface DoctorReport {
+  /** True when no check failed. Warnings are advisory (ruling 2). */
+  ok: boolean;
+  checks: DoctorCheck[];
+}
+
+/** The oldest a staged pending may be before the doctor calls it stale. */
+const STALE_PENDING_MS = 24 * 60 * 60 * 1000;
+
+/** The `<file>.rescue` suffix (Security §rescue-file lifecycle). */
+const RESCUE_SUFFIX = ".rescue";
+
+/** The Node major this project requires (`package.json` engines). */
+const MIN_NODE_MAJOR = 18;
+
+/** How every fix text spells "run a headless verb" — the Book's own form. */
+const SETUP_CMD = "npx ts-node scripts/setup.ts --headless";
+
+/**
+ * Build one check, validating the Book step id as it goes: `stepFor` throws when
+ * this file and `src/setup-flow.ts` disagree about which steps exist, which is
+ * the same drift guard the verb envelopes use.
+ */
+function doctorCheck(
+  id: string,
+  stepId: string,
+  status: DoctorStatus,
+  detail: string,
+  fix = "",
+): DoctorCheck {
+  return { id, stepId: stepFor(stepId).id, status, detail, fix };
+}
+
+/** The major version number in `18.20.4` / `v20.11.1`, or null if unreadable. */
+export function parseNodeMajor(version: string): number | null {
+  const match = /^v?(\d+)(?:\.|$)/.exec(version.trim());
+  return match ? Number(match[1]) : null;
+}
+
+/** A coarse, human-readable duration — "just now", "42 m", "30 h", "3 d". */
+function formatAge(ms: number): string {
+  const minutes = Math.floor(Math.max(0, ms) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}
+
+/**
+ * The ctx the Book's own `check()` / `appliesIf()` functions run against.
+ *
+ * `legacyNeedsMigration` is computed HERE, by the shared predicate, per
+ * `SetupCtx`'s contract: the Book is pure data and cannot ask what a file
+ * contains, and a surface that omitted the field would silently decide the
+ * migration step does not apply.
+ */
+function bookCtx(paths: SetupPaths): SetupCtx {
+  return {
+    projectDir: paths.rootDir,
+    redirectUri: REDIRECT_URI,
+    exists: existsSync,
+    legacyNeedsMigration: legacyEnvNeedsMigration(paths.baseEnvPath),
+  };
+}
+
+/** Run a Book step's own `check()` and key it to that step. */
+function bookStepCheck(
+  id: string,
+  stepId: string,
+  ctx: SetupCtx,
+  fixSymptom: string,
+): DoctorCheck {
+  const step = stepFor(stepId);
+  const result = step.check!(ctx);
+  return doctorCheck(
+    id,
+    stepId,
+    result.ok ? "pass" : "fail",
+    result.detail,
+    result.ok ? "" : bookFix(stepId, fixSymptom),
+  );
+}
+
+/**
+ * Is this runtime new enough? Deliberately independent of the Book's
+ * `node-install` step, which has no `check()` because its check is the raw
+ * `node --version` command a human types.
+ */
+function nodeVersionCheck(runtimeVersion: string): DoctorCheck {
+  const major = parseNodeMajor(runtimeVersion);
+  const ok = major !== null && major >= MIN_NODE_MAJOR;
+  return doctorCheck(
+    "node-version",
+    "node-install",
+    ok ? "pass" : "fail",
+    ok
+      ? `Node ${runtimeVersion} (${MIN_NODE_MAJOR} or newer required)`
+      : `Node ${runtimeVersion} is older than the required ${MIN_NODE_MAJOR}`,
+    ok
+      ? ""
+      : "Install Node.js 18 or newer from nodejs.org (the big LTS button), then close the " +
+          "Terminal window completely and open a new one — it reads the new installation only " +
+          "on startup.",
+  );
+}
+
+/**
+ * The base `.env`: present, readable, and carrying both app credentials.
+ *
+ * Only KEY NAMES ever reach the detail — the whole point of the file is that it
+ * holds the client secret.
+ */
+function appCredentialsCheck(paths: SetupPaths): DoctorCheck {
+  const id = "app-credentials";
+  const initFix =
+    "Run --init with the Client ID and Client Secret from the FreshBooks Developer Portal " +
+    "(preferably via --client-secret-file, which the CLI deletes itself).";
+
+  if (!existsSync(paths.baseEnvPath)) {
+    return doctorCheck(id, id, "fail", `no base .env at ${paths.baseEnvPath}`, initFix);
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(paths.baseEnvPath, "utf8");
+  } catch (err) {
+    return doctorCheck(
+      id,
+      id,
+      "fail",
+      `${paths.baseEnvPath} could not be read (${errorMessage(err)})`,
+      `Make sure ${paths.baseEnvPath} is readable, then run --doctor again.`,
+    );
+  }
+
+  const env = dotenv.parse(raw);
+  const missing = ["FRESHBOOKS_CLIENT_ID", "FRESHBOOKS_CLIENT_SECRET"].filter(
+    (key) => !(env[key] ?? "").trim(),
+  );
+  if (missing.length) {
+    return doctorCheck(
+      id,
+      id,
+      "fail",
+      `${paths.baseEnvPath} carries no ${missing.join(" and no ")}`,
+      initFix,
+    );
+  }
+  return doctorCheck(
+    id,
+    id,
+    "pass",
+    `${paths.baseEnvPath} carries both app credentials (values not shown)`,
+  );
+}
+
+/**
+ * The agent's scratch file for the client secret (`app-credentials`'
+ * choreography). Its lifetime is supposed to end the moment `--init` starts, so
+ * one still sitting here means a crash before the read — and it holds the app
+ * secret at whatever permissions the agent's file tool used.
+ */
+function secretTmpCheck(paths: SetupPaths): DoctorCheck {
+  const path = join(paths.rootDir, ".client-secret.tmp");
+  if (!existsSync(path)) {
+    return doctorCheck(
+      "client-secret-tmp",
+      "app-credentials",
+      "pass",
+      `no .client-secret.tmp is lingering in ${paths.rootDir}`,
+    );
+  }
+  return doctorCheck(
+    "client-secret-tmp",
+    "app-credentials",
+    "warn",
+    `${path} is still on disk — --init deletes it as it reads it, so this one is left over from ` +
+      "a run that never got that far",
+    "Delete it now: it holds your app secret. It is never read again — --init takes a fresh file.",
+  );
+}
+
+/** The `migrate-legacy` state, decided by the Book's own `appliesIf`. */
+function legacyEnvCheck(paths: SetupPaths, ctx: SetupCtx): DoctorCheck {
+  const step = stepFor("migrate-legacy");
+  if (!step.appliesIf!(ctx)) {
+    return doctorCheck(
+      "legacy-env",
+      "migrate-legacy",
+      "pass",
+      `${paths.baseEnvPath} holds no single-login tokens waiting to be migrated`,
+    );
+  }
+  return doctorCheck(
+    "legacy-env",
+    "migrate-legacy",
+    "fail",
+    `${paths.baseEnvPath} still holds a single-login refresh token and no ${MIGRATED_MARKER} ` +
+      "marker, so every other headless verb refuses to run",
+    step.agentGuidance,
+  );
+}
+
+/** The saved logins: how many, how healthy, and which files were excluded. */
+function profileChecks(paths: SetupPaths): DoctorCheck[] {
+  let discovery: DiscoveryResult;
+  try {
+    // A FRESH scan over the injected paths, never the memoized registry: this
+    // process may have been started before the profile it is asked about.
+    discovery = discoverProfiles(paths.profilesDir, paths.baseEnvPath);
+  } catch (err) {
+    return [
+      doctorCheck(
+        "profiles",
+        "save-login",
+        "fail",
+        `the saved logins in ${paths.profilesDir} could not be read (${errorMessage(err)})`,
+        `Make sure ${paths.profilesDir} and the files in it are readable, then run --doctor again.`,
+      ),
+    ];
+  }
+
+  const checks: DoctorCheck[] = [];
+  const names = [...discovery.profiles.keys()];
+  checks.push(
+    names.length
+      ? doctorCheck(
+          "profiles",
+          "save-login",
+          "pass",
+          `${names.length} login${names.length === 1 ? "" : "s"} configured: ${names.join(", ")}`,
+        )
+      : doctorCheck(
+          "profiles",
+          "save-login",
+          "fail",
+          `no FreshBooks login is configured — ${paths.profilesDir} holds no usable profile file`,
+          `Connect one: run --auth-url, have the user approve the connection, then ${SETUP_CMD} ` +
+            "--add-login --name <nickname> --callback-url '<the pasted address>'.",
+        ),
+  );
+
+  for (const profile of discovery.profiles.values()) {
+    checks.push(profileHealthCheck(profile, discovery));
+  }
+  // Copies before sorting: `discovery` is this scan's own result, but sorting a
+  // structure in place that a caller handed us is a habit worth not forming.
+  for (const file of [...discovery.broken].sort()) {
+    checks.push(brokenProfileCheck(paths, file));
+  }
+  for (const file of [...discovery.duplicates].sort()) {
+    checks.push(duplicateProfileCheck(paths, file, discovery));
+  }
+  return checks;
+}
+
+/** One saved login: quarantine first, then token presence, then JWT expiry. */
+function profileHealthCheck(profile: ProfileState, discovery: DiscoveryResult): DoctorCheck {
+  const id = `profile:${profile.name}`;
+  const health = inspectTokenHealth(profile);
+
+  if (profile.quarantined) {
+    // `collision.file` is the raw on-disk filename and `profile.name` is
+    // lowercased, so compare case-insensitively (the `withAccount` precedent).
+    const own = basename(profile.filePath).toLowerCase();
+    const collision = discovery.collisions.find(
+      (c) => c.file.toLowerCase() === own && c.kind === "same-account",
+    );
+    const other = collision?.collidesWith ?? "another profile file";
+    return doctorCheck(
+      id,
+      "save-login",
+      "fail",
+      `${profile.filePath} is quarantined: it shares its FreshBooks account with ${other}, and ` +
+        "one of the two may be a superseded copy, so this login is refused and never auto-refreshed",
+      `${bookFix("save-login", "quarantined profile mentioned")} If ${basename(
+        profile.filePath,
+      )} really is a separate live login, add the line "# freshbooks-distinct-login" to it; ` +
+        "otherwise delete whichever of the two files is the stale copy.",
+    );
+  }
+
+  if (health.issues.length) {
+    return doctorCheck(
+      id,
+      "save-login",
+      "fail",
+      `${profile.filePath} — ${health.issues.join(", ")}`,
+      `Reconnect this login: ${SETUP_CMD} --reauth --name ${profile.name} --callback-url ` +
+        "'<the pasted address>' after running --auth-url.",
+    );
+  }
+
+  const ids =
+    `account ${profile.config.accountId || "(none)"}, ` +
+    `business ${profile.config.businessId || "(none)"}`;
+  const expiry =
+    health.expirySeconds === null
+      ? "its access token carries no readable expiry"
+      : health.expired
+        ? `its access token expired ${formatAge(-health.expirySeconds * 1000)} ago`
+        : `its access token expires in ${formatAge(health.expirySeconds * 1000)}`;
+
+  // The "refresh it now" advice is the same on every branch; only the reason
+  // differs, and an unreadable expiry is NOT the same story as a near-expiry
+  // one (there, the server cannot prove freshness, so it refreshes on principle).
+  const why =
+    health.expirySeconds === null
+      ? "The expiry cannot be read, so the server refreshes this token on principle rather than " +
+        "trust it"
+      : "Nothing is broken: the server refreshes a token this close to expiry by itself, at " +
+        "startup and before each tool call";
+  return doctorCheck(
+    id,
+    "save-login",
+    health.needsRefresh ? "warn" : "pass",
+    `${profile.filePath} — ${ids}; ${expiry}`,
+    health.needsRefresh
+      ? `${why}. To refresh it now, run \`npm run refresh-tokens -- --profile ${profile.name}\`.`
+      : "",
+  );
+}
+
+/** A file in `profiles/` that discovery could not turn into a login. */
+function brokenProfileCheck(paths: SetupPaths, file: string): DoctorCheck {
+  const stem = file.slice(0, -".env".length).toLowerCase();
+  const reason = PROFILE_NAME_RE.test(stem)
+    ? "it carries no FRESHBOOKS_ACCESS_TOKEN / FRESHBOOKS_REFRESH_TOKEN pair"
+    : "its name is not a usable nickname (lowercase letters, digits, '-' and '_')";
+  return doctorCheck(
+    `profile-file:${file}`,
+    "save-login",
+    "fail",
+    `${join(paths.profilesDir, file)} is not a usable login: ${reason}`,
+    `Repair or remove that file, then add the login with ${SETUP_CMD} --add-login --name ` +
+      "<nickname> --callback-url '<the pasted address>'.",
+  );
+}
+
+/** A file discovery excluded as a duplicate — of a token, or of a nickname. */
+function duplicateProfileCheck(
+  paths: SetupPaths,
+  file: string,
+  discovery: DiscoveryResult,
+): DoctorCheck {
+  const path = join(paths.profilesDir, file);
+  const collision = discovery.collisions.find(
+    (c) => c.file === file && c.kind === "same-token",
+  );
+  if (collision) {
+    return doctorCheck(
+      `profile-file:${file}`,
+      "save-login",
+      "fail",
+      `${path} holds the same refresh token as ${collision.collidesWith}, so it is excluded — ` +
+        "two files sharing one refresh token guarantee a double-rotation lockout",
+      "Delete whichever of the two is the stale copy (they are the same login), then run " +
+        "--doctor again.",
+    );
+  }
+  return doctorCheck(
+    `profile-file:${file}`,
+    "save-login",
+    "fail",
+    `${path} collides with another file's nickname (nicknames are case-insensitive), so it is ` +
+      "excluded",
+    "Rename or remove one of the two files, then run --doctor again.",
+  );
+}
+
+/** Token pairs staged mid-setup, and the exact command that finishes each one. */
+function pendingChecks(paths: SetupPaths): DoctorCheck[] {
+  let staged: ReturnType<typeof listPendings>;
+  try {
+    staged = listPendings(paths.profilesDir);
+  } catch (err) {
+    return [
+      doctorCheck(
+        "staged-pendings",
+        "save-login",
+        "warn",
+        `the staged logins in ${paths.profilesDir} could not be listed (${errorMessage(err)})`,
+        `Make sure ${paths.profilesDir} is readable, then run --doctor again.`,
+      ),
+    ];
+  }
+
+  if (!staged.length) {
+    return [
+      doctorCheck("staged-pendings", "save-login", "pass", "no login is staged mid-setup"),
+    ];
+  }
+
+  return staged.map((pending) => {
+    const discard = `${SETUP_CMD} --discard-pending --name ${pending.name}`;
+    // The BARE resume command, mode-aware (spec §--add-login state machine):
+    // it re-runs discovery on the staged pair and re-emits whichever branch
+    // interrupted the original run.
+    const resume =
+      pending.mode === "add"
+        ? `${SETUP_CMD} --add-login --name ${pending.name}`
+        : pending.mode === "reauth"
+          ? `${SETUP_CMD} --reauth --name ${pending.name}`
+          : null;
+    return doctorCheck(
+      `staged-pending:${pending.name}`,
+      "save-login",
+      pending.ageMs > STALE_PENDING_MS ? "warn" : "pass",
+      `${pendingPath(paths.profilesDir, pending.name)} (mode=${pending.mode}) was staged ` +
+        `${formatAge(pending.ageMs)} ago and holds an unsaved token pair`,
+      resume
+        ? `Finish it with \`${resume}\`, or clear it with \`${discard}\`. Clearing removes the ` +
+            "pair from this computer; it does not revoke the grant at FreshBooks."
+        : `Its mode marker is unreadable, so it cannot be resumed — clear it with \`${discard}\`.`,
+    );
+  });
+}
+
+/**
+ * Lingering `<file>.rescue` copies (Security §rescue-file lifecycle).
+ *
+ * ANY rescue file is reported, not just an undecodable one: its existence means
+ * a guarded token write failed, and the pair inside it may be the only live one.
+ * The base `.env`'s rescue is scanned too — the legacy single-login profile's
+ * own file IS the repo-root `.env`, so its rescue lands outside `profiles/`.
+ */
+function rescueChecks(paths: SetupPaths): DoctorCheck[] {
+  const found: { file: string; path: string; profile: string | null }[] = [];
+
+  const baseRescue = `${paths.baseEnvPath}${RESCUE_SUFFIX}`;
+  if (existsSync(baseRescue)) {
+    // The legacy base-`.env` profile is registered under the name `default`.
+    found.push({ file: basename(baseRescue), path: baseRescue, profile: "default" });
+  }
+  try {
+    if (existsSync(paths.profilesDir)) {
+      for (const file of readdirSync(paths.profilesDir).sort()) {
+        if (!file.endsWith(RESCUE_SUFFIX)) continue;
+        const stem = file.slice(0, -RESCUE_SUFFIX.length);
+        found.push({
+          file,
+          path: join(paths.profilesDir, file),
+          profile: stem.endsWith(".env") ? stem.slice(0, -".env".length) : null,
+        });
+      }
+    }
+  } catch (err) {
+    return [
+      doctorCheck(
+        "rescue-files",
+        "save-login",
+        "warn",
+        `${paths.profilesDir} could not be scanned for rescue files (${errorMessage(err)})`,
+        `Make sure ${paths.profilesDir} is readable, then run --doctor again.`,
+      ),
+    ];
+  }
+
+  if (!found.length) {
+    return [
+      doctorCheck("rescue-files", "save-login", "pass", "no rescue file is lingering"),
+    ];
+  }
+
+  return found.map((rescue) => {
+    let age = "";
+    try {
+      age = ` (${formatAge(Date.now() - statSync(rescue.path).mtimeMs)} old)`;
+    } catch {
+      // A file that vanished between the scan and the stat needs no age.
+    }
+    const force = rescue.profile
+      ? `npm run refresh-tokens -- --profile ${rescue.profile}`
+      : "npm run refresh-tokens";
+    return doctorCheck(
+      `rescue-file:${rescue.file}`,
+      "save-login",
+      "fail",
+      `${rescue.path}${age} holds a rescued token pair: a guarded write to the profile file ` +
+        "failed, and this copy may be the live one",
+      `The next refresh of that login adopts this pair, or clears it if the profile file already ` +
+        `has a newer one. To force that now, run \`${force}\` — which can no-op for up to about ` +
+        "10 minutes while the profile file's own access token is still JWT-fresh; it self-heals " +
+        "at the next refresh that is actually needed.",
+    );
+  });
+}
+
+/** Every file whose loose permissions would expose a credential. */
+function credentialFiles(paths: SetupPaths): string[] {
+  const files: string[] = [];
+  if (existsSync(paths.baseEnvPath)) files.push(paths.baseEnvPath);
+  try {
+    if (existsSync(paths.profilesDir)) {
+      // Everything in profiles/ is token-bearing: profile files, staged
+      // pendings, rescues, and the `.bak` a guarded write leaves behind.
+      for (const file of readdirSync(paths.profilesDir).sort()) {
+        files.push(join(paths.profilesDir, file));
+      }
+    }
+  } catch {
+    // Unreadable directory — the profiles checks already report it.
+  }
+  return files;
+}
+
+/** 0600 on every credential file (Security §Permissions); a no-op on Windows. */
+function permissionCheck(paths: SetupPaths): DoctorCheck {
+  const id = "file-permissions";
+  if (process.platform === "win32") {
+    return doctorCheck(id, "save-login", "pass", "skipped: file modes do not apply on Windows");
+  }
+
+  const loose: string[] = [];
+  let checked = 0;
+  for (const path of credentialFiles(paths)) {
+    try {
+      const stat = statSync(path);
+      if (!stat.isFile()) continue;
+      checked += 1;
+      if (stat.mode & 0o077) loose.push(path);
+    } catch {
+      // Vanished or unreadable — not a permissions verdict.
+    }
+  }
+  if (!loose.length) {
+    return doctorCheck(
+      id,
+      "save-login",
+      "pass",
+      `every credential file is private to you (${checked} checked)`,
+    );
+  }
+  return doctorCheck(
+    id,
+    "save-login",
+    "warn",
+    `these credential files are readable by other accounts on this computer: ${loose.join(", ")}`,
+    `Tighten them: chmod 600 ${loose.join(" ")}`,
+  );
+}
+
+/** One place a launcher entry can live. */
+interface ConfigLocation {
+  key: string;
+  label: string;
+  path: string;
+}
+
+/** What one config location holds. Nothing here quotes a byte of the file. */
+type ConfigEntry =
+  | { state: "absent" }
+  | { state: "unreadable" }
+  | { state: "no-entry" }
+  | { state: "entry"; command: string; args: string[] };
+
+function configLocations(paths: SetupPaths): ConfigLocation[] {
+  return [
+    { key: "desktop", label: "Claude Desktop config", path: paths.desktopConfigPath },
+    { key: "mcp-json", label: "project .mcp.json", path: paths.mcpJsonPath },
+    { key: "claude-json", label: "Claude Code user config", path: paths.claudeJsonPath },
+  ];
+}
+
+/**
+ * Read one config file's `mcpServers.freshbooks` entry, best-effort.
+ *
+ * A read or parse failure is a STATE, not an error to report: `~/.claude.json`
+ * in particular is the CLI's file, not this project's, and a doctor that threw
+ * on someone else's malformed config would diagnose nothing. Crucially, the
+ * parse error itself is discarded rather than reported — V8 embeds a window of
+ * the DOCUMENT in it, and this file holds other connectors' credentials.
+ */
+function readConfigEntry(path: string): ConfigEntry {
+  if (!existsSync(path)) return { state: "absent" };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return { state: "unreadable" };
+  }
+  const servers = (parsed as { mcpServers?: unknown } | null)?.mcpServers;
+  const entry = (servers as Record<string, unknown> | undefined)?.freshbooks as
+    | { command?: unknown; args?: unknown }
+    | undefined;
+  if (!entry || typeof entry !== "object") return { state: "no-entry" };
+  return {
+    state: "entry",
+    command: typeof entry.command === "string" ? entry.command.trim() : "",
+    args: Array.isArray(entry.args) ? entry.args.filter((a) => typeof a === "string") : [],
+  };
+}
+
+/** Could Claude actually START the server from this entry? */
+function isResolvable(entry: ConfigEntry): boolean {
+  return (
+    entry.state === "entry" &&
+    entry.command !== "" &&
+    entry.args.length > 0 &&
+    existsSync(entry.args[0])
+  );
+}
+
+/**
+ * The config checks: one aggregate verdict plus a line per problem found at a
+ * location that DOES carry an entry.
+ *
+ * The aggregate fails only when NO location carries a startable entry (spec:
+ * "fail only when no location carries a resolvable entry") — a Desktop-only user
+ * legitimately has no `.mcp.json`, and saying so per location as a failure would
+ * make a correct install look broken.
+ */
+function configChecks(paths: SetupPaths): DoctorCheck[] {
+  const segments: string[] = [];
+  const extra: DoctorCheck[] = [];
+  let anyResolvable = false;
+
+  for (const location of configLocations(paths)) {
+    const entry = readConfigEntry(location.path);
+    const where = `${location.label} (${location.path})`;
+
+    if (entry.state === "absent") {
+      segments.push(`${where}: not present`);
+      continue;
+    }
+    if (entry.state === "unreadable") {
+      segments.push(`${where}: could not be read as JSON`);
+      continue;
+    }
+    if (entry.state === "no-entry") {
+      segments.push(`${where}: no freshbooks entry`);
+      continue;
+    }
+
+    const resolvable = isResolvable(entry);
+    anyResolvable = anyResolvable || resolvable;
+    segments.push(
+      `${where}: freshbooks → ${entry.command || "(no command)"} ${entry.args.join(" ")}`.trim() +
+        (resolvable ? "" : " [cannot start]"),
+    );
+    extra.push(...configEntryChecks(location, entry, where));
+  }
+
+  const aggregate = doctorCheck(
+    "config",
+    "install-config",
+    anyResolvable ? "pass" : "fail",
+    segments.join("; "),
+    anyResolvable
+      ? ""
+      : "No Claude configuration here carries an entry that could start this server: run " +
+          `\`${SETUP_CMD} --install desktop\` (or --install code) from the project folder. If a ` +
+          `previous session already reported that the install succeeded: ${bookFix(
+            "verify",
+            "config entry missing",
+          )}`,
+  );
+  return [aggregate, ...extra];
+}
+
+/** The per-location command / dist-path checks for a location that HAS an entry. */
+function configEntryChecks(
+  location: ConfigLocation,
+  entry: Extract<ConfigEntry, { state: "entry" }>,
+  where: string,
+): DoctorCheck[] {
+  const checks: DoctorCheck[] = [];
+  // `claude-json` is the CLI's user-scope file, which `--install code` writes
+  // through the CLI; the other two location keys are install targets already.
+  const target = location.key === "claude-json" ? "code" : location.key;
+  const rewrite =
+    `Re-run \`${SETUP_CMD} --install ${target}\` from the project folder to rewrite the entry.`;
+
+  if (!entry.command) {
+    checks.push(
+      doctorCheck(
+        `config-command:${location.key}`,
+        "install-config",
+        "fail",
+        `${where}: the freshbooks entry names no command, so nothing can launch it`,
+        rewrite,
+      ),
+    );
+  } else if (!isAbsolute(entry.command)) {
+    // The two causes the Book distinguishes, told apart by the same probe
+    // `--install` would run: if an absolute node exists here, today's install
+    // would have written it, so a bare command is a LEGACY entry. If none
+    // exists, a bare command is exactly what --install writes — the deliberate
+    // sandbox fallback, expected and not an error (hence: warn, never fail).
+    const probe = selectCommandPath({});
+    const detail = probe.caveat
+      ? `${where}: the entry's command "${entry.command}" is not an absolute path, and no ` +
+        "absolute node was found at the standard locations either — this is the deliberate " +
+        "fallback, expected here, and re-running --install would write the same thing"
+      : `${where}: the entry's command "${entry.command}" is not an absolute path, but an ` +
+        `absolute node exists at ${probe.command} — this looks like a legacy entry`;
+    checks.push(
+      doctorCheck(
+        `config-command:${location.key}`,
+        "install-config",
+        "warn",
+        detail,
+        bookFix("verify", "command isn't an absolute path"),
+      ),
+    );
+  } else if (!existsSync(entry.command)) {
+    checks.push(
+      doctorCheck(
+        `config-command:${location.key}`,
+        "install-config",
+        "fail",
+        `${where}: the entry launches ${entry.command}, which is not on this computer`,
+        `${rewrite} It probes the standard locations; pass --command-path <absolute path to ` +
+          "node> to name one yourself.",
+      ),
+    );
+  }
+
+  const serverPath = entry.args[0];
+  if (!serverPath || !existsSync(serverPath)) {
+    checks.push(
+      doctorCheck(
+        `config-args:${location.key}`,
+        "install-config",
+        "fail",
+        `${where}: the entry points at ${serverPath ?? "(no file)"}, which does not exist`,
+        `${bookFix("build", "Cannot find module")} ${rewrite}`,
+      ),
+    );
+  }
+  return checks;
+}
+
+/**
+ * Run every check. Pure diagnosis: nothing here writes, rotates, or calls
+ * FreshBooks, which is what lets it run in states the other verbs refuse.
+ *
+ * `runtimeVersion` is an injected seam (the `selectCommandPath` precedent) so
+ * the too-old-Node branch is testable on a runtime that is not too old;
+ * production callers take this process's own version.
+ */
+export function runDoctor(
+  paths: SetupPaths,
+  runtimeVersion: string = process.versions.node,
+): DoctorReport {
+  const ctx = bookCtx(paths);
+  const checks: DoctorCheck[] = [
+    nodeVersionCheck(runtimeVersion),
+    bookStepCheck("node-modules", "npm-install", ctx, "Cannot find module 'ts-node'"),
+    bookStepCheck("build", "build", ctx, "Cannot find module"),
+    appCredentialsCheck(paths),
+    secretTmpCheck(paths),
+    legacyEnvCheck(paths, ctx),
+    ...profileChecks(paths),
+    ...pendingChecks(paths),
+    ...rescueChecks(paths),
+    permissionCheck(paths),
+    ...configChecks(paths),
+  ];
+  // Warnings are advisory (ruling 2): only a failure moves the exit code.
+  return { ok: checks.every((c) => c.status !== "fail"), checks };
+}
+
+function runDoctorVerb(emit: Emit, paths: SetupPaths): number {
+  const report = runDoctor(paths);
+  emitDoctor(emit, report);
+  return report.ok ? EXIT.OK : EXIT.FAIL;
+}
+
+// ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
 
@@ -2453,7 +3315,14 @@ export async function runHeadless(
   // any verb that rotated them while the wizard later migrates would burn the
   // family. The Book records migration as human-only (`migrate-legacy`, who:
   // "human"), so the refusal is uniform and the recovery is the wizard.
-  if (legacyEnvNeedsMigration(paths.baseEnvPath)) {
+  //
+  // `--doctor` is the ONE carve-out, for two reasons that both cut the same way:
+  // it writes nothing and calls nothing (so none of the above can happen), and
+  // REPORTING this state is one of its own checks — the Book's own recovery
+  // script for exit 9 is "run `npm run setup`, then resume with `--doctor`", and
+  // the spec fixes the doctor's exits at 0 or 1. Refusing it here would make the
+  // state undiagnosable by the very verb sent to diagnose it.
+  if (parsed.verb !== "--doctor" && legacyEnvNeedsMigration(paths.baseEnvPath)) {
     const step = stepFor("migrate-legacy");
     emitErr(
       emit,
@@ -2525,6 +3394,8 @@ async function dispatch(
       return runPrintConfig(parsed, emit, paths);
     case "--discard-pending":
       return runDiscardPending(parsed, emit, paths);
+    case "--doctor":
+      return runDoctorVerb(emit, paths);
     default:
       // A verb the Book already names but this build does not implement yet
       // (the remaining Phase-2 tasks fill these in).
