@@ -50,7 +50,7 @@ import { Client } from "@freshbooks/api";
 import { writeAtomic, readTokenMarkers } from "../src/atomic-write";
 import { buildClaudeCodeServerJson, buildClaudeServerConfig } from "../src/mcp-config";
 import { applyTokensToEnv } from "../src/freshbooks-client";
-import { ProfileWriteError, writeNewProfile } from "../src/migrate";
+import { ProfileWriteError, profileNameFromFile, writeNewProfile } from "../src/migrate";
 import { parseProfileConfig, type ProfileConfig } from "../src/profiles";
 
 /**
@@ -256,6 +256,7 @@ export function assertNoForeignDuplicate(
         "DUPLICATE_TOKEN",
         `Refresh token already present in profiles/${file} — refusing to write profiles/${name}.env. ` +
           `Two profile files sharing one refresh token guarantee a double-rotation lockout.`,
+        profileNameFromFile(file),
       );
     }
   }

@@ -446,6 +446,9 @@ describe("--reauth: the gates that run before the exchange", () => {
       errs = [];
       expect(await runHeadless(resumeArgv("main", ...extra), paths)).toBe(EXIT.USAGE);
       expect(envelope().fix).toContain(extra[0]);
+      // `--reauth` is not in any Book step's `verbs` list, so this rejection
+      // runs on the dispatcher's fallback — which still has to name a step.
+      expect(envelope().stepId).toBe("save-login");
     }
 
     expect(discoverMemberships).not.toHaveBeenCalled();
@@ -923,6 +926,10 @@ describe("--discard-pending", () => {
     const code = await runHeadless([...discardArgv("main"), "--account-id", "ACC-1"], paths);
 
     expect(code).toBe(EXIT.USAGE);
+    // The Book maps no step to this verb, so the flag rejection has to fall
+    // back — and an empty stepId would strand a driving agent with no part of
+    // SETUP.md to return to.
+    expect(envelope().stepId).toBe("save-login");
     expect(loadPending(paths.profilesDir, "main")).not.toBeNull();
   });
 

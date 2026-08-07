@@ -58,6 +58,9 @@ const ACCESS_FRESH = jwt(NOW_SEC + 3600, "ACCESS-FRESH-CANARY-4d81ba");
 const ACCESS_EXPIRING = jwt(NOW_SEC + 120, "ACCESS-SOON-CANARY-3fe907");
 const ACCESS_EXPIRED = jwt(NOW_SEC - 3600, "ACCESS-DEAD-CANARY-c62f18");
 const ACCESS_OPAQUE = "ACCESS-OPAQUE-CANARY-a90e7b31-DO-NOT-PRINT-EVER";
+/** Sub-minute either side of now — where the coarse formatter says "just now". */
+const ACCESS_JUST_EXPIRED = jwt(NOW_SEC - 5, "ACCESS-JUST-DEAD-CANARY-1f7c22");
+const ACCESS_JUST_ALIVE = jwt(NOW_SEC + 5, "ACCESS-JUST-ALIVE-CANARY-2b8d41");
 const ACCESS_RESCUE = jwt(NOW_SEC + 3600, "ACCESS-RESCUE-CANARY-70bd25");
 const ACCESS_PENDING = jwt(NOW_SEC + 3600, "ACCESS-PENDING-CANARY-51ac9e");
 const ACCESS_LEGACY = jwt(NOW_SEC + 3600, "ACCESS-LEGACY-CANARY-b3d740");
@@ -74,6 +77,8 @@ const CANARIES = [
   ACCESS_EXPIRING,
   ACCESS_EXPIRED,
   ACCESS_OPAQUE,
+  ACCESS_JUST_EXPIRED,
+  ACCESS_JUST_ALIVE,
   ACCESS_RESCUE,
   ACCESS_PENDING,
   ACCESS_LEGACY,
@@ -515,6 +520,24 @@ describe("--doctor: profiles", () => {
     expect(check.detail).toContain("expired");
   });
 
+  it("says when a token expired seconds ago without saying 'just now ago'", async () => {
+    const paths = healthy();
+    // Sub-minute either side of now is where the coarse duration formatter
+    // answers with an instant ("just now"), which cannot take "… ago" or "in …".
+    seedProfile(paths, "main", { accessToken: ACCESS_JUST_EXPIRED });
+    seedProfile(paths, "acme", {
+      accessToken: ACCESS_JUST_ALIVE,
+      refreshToken: REFRESH_ACME,
+      accountId: "AC2",
+    });
+
+    const checks = runDoctor(paths).checks;
+
+    expect(byId(checks, "profile:main").detail).toContain("expired just now");
+    expect(byId(checks, "profile:main").detail).not.toContain("just now ago");
+    expect(byId(checks, "profile:acme").detail).not.toContain("in just now");
+  });
+
   it("warns when the access token carries no readable expiry", async () => {
     const paths = healthy();
     seedProfile(paths, "main", { accessToken: ACCESS_OPAQUE });
@@ -629,6 +652,22 @@ describe("--doctor: staged pendings", () => {
     expect(check.fix).not.toContain("--add-login");
   });
 
+  it("warns on a damaged pending however young it is — 'pass' contradicts 'clear it'", async () => {
+    const paths = healthy();
+    writeSecret(
+      join(paths.profilesDir, "acme.env.pending"),
+      `FRESHBOOKS_ACCESS_TOKEN=${ACCESS_PENDING}\nFRESHBOOKS_REFRESH_TOKEN=${REFRESH_PENDING}\n`,
+    );
+
+    const check = byId(runDoctor(paths).checks, "staged-pending:acme");
+
+    // Staged seconds ago, so the staleness clock says nothing — but the only
+    // advice available is "clear it", and a passing check that tells you to
+    // clear something is a check the reader is entitled to ignore.
+    expect(check.status).toBe("warn");
+    expect(check.fix).toContain("--discard-pending --name acme");
+  });
+
   it("offers only the discard when the mode marker is unreadable", async () => {
     const paths = healthy();
     // A pending whose markers were damaged still holds a live pair on disk.
@@ -705,6 +744,29 @@ describe("--doctor: lingering rescue files", () => {
 
     expect(check.status).toBe("pass");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps the base .env's rescue when profiles/ cannot be scanned",
+    async () => {
+      const paths = healthy();
+      writeSecret(
+        `${paths.baseEnvPath}.rescue`,
+        `FRESHBOOKS_ACCESS_TOKEN=${ACCESS_RESCUE}\nFRESHBOOKS_REFRESH_TOKEN=${REFRESH_RESCUE}\n`,
+      );
+      chmodSync(paths.profilesDir, 0o000);
+
+      try {
+        const report = runDoctor(paths);
+
+        // The unreadable directory is reported — and so is the rescue already
+        // found outside it. Dropping the latter hides a live token pair.
+        expect(byId(report.checks, "rescue-files").status).toBe("warn");
+        expect(byId(report.checks, "rescue-file:.env.rescue").status).toBe("fail");
+      } finally {
+        chmodSync(paths.profilesDir, 0o755);
+      }
+    },
+  );
 });
 
 describe("--doctor: file permissions", () => {

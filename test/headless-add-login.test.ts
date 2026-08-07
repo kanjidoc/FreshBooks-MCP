@@ -559,6 +559,7 @@ describe("--add-login: the branches that keep the staged pair", () => {
     const code = await runHeadless(addLoginArgv(), paths);
 
     expect(code).toBe(EXIT.FAIL);
+    expect(envelope().stepId).toBe("save-login");
     expect(envelope().message).toBe("EIO: the disk gave up mid-write");
     // The whole point of staging: the freshly minted pair is still on disk.
     expect(loadPending(paths.profilesDir, "main")).toMatchObject({
@@ -583,6 +584,7 @@ describe("--add-login: the branches that keep the staged pair", () => {
 
       expect(code).toBe(EXIT.FAIL);
       expect(envelope().ok).toBe(false);
+      expect(envelope().stepId).toBe("save-login");
       expect(discoverMemberships).not.toHaveBeenCalled();
       expectNoCanaryMaterial(allOutput());
     },
@@ -613,6 +615,29 @@ describe("--add-login: the resume grammar", () => {
     expect(discoverMemberships).not.toHaveBeenCalled();
     expect(loadPending(paths.profilesDir, "acme")).not.toBeNull();
     expect(loadPending(paths.profilesDir, "beta")).not.toBeNull();
+    expectNoCanaryMaterial(allOutput());
+  });
+
+  it("does not offer a damaged pending as resumable — it can only be discarded", async () => {
+    const paths = fixture();
+    stageAdd(paths, "acme");
+    // Markers damaged: `listPendings` still reports it (no token-bearing file
+    // may linger unseen), but `loadPending` reads it as nothing staged — so
+    // listing it under "can be resumed" sends an agent around this same loop.
+    mkdirSync(paths.profilesDir, { recursive: true });
+    writeFileSync(
+      pendingPath(paths.profilesDir, "broken"),
+      `FRESHBOOKS_ACCESS_TOKEN=${STAGED_ACCESS}\nFRESHBOOKS_REFRESH_TOKEN=${STAGED_REFRESH}\n`,
+    );
+
+    expect(await runHeadless(resumeArgv("main"), paths)).toBe(EXIT.USAGE);
+
+    const fix: string = envelope().fix;
+    // Only the readable one is offered for resume; the damaged one is named
+    // separately, with the one command that can actually deal with it.
+    expect(fix).toMatch(/can be resumed: acme\./);
+    expect(fix).toContain("--discard-pending");
+    expect(fix).toMatch(/broken/);
     expectNoCanaryMaterial(allOutput());
   });
 
@@ -668,6 +693,24 @@ describe("--add-login: the resume grammar", () => {
 
     expect(code).toBe(EXIT.USAGE);
     expect(envelope().fix).toContain("--confirm-different-user");
+    expect(discoverMemberships).not.toHaveBeenCalled();
+    expect(saveProfile).not.toHaveBeenCalled();
+    expect(loadPending(paths.profilesDir, "acme2")).not.toBeNull();
+    expectNoCanaryMaterial(allOutput());
+  });
+
+  it("requires --distinct-login alongside --confirm-different-user (the mirror)", async () => {
+    // The pair is one gesture. Silently treating the confirmation alone as
+    // "unconfirmed" re-emits exit 8 and reads to a driving agent as though the
+    // human's answer was not accepted — so the grammar refuses it by name, the
+    // same way the opposite half is refused.
+    const paths = fixture();
+    stageAdd(paths, "acme2");
+
+    const code = await runHeadless(resumeArgv("acme2", "--confirm-different-user"), paths);
+
+    expect(code).toBe(EXIT.USAGE);
+    expect(envelope().fix).toContain("--distinct-login");
     expect(discoverMemberships).not.toHaveBeenCalled();
     expect(saveProfile).not.toHaveBeenCalled();
     expect(loadPending(paths.profilesDir, "acme2")).not.toBeNull();
@@ -1010,7 +1053,10 @@ describe("--add-login: the save-stage backstop", () => {
 
     expect(code).toBe(EXIT.DUP_PAIR);
     expect(code).toBe(5);
-    expect(envelope().fix).toContain("--reauth");
+    // The fix names the login that actually holds the token, not a placeholder
+    // the agent would have to resolve by reading every profile file.
+    expect(envelope().fix).toContain("--reauth --name other");
+    expect(envelope().fix).not.toContain("<that login's nickname>");
     expect(readFileSync(other, "utf8")).toBe(before);
     expect(existsSync(join(paths.profilesDir, "main.env"))).toBe(false);
     // Exit 5 discards the staged pair: the live profile keeps its own family.
