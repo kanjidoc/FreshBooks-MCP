@@ -45,9 +45,16 @@ import {
   MIGRATED_MARKER,
   ProfileWriteError,
 } from "../src/migrate";
-import { normalizeProfileName, parseProfileConfig, type ProfileConfig } from "../src/profiles";
+import {
+  discoverProfiles,
+  normalizeProfileName,
+  parseProfileConfig,
+  type ProfileConfig,
+} from "../src/profiles";
+import { isServerLockFresh, lockPathFor } from "../src/server-lock";
 import { EXIT8_DIRECTIVE, EXIT8_QUESTION, SETUP_FLOW } from "../src/setup-flow";
 import {
+  assertNoForeignDuplicate,
   buildAuthUrl,
   buildOAuthClient,
   buildTokenClient,
@@ -56,10 +63,13 @@ import {
   extractCodeFromUrl,
   listPendings,
   loadPending,
+  pendingPath,
+  replaceProfileTokens,
   saveProfile,
   shredPending,
   stagePending,
   type Memberships,
+  type PendingRecord,
 } from "./setup-core";
 // The wizard owns these three; importing them here (rather than re-deriving
 // them) keeps ONE definition of what a base `.env` contains. This is a module
@@ -397,6 +407,11 @@ const VERB_FLAGS: Record<string, string[]> = {
     "--distinct-login",
     "--confirm-different-user",
   ],
+  // `--account-id` / `--business-id` are deliberately ABSENT here: for a re-auth
+  // discovery IS the wrong-account protection (spec exit-11 row), so there is no
+  // way to assert ids past it. See `runReauth`'s ruling 1.
+  "--reauth": ["--name", "--callback-url"],
+  "--discard-pending": ["--name"],
 };
 
 interface ParsedArgs {
@@ -1076,59 +1091,15 @@ async function runAddLoginResume(
   if (!credentials) return missingCredentials(emit, verb, paths);
 
   // (3) The staged-token refresh, re-staged before anything else can fail.
-  let pair = { accessToken: pending.accessToken, refreshToken: pending.refreshToken };
-  if (stagedTokenNeedsRefresh(pair.accessToken)) {
-    let rotated: { accessToken: string; refreshToken: string };
-    try {
-      const result = await buildTokenClient(
-        credentials.clientId,
-        credentials.clientSecret,
-        credentials.redirectUri,
-        pair.accessToken,
-        pair.refreshToken,
-      ).refreshAccessToken();
-      if (!result) throw new Error("FreshBooks returned no tokens for the staged refresh token");
-      rotated = { accessToken: result.accessToken, refreshToken: result.refreshToken };
-    } catch (err) {
-      emitErr(
-        emit,
-        verb,
-        EXIT.CODE_REJECTED,
-        stepFor("authorize").id,
-        "The staged authorization has expired and FreshBooks would not renew it.",
-        `Clear it with --discard-pending --name ${name}, then run --auth-url, have the user ` +
-          "approve the connection afresh, and pass the new address to --add-login.",
-        errorMessage(err),
-      );
-      return EXIT.CODE_REJECTED;
-    }
-
-    try {
-      stagePending(paths.profilesDir, name, {
-        mode: "add",
-        stagedAt: new Date().toISOString(),
-        accessToken: rotated.accessToken,
-        refreshToken: rotated.refreshToken,
-      });
-    } catch (err) {
-      // The rotation already happened, so what is on disk is a revoked pair and
-      // every later resume would fail on it. Say so instead of continuing on a
-      // pair only this process holds.
-      emitErr(
-        emit,
-        verb,
-        EXIT.FAIL,
-        saveStep.id,
-        `The renewed authorization could not be re-staged in ${paths.profilesDir}, so the staged ` +
-          "pair on disk is the revoked one.",
-        `Clear it with --discard-pending --name ${name}, then run --auth-url and pass the new ` +
-          "address to --add-login.",
-        errorMessage(err),
-      );
-      return EXIT.FAIL;
-    }
-    pair = rotated;
-  }
+  const renewed = await renewStagedPairIfNeeded(emit, paths, {
+    verbFlag: "--add-login",
+    name,
+    mode: "add",
+    credentials,
+    pair: { accessToken: pending.accessToken, refreshToken: pending.refreshToken },
+  });
+  if (!renewed.ok) return renewed.code;
+  const pair = renewed.pair;
 
   // `--account-id` skips discovery entirely: the ids are the user's assertion,
   // which is the whole point of the flag (it is the exit-11 escape hatch).
@@ -1164,6 +1135,98 @@ function stagedTokenNeedsRefresh(accessToken: string): boolean {
   const exp = decodeJwtExp(accessToken);
   if (exp === null) return false;
   return exp - Math.floor(Date.now() / 1000) < STAGED_TOKEN_BUFFER_SECONDS;
+}
+
+/** A token pair in flight — staged, renewed, or about to be written. */
+interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+}
+
+/** A staging step's outcome: the pair to carry on with, or the exit code emitted. */
+type StagedPair = { ok: true; pair: TokenPair } | { ok: false; code: number };
+
+/**
+ * Renew a staged access token that is at (or near) expiry, and re-stage the
+ * rotated pair IMMEDIATELY — shared by both resuming verbs, because both fail
+ * the same way without it.
+ *
+ * The staged pair is its own token family: FreshBooks rotates the refresh token
+ * on every renewal, so leaving the OLD pair in the pending after a rotation
+ * would mean the next resume presents a revoked refresh token and burns the
+ * grant. Hence the re-stage happens before anything else can fail, and a failed
+ * re-stage is reported rather than swallowed — at that point what is on disk is
+ * the revoked pair, and only this process holds the live one.
+ *
+ * `verbFlag` and `mode` are the only differences between the two callers: the
+ * fix texts name the verb the user should re-run, and the re-staged pending must
+ * keep the mode marker its own resume path checks.
+ */
+async function renewStagedPairIfNeeded(
+  emit: Emit,
+  paths: SetupPaths,
+  args: {
+    verbFlag: string;
+    name: string;
+    mode: PendingRecord["mode"];
+    credentials: AppCredentials;
+    pair: TokenPair;
+  },
+): Promise<StagedPair> {
+  const { verbFlag, name, mode, credentials, pair } = args;
+  const verb = verbFlag.slice(2);
+  if (!stagedTokenNeedsRefresh(pair.accessToken)) return { ok: true, pair };
+
+  let rotated: TokenPair;
+  try {
+    const result = await buildTokenClient(
+      credentials.clientId,
+      credentials.clientSecret,
+      credentials.redirectUri,
+      pair.accessToken,
+      pair.refreshToken,
+    ).refreshAccessToken();
+    if (!result) throw new Error("FreshBooks returned no tokens for the staged refresh token");
+    rotated = { accessToken: result.accessToken, refreshToken: result.refreshToken };
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.CODE_REJECTED,
+      stepFor("authorize").id,
+      "The staged authorization has expired and FreshBooks would not renew it.",
+      `Clear it with --discard-pending --name ${name}, then run --auth-url, have the user ` +
+        `approve the connection afresh, and pass the new address to ${verbFlag}.`,
+      errorMessage(err),
+    );
+    return { ok: false, code: EXIT.CODE_REJECTED };
+  }
+
+  try {
+    stagePending(paths.profilesDir, name, {
+      mode,
+      stagedAt: new Date().toISOString(),
+      accessToken: rotated.accessToken,
+      refreshToken: rotated.refreshToken,
+    });
+  } catch (err) {
+    // The rotation already happened, so what is on disk is a revoked pair and
+    // every later resume would fail on it. Say so instead of continuing on a
+    // pair only this process holds.
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      stepFor("save-login").id,
+      `The renewed authorization could not be re-staged in ${paths.profilesDir}, so the staged ` +
+        "pair on disk is the revoked one.",
+      `Clear it with --discard-pending --name ${name}, then run --auth-url and pass the new ` +
+        `address to ${verbFlag}.`,
+      errorMessage(err),
+    );
+    return { ok: false, code: EXIT.FAIL };
+  }
+  return { ok: true, pair: rotated };
 }
 
 /** What the discover-and-save stage needs, whichever form got it there. */
@@ -1468,6 +1531,536 @@ function findProfileWithAccountId(
 }
 
 // ---------------------------------------------------------------------------
+// Verb: --reauth
+// ---------------------------------------------------------------------------
+//
+// Re-auth is `--add-login`'s discipline pointed at a login that already exists
+// (spec §Surface 2, the `--reauth` row):
+//
+//   name must EXIST                            → exit 2, pointing at --add-login
+//   exchange(code)                             → exit 3, nothing staged
+//   STAGE profiles/<name>.env.pending (reauth) ← before anything that can fail
+//   discover (users.me on the staged pair)     → exit 11, pending KEPT
+//   SET-CONTAINMENT: the stored accountId is among the memberships
+//                                              → exit 12 on a miss, pending KEPT
+//   duplicate-token guard vs OTHER profiles    → exit 5
+//   replace ONLY the token lines + shred the pending → exit 0
+//
+// Four rulings separate it from `--add-login` and must not be "tidied":
+//
+//   1. THERE IS NO DISCOVERY SKIP. `--add-login` offers `--account-id` as its
+//      exit-11 escape hatch; for a re-auth discovery IS the wrong-account
+//      protection, so the flag is deliberately absent (`VERB_FLAGS`) and a
+//      persistent failure is retried later or discarded.
+//   2. A LIVE SERVER WARNS, NEVER REFUSES. The dominant trigger for a re-auth is
+//      a dead token family, which no running server can revert; racing a live
+//      one costs at worst a working login on the OLD family — never a lockout.
+//      So the lock produces the spec's restart sentence and the run continues.
+//   3. THE IDS ARE NEVER REWRITTEN. Containment proves the login still holds the
+//      saved account; it does not license changing which account the profile
+//      means. A login that moved accounts is a new profile, not a re-auth.
+//   4. THE REPLACE IS THE GUARDED WRITER (`replaceProfileTokens`), which also
+//      shreds `<profile>.rescue` as superseded (Security §rescue-file
+//      lifecycle's precedence rule). That shred lives inside the core function
+//      on purpose — every guarded token write owes it, not just this verb.
+
+async function runReauth(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promise<number> {
+  const verb = "reauth";
+  const saveStep = stepFor("save-login");
+  const nameStep = stepFor("nickname");
+
+  const rawName = parsed.flags.get("--name");
+  if (typeof rawName !== "string") {
+    return usage(
+      emit,
+      verb,
+      nameStep.id,
+      "--reauth needs the nickname of the login to reconnect.",
+      "Re-run with --name <nickname>; --doctor lists the saved logins by nickname.",
+    );
+  }
+
+  let name: string;
+  try {
+    name = normalizeProfileName(rawName);
+  } catch {
+    // An unusable name cannot belong to a saved profile, so this is the same
+    // "nothing to reconnect" state as a missing file: exit 2 pointing at the
+    // verb that CREATES logins (spec exit-2 row).
+    return noSuchLogin(emit, paths, rawName);
+  }
+
+  const profilePath = join(paths.profilesDir, `${name}.env`);
+  if (!existsSync(profilePath)) return noSuchLogin(emit, paths, name);
+
+  const stored = parseProfileConfig(safeRead(profilePath));
+  if (!stored) {
+    // The file is there but carries no token pair, so there is nothing to
+    // replace in place — `applyTokensToEnv` would refuse a moment later anyway,
+    // and refusing here keeps an authorization code from being spent on it.
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      saveStep.id,
+      `The file profiles/${name}.env carries no token pair, so there is nothing to reconnect.`,
+      "Run --doctor — it reports the malformed profile. Repair or remove that file, then add " +
+        "the login with --add-login.",
+      `${profilePath} has no FRESHBOOKS_ACCESS_TOKEN / FRESHBOOKS_REFRESH_TOKEN pair.`,
+    );
+    return EXIT.FAIL;
+  }
+
+  // Ruling 2 — before any network call and before any write, never a refusal.
+  warnIfServerIsRunning(paths);
+
+  const credentials = readAppCredentials(paths);
+  if (!credentials) return missingCredentials(emit, verb, paths);
+
+  const callbackUrl = parsed.flags.get("--callback-url");
+  const staged =
+    typeof callbackUrl === "string"
+      ? await exchangeAndStageReauth(emit, paths, name, callbackUrl, credentials)
+      : await resumeStagedReauth(emit, paths, name, credentials);
+  if (!staged.ok) return staged.code;
+
+  return discoverAndReplace(emit, paths, {
+    name,
+    profilePath,
+    stored,
+    credentials,
+    pair: staged.pair,
+  });
+}
+
+/** Exit 2 — `--reauth` names a login that is not saved (spec exit-2 row). */
+function noSuchLogin(emit: Emit, paths: SetupPaths, name: string): number {
+  const saved = savedProfileNames(paths.profilesDir);
+  return usage(
+    emit,
+    "reauth",
+    stepFor("nickname").id,
+    `No login named "${name}" is saved, so there is nothing to reconnect.`,
+    (saved.length
+      ? `These logins are saved: ${saved.join(", ")}. Re-run --reauth with one of those names. `
+      : "No logins are saved yet. ") +
+      "To connect a NEW login, run --auth-url and pass the pasted address to --add-login --name " +
+      "<nickname> --callback-url '<the pasted address>'.",
+  );
+}
+
+/** The nicknames of every saved profile — a fresh scan, never the registry. */
+function savedProfileNames(profilesDir: string): string[] {
+  if (!existsSync(profilesDir)) return [];
+  return readdirSync(profilesDir)
+    .filter((file) => file.endsWith(".env"))
+    .sort()
+    .map((file) => file.slice(0, -".env".length));
+}
+
+/**
+ * The live-server warning (ruling 2). Stderr in BOTH output modes: it is a human
+ * warning, and a `--json` run's stdout must stay exactly one object per
+ * emission. The restart sentence is the spec's own words.
+ */
+function warnIfServerIsRunning(paths: SetupPaths): void {
+  if (!isServerLockFresh(lockPathFor(paths.rootDir))) return;
+  console.error(
+    "Warning: a FreshBooks MCP server is running from this project folder. The re-auth is not " +
+      "refused for that — the new tokens are written either way — but restart Claude after " +
+      "re-auth so it picks up the new login.",
+  );
+}
+
+/** The `--callback-url` form: exchange the code, stage the pair as `reauth`. */
+async function exchangeAndStageReauth(
+  emit: Emit,
+  paths: SetupPaths,
+  name: string,
+  callbackUrl: string,
+  credentials: AppCredentials,
+): Promise<StagedPair> {
+  const verb = "reauth";
+  const authorizeStep = stepFor("authorize");
+
+  const code = extractCodeFromUrl(callbackUrl);
+  if (!code) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.CODE_REJECTED,
+      authorizeStep.id,
+      "The pasted address carries no authorization code.",
+      `${bookFix("authorize", "looks incomplete")} Then re-run --reauth with the whole address.`,
+      "No code parameter was found in the --callback-url value.",
+    );
+    return { ok: false, code: EXIT.CODE_REJECTED };
+  }
+
+  let tokens: TokenPair;
+  try {
+    tokens = await exchangeCode(
+      buildOAuthClient(credentials.clientId, credentials.clientSecret, credentials.redirectUri),
+      code,
+    );
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.CODE_REJECTED,
+      authorizeStep.id,
+      "FreshBooks rejected that authorization code.",
+      "Codes are single-use and live only minutes: run --auth-url again, have the user approve " +
+        "the connection afresh, and pass the new address straight to --reauth.",
+      errorMessage(err),
+    );
+    return { ok: false, code: EXIT.CODE_REJECTED };
+  }
+
+  // From here on every exit leaves a resumable pair on disk — the same ordering
+  // rule `--add-login` follows, and for the same reason.
+  try {
+    stagePending(paths.profilesDir, name, {
+      mode: "reauth",
+      stagedAt: new Date().toISOString(),
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      stepFor("save-login").id,
+      `The new authorization could not be staged in ${paths.profilesDir}, so it can neither be ` +
+        "installed nor resumed.",
+      "Make sure the project's profiles folder exists and is writable, then run --auth-url and " +
+        "--reauth again with a fresh address.",
+      errorMessage(err),
+    );
+    return { ok: false, code: EXIT.FAIL };
+  }
+  return { ok: true, pair: tokens };
+}
+
+/**
+ * The resume form — `--reauth --name N` with no `--callback-url`.
+ *
+ * The MODE GATE is the exact mirror of the add-login resume's: a pending staged
+ * by `--add-login` holds a pair destined to become a NEW profile. Installing it
+ * over an existing login's token lines would overwrite a live family with one
+ * that was never meant for it (and shred the pending the real resume needs), so
+ * a cross-verb resume is a usage error, never a best effort.
+ *
+ * There is deliberately no pre-discovery short-circuit here: unlike a save, a
+ * replace is idempotent — re-running it writes the same two lines — so the
+ * crashed-between-write-and-shred case needs no special branch.
+ */
+async function resumeStagedReauth(
+  emit: Emit,
+  paths: SetupPaths,
+  name: string,
+  credentials: AppCredentials,
+): Promise<StagedPair> {
+  const verb = "reauth";
+  const saveStep = stepFor("save-login");
+
+  const pending = loadPending(paths.profilesDir, name);
+  if (!pending) {
+    const stagedNames = listPendings(paths.profilesDir).map((p) => p.name);
+    return {
+      ok: false,
+      code: usage(
+        emit,
+        verb,
+        saveStep.id,
+        `Nothing is staged under the name "${name}", so there is no re-auth to resume.`,
+        stagedNames.length
+          ? `These logins are staged and can be resumed: ${stagedNames.join(", ")}. To reconnect ` +
+              `"${name}" instead, run --auth-url and pass the pasted address to --reauth --name ` +
+              `${name} --callback-url '<the pasted address>'.`
+          : "Nothing is staged at all: run --auth-url and pass the pasted address to --reauth " +
+              `--name ${name} --callback-url '<the pasted address>' — single-quoted, because ` +
+              "the address contains ? and =.",
+      ),
+    };
+  }
+
+  if (pending.mode !== "reauth") {
+    return {
+      ok: false,
+      code: usage(
+        emit,
+        verb,
+        saveStep.id,
+        `The pair staged under "${name}" was staged by --add-login, not by --reauth.`,
+        `Resume it with --add-login --name ${name}, or clear it with --discard-pending --name ` +
+          `${name}.`,
+      ),
+    };
+  }
+
+  return renewStagedPairIfNeeded(emit, paths, {
+    verbFlag: "--reauth",
+    name,
+    mode: "reauth",
+    credentials,
+    pair: { accessToken: pending.accessToken, refreshToken: pending.refreshToken },
+  });
+}
+
+/**
+ * The shared tail of both forms: read this login's businesses, prove they still
+ * include the account this profile means, and swap the token lines in place.
+ *
+ * Every exit from here keeps the staged pair except the two that end its life:
+ * exit 0 (installed) and exit 5 (a pair that can never be installed anywhere).
+ */
+async function discoverAndReplace(
+  emit: Emit,
+  paths: SetupPaths,
+  args: {
+    name: string;
+    profilePath: string;
+    stored: ProfileConfig;
+    credentials: AppCredentials;
+    pair: TokenPair;
+  },
+): Promise<number> {
+  const verb = "reauth";
+  const saveStep = stepFor("save-login");
+  const { name, profilePath, stored, credentials, pair } = args;
+
+  let memberships: Memberships;
+  try {
+    memberships = await discoverMemberships(
+      buildTokenClient(
+        credentials.clientId,
+        credentials.clientSecret,
+        credentials.redirectUri,
+        pair.accessToken,
+        pair.refreshToken,
+      ),
+    );
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.DISCOVERY_FAILED,
+      saveStep.id,
+      "This login's account details could not be read from FreshBooks.",
+      `${bookFix("save-login", "exit 11")} Retry with --reauth --name ${name} — the ` +
+        "authorization stays staged, so it is not lost. A re-auth deliberately offers no way to " +
+        "skip this lookup: it is what proves the new tokens belong to this login. If it keeps " +
+        `failing, retry later or clear the staged pair with --discard-pending --name ${name}.`,
+      errorMessage(err),
+    );
+    return EXIT.DISCOVERY_FAILED;
+  }
+
+  // --- SET-CONTAINMENT: is the login just authorized still this profile's? ---
+  //
+  // Containment, not equality: a login may belong to several businesses, and the
+  // profile means exactly one of them. A BLANK stored accountId — the legitimate
+  // accounting-only profile — has nothing to contain, so the check is skipped
+  // with a warning rather than failing a profile that never had an id.
+  let company: string | undefined;
+  if (!stored.accountId) {
+    console.error(
+      `Warning: profiles/${name}.env records no FRESHBOOKS_ACCOUNT_ID, so this re-auth cannot ` +
+        "check that the authorization is for the same FreshBooks account. Installing the new " +
+        "tokens anyway — run --doctor afterwards to confirm the login is the one you meant.",
+    );
+  } else {
+    const match = memberships.list.find((m) => m.accountId === stored.accountId);
+    if (!match) {
+      emitErr(
+        emit,
+        verb,
+        EXIT.REAUTH_MISMATCH,
+        saveStep.id,
+        `The authorization just approved is for a different FreshBooks account than the one ` +
+          `saved as "${name}", so it was not installed.`,
+        `Sign in as the account "${name}" belongs to — a private/incognito window helps when a ` +
+          "different account is already signed in — then run --auth-url and --reauth --name " +
+          `${name} again; a fresh authorization overwrites the staged one. If this login really ` +
+          `is a different account, clear the staged pair with --discard-pending --name ${name} ` +
+          "and add it with --add-login instead.",
+        `None of the ${memberships.list.length} businesses this authorization returned carries ` +
+          `the account id saved in profiles/${name}.env.`,
+      );
+      return EXIT.REAUTH_MISMATCH;
+    }
+    company = match.label;
+  }
+
+  // The duplicate-token guard `writeNewProfile` runs for a new profile. A
+  // re-auth writes in place and never reaches that writer, so the guard is
+  // called here — same code, same message (`assertNoForeignDuplicate`).
+  try {
+    assertNoForeignDuplicate(paths.profilesDir, name, pair.refreshToken);
+  } catch (err) {
+    if (!(err instanceof ProfileWriteError)) throw err;
+    // Exit-5 semantics: the staged pair can never be installed anywhere (another
+    // file already holds it, so it is not lost by being discarded), and leaving
+    // it would only fail identically on every resume.
+    shredPending(paths.profilesDir, name);
+    emitErr(
+      emit,
+      verb,
+      EXIT.DUP_PAIR,
+      saveStep.id,
+      "Another saved login already holds the token pair this authorization minted.",
+      "Run --doctor: two profile files sharing one refresh token is the state it reports and " +
+        "explains. Once it is resolved, re-run --auth-url and --reauth for this login. This " +
+        "exit has already discarded the staged pair.",
+      err.message,
+    );
+    return EXIT.DUP_PAIR;
+  }
+
+  try {
+    // The guarded writer (ruling 4): applyTokensToEnv + writeAtomic + read-back,
+    // touching ONLY the two token lines, and shredding a superseded `.rescue`.
+    replaceProfileTokens(profilePath, pair.accessToken, pair.refreshToken);
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      saveStep.id,
+      `The new tokens could not be written into profiles/${name}.env.`,
+      `Make sure that file is writable, then resume with --reauth --name ${name} — the ` +
+        "authorization stays staged. If it keeps failing, run --doctor.",
+      errorMessage(err),
+    );
+    return EXIT.FAIL;
+  }
+
+  shredPending(paths.profilesDir, name);
+  warnIfQuarantined(paths, name);
+
+  // The ids are the profile's own (ruling 3); `company` is the membership the
+  // containment check matched, and is absent when that check was skipped.
+  emitOk(emit, verb, {
+    name,
+    company,
+    accountId: stored.accountId,
+    businessId: stored.businessId,
+    profilePath,
+  });
+  return EXIT.OK;
+}
+
+/**
+ * A re-auth on a QUARANTINED profile works — the fresh family is exactly what a
+ * quarantined profile needs — but the quarantine itself is about a same-company
+ * collision between two files and outlives any token swap. Saying so on success
+ * is the difference between "it worked" and "it worked, and the thing you were
+ * probably trying to fix is still there" (spec: "the message says so").
+ *
+ * A fresh scan, never the memoized registry, and never fatal: this runs AFTER a
+ * verified write, so a scan failure must not turn a completed re-auth into one
+ * that reports failure.
+ */
+function warnIfQuarantined(paths: SetupPaths, name: string): void {
+  const fix = bookFix("save-login", "quarantined profile mentioned");
+  let quarantined: boolean;
+  try {
+    const found = discoverProfiles(paths.profilesDir, paths.baseEnvPath).profiles.get(name);
+    quarantined = found?.quarantined === true;
+  } catch {
+    return;
+  }
+  if (!quarantined) return;
+  console.error(`Note: profiles/${name}.env stays quarantined. ${fix}`);
+}
+
+// ---------------------------------------------------------------------------
+// Verb: --discard-pending
+// ---------------------------------------------------------------------------
+
+/**
+ * Shred a staged pair. The exit from every branch that "cannot be resumed after
+ * all" — a wrong-account re-auth, an abandoned add — plus the doctor's fix for a
+ * stale pending.
+ *
+ * EXISTENCE, not `loadPending`, decides whether there is something to discard: a
+ * pending whose markers are damaged reads as null there while still holding a
+ * live token pair on disk, and clearing exactly that file is what this verb is
+ * for (`listPendings` reports such files for the same reason).
+ */
+function runDiscardPending(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): number {
+  const verb = "discard-pending";
+  const saveStep = stepFor("save-login");
+  const nameStep = stepFor("nickname");
+
+  const rawName = parsed.flags.get("--name");
+  if (typeof rawName !== "string") {
+    return usage(
+      emit,
+      verb,
+      nameStep.id,
+      "--discard-pending needs the nickname whose staged pair should be cleared.",
+      "Re-run with --name <nickname>; --doctor names the logins that have a staged pair.",
+    );
+  }
+
+  let name: string;
+  try {
+    name = normalizeProfileName(rawName);
+  } catch {
+    return usage(
+      emit,
+      verb,
+      nameStep.id,
+      `"${rawName}" is not a usable name for a login, so nothing can be staged under it.`,
+      "Re-run --discard-pending with the nickname the interrupted run used — lowercase letters " +
+        "and digits, like acme.",
+    );
+  }
+
+  if (!existsSync(pendingPath(paths.profilesDir, name))) {
+    const stagedNames = listPendings(paths.profilesDir).map((p) => p.name);
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      `Nothing is staged under the name "${name}", so there is nothing to discard.`,
+      stagedNames.length
+        ? `These logins have a staged pair: ${stagedNames.join(", ")}. Re-run --discard-pending ` +
+            "with one of those names."
+        : "No login has a staged pair, so there is nothing to clear anywhere.",
+    );
+  }
+
+  try {
+    shredPending(paths.profilesDir, name);
+  } catch (err) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.FAIL,
+      saveStep.id,
+      `The staged pair under "${name}" could not be deleted, so it still holds a live token pair.`,
+      `Delete ${pendingPath(paths.profilesDir, name)} by hand, then continue.`,
+      errorMessage(err),
+    );
+    return EXIT.FAIL;
+  }
+
+  // The honesty note (spec verb table). Stderr in both modes: the `--json` shape
+  // for this verb is `{name, discarded:true}` and nothing else.
+  console.error(
+    "Note: this removed the staged token pair from this computer — it does not revoke the grant " +
+      "server-side. The authorization the user approved stays live at FreshBooks until it " +
+      "expires or is revoked there.",
+  );
+  emitOk(emit, verb, { name, discarded: true });
+  return EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
 // Dispatcher
 // ---------------------------------------------------------------------------
 
@@ -1582,6 +2175,10 @@ async function dispatch(
       return runAuthUrl(emit, paths);
     case "--add-login":
       return runAddLogin(parsed, emit, paths);
+    case "--reauth":
+      return runReauth(parsed, emit, paths);
+    case "--discard-pending":
+      return runDiscardPending(parsed, emit, paths);
     default:
       // A verb the Book already names but this build does not implement yet
       // (the remaining Phase-2 tasks fill these in).
