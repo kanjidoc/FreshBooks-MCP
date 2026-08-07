@@ -65,6 +65,7 @@ import {
   legacyEnvNeedsMigration,
   runHeadless,
   savedProfileNames,
+  selectCommandPath,
   type SetupPaths,
 } from "./setup-headless";
 
@@ -660,11 +661,31 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
     );
     io.out(indent(`Base .env (app credentials only — no tokens) written to: ${paths.baseEnvPath}`));
 
+    state.currentStepId = "install-config";
+
+    // Which `node` every config this run writes will launch — chosen ONCE,
+    // here, and handed to every installer below.
+    //
+    // The same selection the headless `--install` verb makes, with neither of
+    // its opt-outs: no `--command-path` override (the wizard asks no such
+    // question) and no `--trust-exec-path` (which exists for a caller vouching
+    // that its `process.execPath` is a host path). Probing is unconditionally
+    // right on this surface because the wizard IS the human's own Terminal —
+    // never a sandbox whose `execPath` would poison the host config. Writing
+    // the bare `"node"` instead is not neutral: it silently reverts the
+    // absolute path an earlier `--install` probed for, leaving a server that
+    // starts only if Claude's own PATH happens to include node.
+    //
+    // Reached inside this function body, never at module load — the cycle
+    // between this file and `scripts/setup-headless.ts` is safe on that basis
+    // alone (see the note over that file's `./setup` import).
+    const nodeCommand = selectCommandPath({});
+    if (nodeCommand.caveat) io.out(indent(nodeCommand.caveat));
+
     // The MERGING installer, not a whole-file rewrite: `.mcp.json` is shared
     // with every other MCP server the user has added to this project, and the
     // old writer replaced the document wholesale.
-    state.currentStepId = "install-config";
-    const mcpJson = installMcpJson(paths);
+    const mcpJson = installMcpJson(paths, nodeCommand.command);
     io.out(
       indent(
         mcpJson.ok
@@ -691,7 +712,7 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
 
     let desktopInstalled = false;
     if (isYes(await io.ask(formatPrompt("   Add the server to Claude Desktop?", "yes")), true)) {
-      const outcome = installDesktop(paths);
+      const outcome = installDesktop(paths, nodeCommand.command);
       desktopInstalled = outcome.ok;
       io.out(
         indent(
@@ -715,7 +736,7 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
         )
       ) {
         try {
-          claudeMcpAddJson(paths.rootDir);
+          claudeMcpAddJson(paths.rootDir, nodeCommand.command);
           codeInstalled = true;
           io.out(indent('Claude Code: registered the "freshbooks" server at user scope.'));
         } catch (err) {

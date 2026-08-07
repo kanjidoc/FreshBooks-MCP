@@ -85,6 +85,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`npm run setup` no longer writes over other MCP servers in `.mcp.json`.**
   The wizard replaced that file wholesale, deleting any other server entry a
   project had; it now merges, exactly as the headless `--install` already did.
+- **`npm run setup`'s install prompts now write an absolute `node`, like
+  `--install`.** The wizard's install step passed no command path, so every
+  config it wrote launched the bare `"node"` — which starts the server only if
+  Claude happens to launch with a PATH that includes node. Worse, it was a
+  silent revert: a user who had fixed their configs with the headless
+  `--install` (which probes `/opt/homebrew/bin/node`, `/usr/local/bin/node`,
+  `/usr/bin/node`) and then re-ran `npm run setup` got the bare command back.
+  The wizard now makes the same probe — it always runs in your own Terminal, so
+  probing is unconditionally right there — and says so out loud on the rare
+  fallback where no absolute node is found.
 - **The wizard's checklist no longer un-ticks work you already finished.** A
   cancelled or refused *additional* login re-rendered the already-saved login's
   steps as pending — the "your work did not count" misread, on a screen whose

@@ -15,8 +15,11 @@ import {
   buildAuthUrl,
   buildOAuthClient,
   buildTokenClient,
+  claudeMcpAddJson,
   discoverMemberships,
   exchangeCode,
+  installDesktop,
+  installMcpJson,
   isClaudeCliAvailable,
   runBuild,
   type Memberships,
@@ -68,8 +71,39 @@ vi.mock("../scripts/setup-core", async (importOriginal) => {
     isClaudeCliAvailable: vi.fn(),
     claudeMcpAddJson: vi.fn(),
     runBuild: vi.fn(),
+    // The two file installers keep their REAL merging behaviour (the tests
+    // below assert the bytes they leave on disk); they are wrapped only so the
+    // command path the wizard hands them is assertable.
+    installDesktop: vi.fn(actual.installDesktop),
+    installMcpJson: vi.fn(actual.installMcpJson),
   };
 });
+
+/**
+ * THE PROBE SEAM. `selectCommandPath(opts, exists)` takes its "does this path
+ * exist?" as an injected argument precisely so the probe order is testable
+ * without depending on what is installed on the machine running the tests. The
+ * wizard calls it with one argument, so stubbing the default here makes its
+ * command selection a total function of `probe.present` — and keeps every other
+ * wizard test's written config machine-independent.
+ */
+const probe = vi.hoisted(() => ({ present: new Set<string>() }));
+
+vi.mock("../scripts/setup-headless", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../scripts/setup-headless")>();
+  return {
+    ...actual,
+    selectCommandPath: (
+      opts: Parameters<typeof actual.selectCommandPath>[0],
+      exists: (candidate: string) => boolean = (candidate) => probe.present.has(candidate),
+    ) => actual.selectCommandPath(opts, exists),
+  };
+});
+
+/** The real selector — used to quote the fallback caveat rather than restate it. */
+const { selectCommandPath: realSelectCommandPath } = await vi.importActual<
+  typeof import("../scripts/setup-headless")
+>("../scripts/setup-headless");
 
 // The plan's drafted checklist markers — asserted as literals here, never
 // imported from the implementation (which would make every marker assertion
@@ -527,6 +561,9 @@ const HAPPY_ANSWERS = [
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // No absolute node exists unless a test says one does — the fallback is the
+  // deterministic default, never the test machine's own installation.
+  probe.present.clear();
   // `writeNewProfile`'s same-account path warns through console.warn; keep the
   // test output clean without swallowing anything the wizard itself prints.
   vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -847,6 +884,73 @@ describe("runWizard: the order a human meets the copy", () => {
     expect(env).toContain("FRESHBOOKS_CLIENT_ID=cid-123");
     expect(env).not.toContain("FRESHBOOKS_REFRESH_TOKEN");
     expect(env).not.toContain("FRESHBOOKS_ACCESS_TOKEN");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runWizard — which `node` the install step writes
+// ---------------------------------------------------------------------------
+
+/**
+ * The bug these pin, found live by a user reading the source: the wizard's
+ * install step called the installers with no command path, so every config it
+ * wrote launched the bare `"node"` — silently reverting the absolute path a
+ * previous `--install` had probed for. The wizard runs in the human's own
+ * Terminal, never a sandbox, so the same probe the headless verb makes is
+ * unconditionally right here.
+ */
+describe("runWizard: which node the install step writes", () => {
+  /** The first location `NODE_PROBE_PATHS` looks in. */
+  const PROBED = "/opt/homebrew/bin/node";
+
+  it("hands every installer the probed absolute node, and writes it to disk", async () => {
+    probe.present.add(PROBED);
+    vi.mocked(isClaudeCliAvailable).mockReturnValue(true);
+    const paths = fixture();
+
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "main",
+        "https://localhost/callback?code=abc123",
+        "", // no more logins
+        "y", // Claude Desktop
+        "y", // Claude Code, all projects
+      ],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(vi.mocked(installMcpJson)).toHaveBeenCalledWith(paths, PROBED);
+    expect(vi.mocked(installDesktop)).toHaveBeenCalledWith(paths, PROBED);
+    expect(vi.mocked(claudeMcpAddJson)).toHaveBeenCalledWith(paths.rootDir, PROBED);
+
+    // The bytes, not just the call: a config that still says "node" IS the bug.
+    for (const file of [paths.desktopConfigPath, paths.mcpJsonPath]) {
+      expect(JSON.parse(readFileSync(file, "utf8")).mcpServers.freshbooks.command).toBe(PROBED);
+    }
+  });
+
+  it("falls back to the bare command only when no absolute node is found, and says so", async () => {
+    // `probe.present` is empty — the last-resort branch. Its caveat is quoted
+    // from the selector rather than restated, so a reworded caveat cannot
+    // silently stop reaching the human.
+    const paths = fixture();
+    const caveat = realSelectCommandPath({}, () => false).caveat;
+    expect(caveat).toBeTruthy();
+
+    const run = await runScripted(
+      ["cid-123", "sec-abc", "main", "https://localhost/callback?code=abc123", "", "y"],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(vi.mocked(installDesktop)).toHaveBeenCalledWith(paths, "node");
+    const desktop = JSON.parse(readFileSync(paths.desktopConfigPath, "utf8"));
+    expect(desktop.mcpServers.freshbooks.command).toBe("node");
+    expect(run.transcript).toContain(caveat);
   });
 });
 
