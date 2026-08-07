@@ -736,6 +736,30 @@ describe("--reauth: the resume grammar", () => {
     expectNoCanaryMaterial(allOutput());
   });
 
+  it("does not offer an add-staged pending as resumable under --reauth", async () => {
+    // The mirror of the `--add-login` case: the listing is scoped to the verb
+    // that asked, so a pending this verb's own mode gate would refuse is named
+    // with the verb that can resume it rather than offered here.
+    const paths = fixture();
+    seedProfile(paths, "main", "ACC-1");
+    stageReauth(paths, "acme");
+    stagePending(paths.profilesDir, "beta", {
+      mode: "add",
+      stagedAt: new Date().toISOString(),
+      accessToken: STAGED_ACCESS,
+      refreshToken: STAGED_REFRESH,
+    });
+
+    expect(await runHeadless(resumeArgv("main"), paths)).toBe(EXIT.USAGE);
+
+    const fix: string = envelope().fix;
+    expect(fix).toMatch(/can be resumed: acme\./);
+    expect(fix).toContain("beta");
+    expect(fix).toContain("--add-login");
+    expect(fix).not.toMatch(/can be resumed:[^.]*beta/);
+    expectNoCanaryMaterial(allOutput());
+  });
+
   it("refuses an add-staged pending with exit 2 naming --add-login", async () => {
     const paths = fixture();
     seedProfile(paths, "main", "ACC-1");

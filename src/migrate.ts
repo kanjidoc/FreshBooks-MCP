@@ -116,6 +116,11 @@ export function stripTokensFromBaseEnv(content: string): string {
  * `force` that skips the liveness probe — training the user to disable the one safety
  * guarding against permanent lockout is unacceptable. The setup CLI sets it only after
  * interactively asking the user to confirm no server is running.
+ *
+ * A name already taken by a DIFFERENT login throws `ProfileWriteError("NAME_TAKEN")` —
+ * the same typed refusal `writeNewProfile` raises for the same condition, so a caller
+ * that re-prompts for a nickname on one path can re-prompt on the other. Every other
+ * failure here is an untyped `Error`: none of them is answered by a different name.
  */
 export function runMigration(opts: {
   name: string;
@@ -162,7 +167,8 @@ export function runMigration(opts: {
     const sameTokens =
       existing?.accessToken === config.accessToken && existing?.refreshToken === config.refreshToken;
     if (!sameTokens) {
-      throw new Error(
+      throw new ProfileWriteError(
+        "NAME_TAKEN",
         `profiles/${name}.env already exists with a DIFFERENT token set — refusing to overwrite. ` +
           `Manual recovery: inspect profiles/${name}.env and base .env; if the profile is the one to keep, ` +
           `remove the tokens from base .env (or add ${MIGRATED_MARKER}=1) by hand; otherwise rename/remove ` +

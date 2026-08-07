@@ -64,6 +64,7 @@ import {
   defaultPaths,
   legacyEnvNeedsMigration,
   runHeadless,
+  savedProfileNames,
   type SetupPaths,
 } from "./setup-headless";
 
@@ -526,19 +527,30 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
         return 0;
       }
 
-      const name = await askProfileName(
-        io,
-        "   Name this existing login (lowercase letters and digits, like acme)",
-      );
-      if (!name) {
+      const nameQuestion = "   Name this existing login (lowercase letters and digits, like acme)";
+      let name = await askProfileName(io, nameQuestion);
+      let profilePath: string | null = null;
+      while (name !== null && profilePath === null) {
+        try {
+          profilePath = runMigration({
+            name,
+            rootDir: paths.rootDir,
+            confirmNoServer: true,
+          }).profilePath;
+        } catch (err) {
+          // A name already taken by another login is a question, not a dead
+          // end — the same refusal, answered the same way, as the add-login
+          // loop's NAME_TAKEN branch (`saveLogin`). Every other failure keeps
+          // the outer catch, whose troubleshooting rows are the ones that apply.
+          if (!(err instanceof ProfileWriteError) || err.code !== "NAME_TAKEN") throw err;
+          io.out(indent(err.message));
+          name = await askProfileName(io, nameQuestion);
+        }
+      }
+      if (profilePath === null) {
         io.out(indent("Nothing was moved and nothing was deleted."));
         return 0;
       }
-      const { profilePath } = runMigration({
-        name,
-        rootDir: paths.rootDir,
-        confirmNoServer: true,
-      });
       // The Book's successCheck: "The wizard prints Migrated existing tokens →
       // profiles/<name>.env."
       io.out(indent(`Migrated existing tokens → ${profilePath}`));
@@ -586,7 +598,15 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
     //
     // A fresh install needs at least one login; right after a migration adding
     // another is optional (the migrated login is already a profile).
-    let savedAny = migrated;
+    //
+    // "Has a login been configured?" is asked of the DISK, not of this run.
+    // Re-running `npm run setup` to add a login is the documented path (the
+    // parting note and SETUP.md both say so) and a fresh install never writes
+    // FRESHBOOKS_MIGRATED, so such a re-run drops straight into this loop with
+    // working profiles already on disk; keying the wording on this run alone
+    // would tell that user their configured logins do not exist.
+    // `state.savedLogins` keeps its this-run meaning — it is the checklist's
+    // `(login N)` counter, and no earlier run's logins belong in it.
     let again = true;
     if (migrated) {
       again = isYes(await io.ask(formatPrompt("   Add another FreshBooks login now?", "no")));
@@ -600,21 +620,26 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
       // a login that is already on disk, telling the user their finished work
       // did not count.
       setPerLoginDone(state, saved || state.savedLogins > 0);
-      if (saved) {
-        savedAny = true;
-        state.savedLogins += 1;
-      }
-      state.currentStepId = "build";
+      if (saved) state.savedLogins += 1;
+      // The cursor stays on the login group: the question under this checklist
+      // is about logins, and the step the user is standing on is the one that
+      // starts the next one. `build` is entered by `enter("build")` after the
+      // loop, which is when it actually becomes where-we-are.
+      state.currentStepId = "nickname";
       showChecklist();
-      if (!savedAny) {
+      const onDisk = savedProfileNames(paths.profilesDir);
+      if (onDisk.length === 0) {
         io.out(indent("No login has been saved yet — the server needs at least one to work."));
         again = isYes(await io.ask(formatPrompt("   Add a login now?", "yes")), true);
       } else {
+        // An attempt that saved nothing has just said so; name what IS
+        // configured so the user is not left thinking this run undid it.
+        if (!saved) io.out(indent(`These logins are saved: ${onDisk.join(", ")}.`));
         again = isYes(await io.ask(formatPrompt("   Add another login?", "no")));
       }
     }
 
-    if (!savedAny) {
+    if (savedProfileNames(paths.profilesDir).length === 0) {
       io.out(
         indent(
           "Warning: no FreshBooks login was configured. The server will start, but\n" +

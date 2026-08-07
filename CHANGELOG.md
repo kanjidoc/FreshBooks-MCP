@@ -89,6 +89,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   cancelled or refused *additional* login re-rendered the already-saved login's
   steps as pending — the "your work did not count" misread, on a screen whose
   whole job is to say what is done.
+- **`npm run setup` on a second run no longer claims you have no logins.** Adding
+  a login by re-running setup is the documented path, and cancelling the login
+  prompt on such a run warned that nothing was configured — while working
+  profiles sat on disk. It now names the logins that are saved, and keeps the
+  warning for the case where there really are none. In the same stretch, the
+  checklist's *you are here* marker stayed on the login steps while the wizard
+  is still asking about logins (it jumped ahead to *Build the server*), and a
+  migration nickname that is already taken re-prompts for another name instead
+  of ending the run.
 - **Setup failures always name a step to go back to.** A `--reauth` or
   `--discard-pending` refusal reported an empty step, leaving a driving agent
   with no part of SETUP.md to return to; both now key to *Save the login*.
@@ -96,7 +105,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   reconnect with a literal `<that login's nickname>` placeholder — it now names
   the actual login. A resume that finds nothing under the name you gave no
   longer offers a damaged staged pair as resumable, since no command can resume
-  one; it names those separately, with the one command that clears them.
+  one; it names those separately, with the one command that clears them. That
+  listing is now scoped to the verb that asked, too: a pair staged by `--reauth`
+  is no longer offered to `--add-login` (or the reverse) as resumable — it is
+  named with the verb that can actually resume it, in one step instead of two.
   Passing `--confirm-different-user` without `--distinct-login` was silently
   treated as no confirmation at all; it is now refused by name, like its mirror.
 - **The setup doctor.** A lingering rescue file next to the base `.env` was

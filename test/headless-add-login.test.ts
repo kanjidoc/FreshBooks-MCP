@@ -641,6 +641,32 @@ describe("--add-login: the resume grammar", () => {
     expectNoCanaryMaterial(allOutput());
   });
 
+  it("does not offer a reauth-staged pending as resumable under --add-login", async () => {
+    // The listing is scoped to the verb that asked: a pending staged by
+    // --reauth cannot be resumed by --add-login (the mode gate refuses it), so
+    // offering it here would send an agent around a second call to learn what
+    // this one already knows. It is still NAMED — with the verb that can
+    // actually resume it.
+    const paths = fixture();
+    stageAdd(paths, "acme");
+    stagePending(paths.profilesDir, "beta", {
+      mode: "reauth",
+      stagedAt: new Date().toISOString(),
+      accessToken: STAGED_ACCESS,
+      refreshToken: STAGED_REFRESH,
+    });
+
+    expect(await runHeadless(resumeArgv("main"), paths)).toBe(EXIT.USAGE);
+
+    const fix: string = envelope().fix;
+    expect(fix).toMatch(/can be resumed: acme\./);
+    expect(fix).toContain("beta");
+    expect(fix).toContain("--reauth");
+    // The reauth-staged name must not appear in the resumable sentence.
+    expect(fix).not.toMatch(/can be resumed:[^.]*beta/);
+    expectNoCanaryMaterial(allOutput());
+  });
+
   it("refuses a reauth-staged pending with exit 2 naming --reauth", async () => {
     const paths = fixture();
     stagePending(paths.profilesDir, "main", {

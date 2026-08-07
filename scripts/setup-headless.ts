@@ -382,20 +382,43 @@ function stepIdForVerb(verbFlag: string, fallback: string): string {
  * "What IS staged", for the exit-2 a resume emits when its `--name` has nothing
  * under it.
  *
- * `listPendings` deliberately reports files whose markers are damaged
- * (`mode: "unknown"`) so that no token-bearing file lingers unseen — but no
- * verb can resume one (`loadPending` reads it as nothing staged), so listing it
- * as resumable sends the caller straight back around this same refusal. The two
- * groups are therefore named separately, each with the command that applies.
+ * SCOPED BY THE ASKING VERB (`mode`). A pending's mode decides which verb can
+ * resume it — the mode gate in each resume refuses the other one — so offering
+ * a reauth-staged name to `--add-login` (or the reverse) buys the caller a
+ * second refusal to learn what this one already knew. Every staged name is
+ * still reported, in the group that says what to DO with it:
+ *
+ *   - this verb's own mode → resumable;
+ *   - the other mode → named with the verb that can resume it;
+ *   - neither (today only `mode: "unknown"`, a damaged marker) → named with
+ *     `--discard-pending`. `listPendings` deliberately reports these so no
+ *     token-bearing file lingers unseen, but `loadPending` reads one as nothing
+ *     staged, so no resume of either verb can take it. The third group is the
+ *     REMAINDER rather than an equality test, so a mode this function has not
+ *     been taught can never fall out of the listing unmentioned.
+ *
  * Returns "" when nothing is staged at all; that case wants a different
  * sentence and every caller writes its own.
  */
-function stagedListing(pendings: ReturnType<typeof listPendings>): string {
-  const resumable = pendings.filter((p) => p.mode !== "unknown").map((p) => p.name);
-  const damaged = pendings.filter((p) => p.mode === "unknown").map((p) => p.name);
+function stagedListing(
+  pendings: ReturnType<typeof listPendings>,
+  mode: PendingRecord["mode"],
+): string {
+  const otherMode = mode === "add" ? "reauth" : "add";
+  const otherVerb = otherMode === "add" ? "--add-login" : "--reauth";
+  const resumable = pendings.filter((p) => p.mode === mode).map((p) => p.name);
+  const crossVerb = pendings.filter((p) => p.mode === otherMode).map((p) => p.name);
+  const damaged = pendings
+    .filter((p) => p.mode !== "add" && p.mode !== "reauth")
+    .map((p) => p.name);
   const parts: string[] = [];
   if (resumable.length)
     parts.push(`These logins are staged and can be resumed: ${resumable.join(", ")}.`);
+  if (crossVerb.length)
+    parts.push(
+      `These were staged by ${otherVerb}, so resume each with ${otherVerb} --name <nickname>: ` +
+        `${crossVerb.join(", ")}.`,
+    );
   if (damaged.length)
     parts.push(
       "These hold a staged pair whose markers are damaged, so no resume can read them — clear " +
@@ -1185,7 +1208,7 @@ async function runAddLoginResume(
 
   const pending = loadPending(paths.profilesDir, name);
   if (!pending) {
-    const listing = stagedListing(listPendings(paths.profilesDir));
+    const listing = stagedListing(listPendings(paths.profilesDir), "add");
     return usage(
       emit,
       verb,
@@ -1828,8 +1851,15 @@ function noSuchLogin(emit: Emit, paths: SetupPaths, name: string): number {
   );
 }
 
-/** The nicknames of every saved profile — a fresh scan, never the registry. */
-function savedProfileNames(profilesDir: string): string[] {
+/**
+ * The nicknames of every saved profile — a fresh scan, never the registry.
+ *
+ * Exported because the wizard asks the same question of the same directory
+ * ("does this project have a login at all?", on a re-run that adds one), and
+ * two definitions of what counts as a saved login file are two chances for the
+ * two surfaces to disagree about whether a user is configured.
+ */
+export function savedProfileNames(profilesDir: string): string[] {
   if (!existsSync(profilesDir)) return [];
   return readdirSync(profilesDir)
     .filter((file) => file.endsWith(".env"))
@@ -1946,7 +1976,7 @@ async function resumeStagedReauth(
 
   const pending = loadPending(paths.profilesDir, name);
   if (!pending) {
-    const listing = stagedListing(listPendings(paths.profilesDir));
+    const listing = stagedListing(listPendings(paths.profilesDir), "reauth");
     return {
       ok: false,
       code: usage(

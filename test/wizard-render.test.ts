@@ -764,6 +764,82 @@ describe("runWizard: the order a human meets the copy", () => {
     }
   });
 
+  it("keeps the checklist cursor on the login group while asking about another login", async () => {
+    // The failure this pins: the cursor jumping to "Build the server" while the
+    // conversation is still about logins. The question under the checklist is
+    // "Add another login?" — the step the user is standing on is the one that
+    // starts the next login, not the build that comes after the loop.
+    const run = await runScripted(HAPPY_ANSWERS);
+
+    const prompt = run.transcript.indexOf("Add another login?");
+    expect(prompt).toBeGreaterThanOrEqual(0);
+    const before = run.transcript.slice(0, prompt).split("\n");
+    const currents = before.filter((line) => line.trim().startsWith(CURRENT));
+    expect(currents.length).toBeGreaterThan(0);
+    expect(currents[currents.length - 1].trim()).toBe(`${CURRENT} Name this login`);
+    expect(run.transcript).not.toContain(`${CURRENT} Build the server`);
+  });
+
+  it("points the cursor at the login group — and warns truly — when nothing is saved", async () => {
+    // The zero-saved case: the checklist says "you are here" on the login work,
+    // and the warnings that follow are the ones that are actually true.
+    const paths = fixture();
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "", // cancel the first login with a blank nickname
+        "n", // "Add a login now?" — no
+        "n", // no Claude Desktop install
+      ],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    const prompt = run.transcript.indexOf("Add a login now?");
+    expect(prompt).toBeGreaterThanOrEqual(0);
+    const currents = run.transcript
+      .slice(0, prompt)
+      .split("\n")
+      .filter((line) => line.trim().startsWith(CURRENT));
+    expect(currents[currents.length - 1].trim()).toBe(`${CURRENT} Name this login`);
+    // Nothing is on disk, so both warnings are the truth and must stay.
+    expect(run.transcript).toContain("No login has been saved yet");
+    expect(run.transcript).toContain("no FreshBooks login was configured");
+  });
+
+  it("acknowledges the logins already on disk instead of warning nothing is configured", async () => {
+    // Re-running `npm run setup` to add a login is the documented path (the
+    // parting note and SETUP.md both say so), and a fresh install never writes
+    // FRESHBOOKS_MIGRATED — so this run drops straight into the nickname
+    // prompt with working profiles already on disk. Cancelling there must not
+    // tell the user their configured logins do not exist.
+    const paths = fixture();
+    seedProfile(paths, "acme", "AC-1", "rt-incumbent");
+
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "", // cancel the login attempt with a blank nickname
+        "", // "Add another login?" — no
+        "n", // no Claude Desktop install
+      ],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(run.transcript).toContain("Skipped adding a login.");
+    // The acknowledgement, and neither false claim.
+    expect(run.transcript).toContain("These logins are saved: acme.");
+    expect(run.transcript).not.toContain("No login has been saved yet");
+    expect(run.transcript).not.toContain("no FreshBooks login was configured");
+    // The incumbent is untouched by a run that saved nothing.
+    expect(readFileSync(join(paths.profilesDir, "acme.env"), "utf8")).toContain("rt-incumbent");
+  });
+
   it("leaves base .env holding app credentials only", async () => {
     const paths = fixture();
     await runScripted(HAPPY_ANSWERS, paths);
@@ -791,6 +867,29 @@ describe("runWizard: the migration gate", () => {
     // The marker survives the base `.env` rewrite, so a second run does not
     // re-offer the migration.
     expect(readFileSync(paths.baseEnvPath, "utf8")).toContain("FRESHBOOKS_MIGRATED=1");
+  });
+
+  it("re-prompts when the migration nickname is already taken, then migrates", async () => {
+    // The refusal is the same one the add-login path re-prompts on, so the
+    // migration must answer it the same way: a taken name is a question, not a
+    // dead end reported as a failed run against the running-server rows.
+    const paths = fixture({ baseEnv: LEGACY_ENV });
+    seedProfile(paths, "legacy", "AC-9", "rt-other");
+
+    const run = await runScripted(["y", "legacy", "fresh", "cid-123", "sec-abc", "", "n"], paths);
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(run.transcript).toContain("already exists");
+    expect(run.transcript).toContain("Migrated existing tokens");
+    // The legacy tokens landed under the SECOND name, and the incumbent login
+    // was never touched.
+    expect(readFileSync(join(paths.profilesDir, "fresh.env"), "utf8")).toContain(
+      "FRESHBOOKS_REFRESH_TOKEN=rt-legacy",
+    );
+    expect(readFileSync(join(paths.profilesDir, "legacy.env"), "utf8")).toContain("rt-other");
+    // A re-prompt, not a failed run: the wizard never printed its stop report.
+    expect(run.transcript).not.toContain("Setup stopped during:");
   });
 
   it("deletes nothing when the answer is no — the humanScript's promise", async () => {
