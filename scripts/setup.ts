@@ -415,6 +415,13 @@ const PER_LOGIN_IDS = SETUP_FLOW.filter((s) => s.repeats === "per-login").map((s
  * group as done, so these three ids belong in `completed` exactly when no login
  * is in flight. Clearing them when a login starts is what keeps the group the
  * user is standing in from rendering as already finished.
+ *
+ * Note what "done" means to the CALLER after an add-login attempt: not "this
+ * attempt saved" but "no login is in flight" — an attempt that was cancelled or
+ * refused leaves the previously saved logins exactly as finished as they were,
+ * and no per-login step carries a Book `check()` that could repair the marks
+ * afterwards. Passing this attempt's own outcome would un-tick work already on
+ * disk.
  */
 function setPerLoginDone(state: WizardState, done: boolean): void {
   for (const id of PER_LOGIN_IDS) {
@@ -586,7 +593,13 @@ export async function runWizard(io: WizardIO, paths: SetupPaths): Promise<number
     }
     while (again) {
       const saved = await addLogin(io, paths, ctx, state, clientId, clientSecret);
-      setPerLoginDone(state, saved);
+      // The per-login run is finished when NO login is in flight — which is
+      // true whether this attempt saved or was cancelled/refused, as long as
+      // some login has already been saved (a migrated one counts; it bumps the
+      // same counter). Keying this on `saved` alone would un-tick the group for
+      // a login that is already on disk, telling the user their finished work
+      // did not count.
+      setPerLoginDone(state, saved || state.savedLogins > 0);
       if (saved) {
         savedAny = true;
         state.savedLogins += 1;

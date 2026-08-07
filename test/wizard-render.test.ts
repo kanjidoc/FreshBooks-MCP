@@ -448,17 +448,25 @@ interface ScriptedRun {
  *
  * Prompts are pushed into the same buffer as the output, because a prompt IS
  * part of the transcript — the paste prompt's literal is one of the strings
- * Appendix A pins, and it must be orderable against the copy around it. An
- * unscripted question throws rather than hangs, so a prompt-count drift fails
- * loudly instead of timing out.
+ * Appendix A pins, and it must be orderable against the copy around it.
+ *
+ * An unscripted question fails the TEST, not just the wizard. Throwing out of
+ * `ask` alone is not enough: `runWizard` catches everything and turns it into
+ * exit 1, so a script that has drifted out of step with the prompts would be
+ * swallowed into a plausible-looking failed run — and any test whose assertions
+ * are all negative ("this file was not written", "this marker is absent") would
+ * keep passing while never reaching the branch it names. So the exhausted queue
+ * is RECORDED as well as thrown, and the helper re-raises after the run.
  */
 async function runScripted(answers: string[], paths: SetupPaths = fixture()): Promise<ScriptedRun> {
   const buffer: string[] = [];
   const queue = [...answers];
+  const unscripted: string[] = [];
   const io: WizardIO = {
     ask: async (question: string) => {
       buffer.push(question);
       if (queue.length === 0) {
+        unscripted.push(question);
         throw new Error(`the wizard asked an unscripted question: ${JSON.stringify(question)}`);
       }
       return queue.shift()!.trim();
@@ -468,6 +476,12 @@ async function runScripted(answers: string[], paths: SetupPaths = fixture()): Pr
     },
   };
   const code = await runWizard(io, paths);
+  if (unscripted.length > 0) {
+    throw new Error(
+      `the wizard asked ${unscripted.length} unscripted question(s); the script is out of ` +
+        `step with the flow:\n  ${unscripted.join("\n  ")}`,
+    );
+  }
   return { transcript: buffer.join("\n"), code, paths, unused: queue };
 }
 
@@ -668,6 +682,88 @@ describe("runWizard: the order a human meets the copy", () => {
     expect(transcript).toContain("✓ Save the login (login 2)");
   });
 
+  it("keeps a saved login ticked when a LATER attempt is cancelled", async () => {
+    // The failure this pins is the same "your work did not count" misrender as
+    // the test above, arriving by the other road: the login IS on disk, and it
+    // is the ADDITIONAL attempt that goes nowhere. Un-ticking the per-login run
+    // then re-renders the saved login's group as pending, which reads as the
+    // wizard having thrown the finished work away.
+    const paths = fixture();
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "main",
+        "https://localhost/callback?code=abc123",
+        "y", // add another login…
+        "", // …then cancel it with a blank nickname
+        "", // no more logins
+        "n", // no Claude Desktop install
+      ],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(existsSync(join(paths.profilesDir, "main.env"))).toBe(true);
+
+    // Only the checklists printed AFTER the cancellation can regress, so the
+    // assertion is scoped to the transcript from that point on.
+    const cancelled = run.transcript.indexOf("Skipped adding a login.");
+    expect(cancelled).toBeGreaterThanOrEqual(0);
+    const after = run.transcript.slice(cancelled);
+    for (const step of SETUP_FLOW.filter((s) => s.repeats === "per-login")) {
+      expect(after, `un-ticked by a cancelled attempt: ${step.id}`).toContain(
+        `${DONE} ${step.title}`,
+      );
+      expect(after, `re-rendered as pending: ${step.id}`).not.toContain(`${PENDING} ${step.title}`);
+    }
+  });
+
+  it("keeps a saved login ticked when a later attempt is refused as the same account", async () => {
+    // Same regression, reached through `saveLogin`'s typed-refusal branch
+    // rather than a cancelled nickname: an attempt that ends in
+    // "Nothing was saved for this login." must not un-tick the login that WAS
+    // saved a moment earlier.
+    vi.mocked(exchangeCode)
+      .mockResolvedValueOnce({ accessToken: "at-1", refreshToken: "rt-1" })
+      .mockResolvedValueOnce({ accessToken: "at-2", refreshToken: "rt-2" });
+
+    const paths = fixture();
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "main",
+        "https://localhost/callback?code=one",
+        "y", // add another…
+        "second",
+        "https://localhost/callback?code=two",
+        "n", // …which is the SAME account: not a different person → refused
+        "", // no more logins
+        "n", // no Claude Desktop install
+      ],
+      paths,
+    );
+
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(existsSync(join(paths.profilesDir, "second.env"))).toBe(false);
+    // Which refusal it was matters: this test claims the checklist survives a
+    // SAME_ACCOUNT decline, so the confirmation must actually have been asked.
+    expect(run.transcript).toContain("Is this a DIFFERENT PERSON'S login for the same company?");
+
+    const refused = run.transcript.indexOf("Nothing was saved for this login.");
+    expect(refused).toBeGreaterThanOrEqual(0);
+    const after = run.transcript.slice(refused);
+    for (const step of SETUP_FLOW.filter((s) => s.repeats === "per-login")) {
+      expect(after, `un-ticked by a refused attempt: ${step.id}`).toContain(
+        `${DONE} ${step.title}`,
+      );
+      expect(after, `re-rendered as pending: ${step.id}`).not.toContain(`${PENDING} ${step.title}`);
+    }
+  });
+
   it("leaves base .env holding app credentials only", async () => {
     const paths = fixture();
     await runScripted(HAPPY_ANSWERS, paths);
@@ -739,10 +835,29 @@ describe("runWizard: the same-account confirmation", () => {
     const paths = fixture();
     const incumbent = seedProfile(paths, "acme", "AC-1", "rt-incumbent");
 
-    await runScripted(
-      ["cid-123", "sec-abc", "second", "https://localhost/callback?code=abc123", "n", "", "n"],
+    const run = await runScripted(
+      [
+        "cid-123",
+        "sec-abc",
+        "second",
+        "https://localhost/callback?code=abc123",
+        "n", // NOT a different person's login → refuse, write nothing
+        "n", // nothing is saved, so the wizard offers another attempt: no
+        "n", // no Claude Desktop install
+      ],
       paths,
     );
+
+    // NON-VACUITY FIRST. Every assertion below this one is negative — a file
+    // that is absent, a marker that is not there — and a run that died early
+    // would satisfy all of them without ever reaching the decline branch. The
+    // exit code, the fully consumed script and the branch's own line are what
+    // prove the wizard walked through the confirmation and came out the other
+    // side, so the never-un-quarantine-without-an-explicit-yes property is
+    // actually pinned at this surface.
+    expect(run.code).toBe(0);
+    expect(run.unused).toEqual([]);
+    expect(run.transcript).toContain("Nothing was saved for this login.");
 
     expect(existsSync(join(paths.profilesDir, "second.env"))).toBe(false);
     expect(readFileSync(incumbent, "utf8")).not.toContain("# freshbooks-distinct-login");
