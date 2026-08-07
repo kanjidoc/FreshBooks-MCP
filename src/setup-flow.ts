@@ -540,7 +540,13 @@ export const SETUP_FLOW: SetupStep[] = [
     troubleshooting: [
       {
         symptom: "exit 11 / could not look up the account details",
-        fix: "Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor.",
+        // The where-to-find-it sentence is PROBED, not guessed (spec: the same
+        // REPORT_PARAMS discipline). Observed live 2026-08-07 on
+        // my.freshbooks.com: a single invoice's address carries the account id
+        // as the prefix before the dash. Deliberately claims nothing about the
+        // dashboard, the clients list or settings (checked — the id is absent
+        // from all three), nor about the id's length.
+        fix: "Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor. Need to find the Account ID yourself? In FreshBooks, open any invoice — the web address becomes my.freshbooks.com/#/invoice/XXXXXX-123, and the letters and digits between /invoice/ and the dash are the Account ID.",
       },
       {
         symptom: "quarantined profile mentioned",

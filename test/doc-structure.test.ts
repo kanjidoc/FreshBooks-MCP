@@ -17,11 +17,25 @@ import { join } from "node:path";
  * blanket "every module is in the tree" rule would fail on modules later tasks
  * have not documented yet, which is a different (and much noisier) guard than
  * the one this task owes.
+ *
+ * A third claim joins them once the setup rework lands: the THREE-SURFACE
+ * CONTRACT. The whole design rests on one body of setup copy (the Book) being
+ * rendered by three surfaces rather than retyped by each, and a session that
+ * reads CLAUDE.md without meeting that sentence will hand-write step copy into
+ * whichever surface it is editing. Same discipline — each surface's claim is
+ * premised on the module that implements it still existing.
  */
 
 const ROOT = join(__dirname, "..");
 const CLAUDE_MD = readFileSync(join(ROOT, "CLAUDE.md"), "utf8");
 const SETUP_CORE = "scripts/setup-core.ts";
+
+/** Surface number → the module that implements it (spec §Docs impact). */
+const SURFACES: [string, string][] = [
+  ["Surface 1", "scripts/setup.ts"],
+  ["Surface 2", "scripts/setup-headless.ts"],
+  ["Surface 3", "src/docs/render-setup.ts"],
+];
 
 /** The fenced block that follows the "## Project Structure" heading. */
 function projectStructureTree(md: string): string {
@@ -36,7 +50,13 @@ function projectStructureTree(md: string): string {
 
 const TREE_LINES = projectStructureTree(CLAUDE_MD).split("\n");
 
-describe.each([["src/setup-flow.ts"], [SETUP_CORE]])(
+describe.each([
+  ["src/setup-flow.ts"],
+  [SETUP_CORE],
+  ["scripts/setup-headless.ts"],
+  ["src/docs/render-setup.ts"],
+  ["scripts/generate-setup-docs.ts"],
+])(
   "CLAUDE.md project structure: %s",
   (modulePath) => {
     const basename = modulePath.slice(modulePath.lastIndexOf("/") + 1);
@@ -67,5 +87,44 @@ describe("CLAUDE.md single-Client invariant", () => {
     expect(bullet, "CLAUDE.md no longer states the single-Client invariant").toBeDefined();
     expect(bullet).toContain("buildOAuthClient");
     expect(bullet).toContain(SETUP_CORE);
+  });
+});
+
+describe("CLAUDE.md three-surface contract", () => {
+  it.each(SURFACES)("%s's module exists on disk (premise)", (_surface, modulePath) => {
+    expect(existsSync(join(ROOT, modulePath))).toBe(true);
+  });
+
+  // Same line, not merely the same document: a surface number stated apart from
+  // its module is exactly the mismatch a reader makes when editing the wrong
+  // one. (CLAUDE.md names each surface more than once — the tree and the
+  // contract table — so this asks that SOME line pairs them, not the first.)
+  it.each(SURFACES)("names %s and the module behind it, on one line", (surface, modulePath) => {
+    const lines = CLAUDE_MD.split("\n").filter((l) => l.includes(surface));
+    expect(lines.length, `CLAUDE.md never names ${surface}`).toBeGreaterThan(0);
+    expect(
+      lines.some((l) => l.includes(modulePath)),
+      `${surface} is never named alongside ${modulePath}`,
+    ).toBe(true);
+  });
+
+  it("names Surface 3 as the guided docs (spec §Docs impact)", () => {
+    const lines = CLAUDE_MD.split("\n").filter((l) => l.includes("Surface 3"));
+    expect(lines.some((l) => l.toLowerCase().includes("guided docs"))).toBe(true);
+  });
+
+  it("states the Book's regenerate step where it states the Book", () => {
+    expect(CLAUDE_MD, "CLAUDE.md does not name the Book").toContain("src/setup-flow.ts");
+    expect(
+      CLAUDE_MD,
+      "CLAUDE.md never tells a session to regenerate SETUP.md after a Book edit",
+    ).toContain("npx ts-node scripts/generate-setup-docs.ts");
+  });
+
+  it("routes the setup drift failure to the test that reports it", () => {
+    expect(
+      CLAUDE_MD,
+      "the doc-maintenance contract omits test/setup-flow-docs.test.ts",
+    ).toContain("test/setup-flow-docs.test.ts");
   });
 });
