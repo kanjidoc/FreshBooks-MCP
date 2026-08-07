@@ -189,7 +189,8 @@ vi.mock("../scripts/setup-core", async (importOriginal) => {
     buildTokenClient: vi.fn(),
     exchangeCode: vi.fn(),
     discoverMemberships: vi.fn(),
-    // The only two functions in the project that spawn a process.
+    // The only two process spawners this surface can reach (`runBuild` is the
+    // third in the project, and only the wizard calls it).
     isClaudeCliAvailable: vi.fn(),
     claudeMcpAddJson: vi.fn(),
     // Real by default — overridden once, to simulate an unexpected throw.
@@ -367,19 +368,24 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // THE SWEEP. Unconditional, every test, both streams, every canary — this is
-  // the file's whole contract, and there is deliberately no way for a test to
-  // opt out of it.
-  expectNoCanaryMaterial(allOutput());
-
-  vi.restoreAllMocks();
-  while (roots.length) {
-    const root = roots.pop()!;
-    // A permission fixture may have left a directory read-only; re-open it so
-    // the temp tree can actually be removed.
-    const locked = join(root, "locked");
-    if (existsSync(locked)) chmodSync(locked, 0o755);
-    rmSync(root, { recursive: true, force: true });
+  try {
+    // THE SWEEP. Unconditional, every test, both streams, every canary — this
+    // is the file's whole contract, and there is deliberately no way for a test
+    // to opt out of it.
+    expectNoCanaryMaterial(allOutput());
+  } finally {
+    // A failed sweep must still take the canary-bearing temp trees with it:
+    // leaving credential-shaped files in the system temp dir is precisely the
+    // outcome this file exists to prevent.
+    vi.restoreAllMocks();
+    while (roots.length) {
+      const root = roots.pop()!;
+      // A permission fixture may have left a directory read-only; re-open it so
+      // the temp tree can actually be removed.
+      const locked = join(root, "locked");
+      if (existsSync(locked)) chmodSync(locked, 0o755);
+      rmSync(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -414,14 +420,36 @@ describe("the sweep itself", () => {
     const client = readFileSync(join(root, "src", "freshbooks-client.ts"), "utf8");
     expect(client).toMatch(/^function persistTokens\(/m);
     expect(client).not.toMatch(/^export (?:async )?function persistTokens\b/m);
+    // Declaring it privately and re-exporting it at the bottom is the same
+    // thing with an extra line, so the export-list forms are refused too.
+    expect(client, "persistTokens is re-exported").not.toMatch(
+      /^export\s*\{[^}]*\bpersistTokens\b/m,
+    );
+    expect(client, "persistTokens is the default export").not.toMatch(
+      /^export\s+default\s+persistTokens\b/m,
+    );
 
-    /** The named imports one module takes from `src/freshbooks-client`. */
-    const borrowed = (source: string): string[] =>
-      (/import\s*\{([^}]*)\}\s*from\s*"\.\.\/src\/freshbooks-client"/.exec(source)?.[1] ?? "")
-        .split(",")
+    /**
+     * The runtime values one module borrows from `src/freshbooks-client` — ALL
+     * of them. Every import statement naming that module is collected (a second
+     * one is legal TypeScript, and reading only the first would let a later
+     * borrow in unseen), type-only imports are dropped since they carry no
+     * runtime value, and what is left must be a named-brace import: a namespace
+     * or default import would reach past the expected list entirely.
+     */
+    const borrowed = (source: string): string[] => {
+      const statements = [
+        ...source.matchAll(/import\s+(type\s+)?([^;]*?)from\s*"\.\.\/src\/freshbooks-client"/g),
+      ].filter((m) => !m[1]);
+      const clauses = statements.map((m) => m[2].trim());
+      for (const clause of clauses)
+        expect(clause, "a non-named import of src/freshbooks-client").toMatch(/^\{[^}]*\}$/);
+      return clauses
+        .flatMap((clause) => clause.slice(1, -1).split(","))
         .map((name) => name.trim())
         .filter(Boolean)
         .sort();
+    };
 
     expect(borrowed(readFileSync(join(root, "scripts", "setup-headless.ts"), "utf8"))).toEqual([
       "decodeJwtExp",

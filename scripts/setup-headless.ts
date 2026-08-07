@@ -351,12 +351,80 @@ function stepFor(id: string) {
 }
 
 /**
+ * The two verbs no Book step lists, and the step whose part of SETUP.md a
+ * failure on them belongs to.
+ *
+ * The Book's `verbs` lists name the verb that ADVANCES each step; `--reauth`
+ * and `--discard-pending` advance nothing — they repair a saved login and clear
+ * a staged pair, both of which are `save-login`'s subject matter, which is also
+ * the step their own handlers key every envelope to.
+ */
+const VERB_STEP_FALLBACK = new Map<string, string>([
+  ["--reauth", "save-login"],
+  ["--discard-pending", "save-login"],
+]);
+
+/**
  * Which Book step owns a verb, read from the Book's own `verbs` lists rather
- * than a second table here. Verbs the Book does not map (`--reauth`,
- * `--discard-pending`) fall back to the caller-supplied default.
+ * than a second table here, with `VERB_STEP_FALLBACK` covering the two verbs
+ * the Book does not map. `fallback` is what is left for a verb this build does
+ * not implement at all.
  */
 function stepIdForVerb(verbFlag: string, fallback: string): string {
-  return SETUP_FLOW.find((s) => s.verbs?.includes(verbFlag))?.id ?? fallback;
+  return (
+    SETUP_FLOW.find((s) => s.verbs?.includes(verbFlag))?.id ??
+    VERB_STEP_FALLBACK.get(verbFlag) ??
+    fallback
+  );
+}
+
+/**
+ * "What IS staged", for the exit-2 a resume emits when its `--name` has nothing
+ * under it.
+ *
+ * SCOPED BY THE ASKING VERB (`mode`). A pending's mode decides which verb can
+ * resume it — the mode gate in each resume refuses the other one — so offering
+ * a reauth-staged name to `--add-login` (or the reverse) buys the caller a
+ * second refusal to learn what this one already knew. Every staged name is
+ * still reported, in the group that says what to DO with it:
+ *
+ *   - this verb's own mode → resumable;
+ *   - the other mode → named with the verb that can resume it;
+ *   - neither (today only `mode: "unknown"`, a damaged marker) → named with
+ *     `--discard-pending`. `listPendings` deliberately reports these so no
+ *     token-bearing file lingers unseen, but `loadPending` reads one as nothing
+ *     staged, so no resume of either verb can take it. The third group is the
+ *     REMAINDER rather than an equality test, so a mode this function has not
+ *     been taught can never fall out of the listing unmentioned.
+ *
+ * Returns "" when nothing is staged at all; that case wants a different
+ * sentence and every caller writes its own.
+ */
+function stagedListing(
+  pendings: ReturnType<typeof listPendings>,
+  mode: PendingRecord["mode"],
+): string {
+  const otherMode = mode === "add" ? "reauth" : "add";
+  const otherVerb = otherMode === "add" ? "--add-login" : "--reauth";
+  const resumable = pendings.filter((p) => p.mode === mode).map((p) => p.name);
+  const crossVerb = pendings.filter((p) => p.mode === otherMode).map((p) => p.name);
+  const damaged = pendings
+    .filter((p) => p.mode !== "add" && p.mode !== "reauth")
+    .map((p) => p.name);
+  const parts: string[] = [];
+  if (resumable.length)
+    parts.push(`These logins are staged and can be resumed: ${resumable.join(", ")}.`);
+  if (crossVerb.length)
+    parts.push(
+      `These were staged by ${otherVerb}, so resume each with ${otherVerb} --name <nickname>: ` +
+        `${crossVerb.join(", ")}.`,
+    );
+  if (damaged.length)
+    parts.push(
+      "These hold a staged pair whose markers are damaged, so no resume can read them — clear " +
+        `each with --discard-pending --name <nickname>: ${damaged.join(", ")}.`,
+    );
+  return parts.join(" ");
 }
 
 /**
@@ -391,12 +459,13 @@ function bookFix(stepId: string, symptomFragment: string): string {
  * and has never been migrated.
  *
  * This is the SAME content predicate as `SetupCtx.legacyNeedsMigration`
- * (`src/setup-flow.ts`) — a non-empty `FRESHBOOKS_REFRESH_TOKEN=` line (the
- * wizard's regex, `scripts/setup.ts`'s `maybeMigrateLegacyEnv`) AND no
+ * (`src/setup-flow.ts`) — a non-empty `FRESHBOOKS_REFRESH_TOKEN=` line AND no
  * `FRESHBOOKS_MIGRATED` marker. Exported because three surfaces must agree on
  * it byte for byte: this dispatcher (which refuses), `--doctor` (which reports
- * it), and the wizard (which offers the migration). A surface that re-derives
- * the predicate instead of calling this is how the three drift apart.
+ * it), and the wizard, which calls this to fill `ctx.legacyNeedsMigration`
+ * before rendering its checklist or offering the migration
+ * (`runWizard` in `scripts/setup.ts`). A surface that re-derives the predicate
+ * instead of calling this is how the three drift apart.
  *
  * An unreadable `.env` answers `false` — "cannot tell" must not be reported as
  * "unmigrated", and the verb that actually needs the file will fail with its
@@ -1139,16 +1208,15 @@ async function runAddLoginResume(
 
   const pending = loadPending(paths.profilesDir, name);
   if (!pending) {
-    const staged = listPendings(paths.profilesDir).map((p) => p.name);
+    const listing = stagedListing(listPendings(paths.profilesDir), "add");
     return usage(
       emit,
       verb,
       saveStep.id,
       `Nothing is staged under the name "${name}", so there is no login to resume.`,
-      staged.length
-        ? `These logins are staged and can be resumed: ${staged.join(", ")}. To start a new ` +
-            "login instead, run --auth-url and pass the pasted address to --add-login --name " +
-            "<nickname> --callback-url '<the pasted address>'."
+      listing
+        ? `${listing} To start a new login instead, run --auth-url and pass the pasted address ` +
+            "to --add-login --name <nickname> --callback-url '<the pasted address>'."
         : "Nothing is staged at all: run --auth-url and pass the pasted address to --add-login " +
             `--name ${name} --callback-url '<the pasted address>' — single-quoted, because the ` +
             "address contains ? and =.",
@@ -1166,14 +1234,21 @@ async function runAddLoginResume(
     );
   }
 
+  // The two flags are one gesture and are refused in BOTH directions. Half a
+  // gesture is never a decision: `--distinct-login` alone would write a second
+  // profile off an unasked question, and `--confirm-different-user` alone —
+  // treated silently as unconfirmed — re-emits exit 8, which reads to a driving
+  // agent as though the human's answer had not been accepted.
   const distinctLogin = parsed.flags.has("--distinct-login");
   const confirmedDifferentUser = parsed.flags.has("--confirm-different-user");
-  if (distinctLogin && !confirmedDifferentUser) {
+  if (distinctLogin !== confirmedDifferentUser) {
+    const passed = distinctLogin ? "--distinct-login" : "--confirm-different-user";
+    const missing = distinctLogin ? "--confirm-different-user" : "--distinct-login";
     return usage(
       emit,
       verb,
       saveStep.id,
-      "--distinct-login was passed without --confirm-different-user.",
+      `${passed} was passed without ${missing}.`,
       `Ask the user the exit-8 question first and obey its directive: ${EXIT8_DIRECTIVE}. Only ` +
         "with an affirmative reply in hand, re-run the resume with both --distinct-login and " +
         "--confirm-different-user.",
@@ -1555,8 +1630,11 @@ function saveLogin(
       EXIT.DUP_PAIR,
       saveStep.id,
       symptom,
+      // The writer's scan already knows which login it tripped over, so the fix
+      // names it. The placeholder survives only for a refusal that carried no
+      // conflict name — never a state this backstop can currently reach.
       `Reconnect the saved login with --reauth --name ${
-        err.code === "NAME_TAKEN" ? name : "<that login's nickname>"
+        (err.code === "NAME_TAKEN" ? name : err.conflictName) ?? "<that login's nickname>"
       }. But if --doctor shows that profile healthy, the save already completed (a server ` +
         "rotation raced the resume) and nothing more is needed: this exit has already discarded " +
         "the staged pair.",
@@ -1773,8 +1851,15 @@ function noSuchLogin(emit: Emit, paths: SetupPaths, name: string): number {
   );
 }
 
-/** The nicknames of every saved profile — a fresh scan, never the registry. */
-function savedProfileNames(profilesDir: string): string[] {
+/**
+ * The nicknames of every saved profile — a fresh scan, never the registry.
+ *
+ * Exported because the wizard asks the same question of the same directory
+ * ("does this project have a login at all?", on a re-run that adds one), and
+ * two definitions of what counts as a saved login file are two chances for the
+ * two surfaces to disagree about whether a user is configured.
+ */
+export function savedProfileNames(profilesDir: string): string[] {
   if (!existsSync(profilesDir)) return [];
   return readdirSync(profilesDir)
     .filter((file) => file.endsWith(".env"))
@@ -1891,7 +1976,7 @@ async function resumeStagedReauth(
 
   const pending = loadPending(paths.profilesDir, name);
   if (!pending) {
-    const stagedNames = listPendings(paths.profilesDir).map((p) => p.name);
+    const listing = stagedListing(listPendings(paths.profilesDir), "reauth");
     return {
       ok: false,
       code: usage(
@@ -1899,10 +1984,9 @@ async function resumeStagedReauth(
         verb,
         saveStep.id,
         `Nothing is staged under the name "${name}", so there is no re-auth to resume.`,
-        stagedNames.length
-          ? `These logins are staged and can be resumed: ${stagedNames.join(", ")}. To reconnect ` +
-              `"${name}" instead, run --auth-url and pass the pasted address to --reauth --name ` +
-              `${name} --callback-url '<the pasted address>'.`
+        listing
+          ? `${listing} To reconnect "${name}" instead, run --auth-url and pass the pasted ` +
+              `address to --reauth --name ${name} --callback-url '<the pasted address>'.`
           : "Nothing is staged at all: run --auth-url and pass the pasted address to --reauth " +
               `--name ${name} --callback-url '<the pasted address>' — single-quoted, because ` +
               "the address contains ? and =.",
@@ -2153,8 +2237,9 @@ const BARE_COMMAND_CAVEAT =
 
 /**
  * The open-this-folder script the spec's code branch calls for. Its wording
- * mirrors the wizard's long-standing manual text (`printMcpConfig` in
- * `scripts/setup.ts`) rather than inventing a second way to say the same thing.
+ * mirrors the wizard's long-standing manual text — which now renders from the
+ * Book's `install-config` humanScript — rather than inventing a second way to
+ * say the same thing.
  */
 const OPEN_THIS_FOLDER_SCRIPT =
   'Claude Code: open this folder as your project in Claude Code and enable the "freshbooks" server when ' +
@@ -2604,6 +2689,22 @@ function formatAge(ms: number): string {
 }
 
 /**
+ * "<verb> <when>" for something already past — "expired just now", "staged 3 d
+ * ago". `formatAge`'s sub-minute answer is an INSTANT, not a duration, so it
+ * cannot take "ago" ("expired just now ago").
+ */
+function elapsedPhrase(ms: number): string {
+  const age = formatAge(ms);
+  return age === "just now" ? age : `${age} ago`;
+}
+
+/** The same, for something still ahead — "expires in 3 d" / "in under a minute". */
+function remainingPhrase(ms: number): string {
+  const age = formatAge(ms);
+  return age === "just now" ? "in under a minute" : `in ${age}`;
+}
+
+/**
  * The ctx the Book's own `check()` / `appliesIf()` functions run against.
  *
  * `legacyNeedsMigration` is computed HERE, by the shared predicate, per
@@ -2854,8 +2955,8 @@ function profileHealthCheck(profile: ProfileState, discovery: DiscoveryResult): 
     health.expirySeconds === null
       ? "its access token carries no readable expiry"
       : health.expired
-        ? `its access token expired ${formatAge(-health.expirySeconds * 1000)} ago`
-        : `its access token expires in ${formatAge(health.expirySeconds * 1000)}`;
+        ? `its access token expired ${elapsedPhrase(-health.expirySeconds * 1000)}`
+        : `its access token expires ${remainingPhrase(health.expirySeconds * 1000)}`;
 
   // The "refresh it now" advice is the same on every branch; only the reason
   // differs, and an unreadable expiry is NOT the same story as a near-expiry
@@ -2961,9 +3062,12 @@ function pendingChecks(paths: SetupPaths): DoctorCheck[] {
     return doctorCheck(
       `staged-pending:${pending.name}`,
       "save-login",
-      pending.ageMs > STALE_PENDING_MS ? "warn" : "pass",
+      // A damaged pending warns at any age: the only advice available for it is
+      // "clear it", and a passing check that tells the reader to clear
+      // something is a check they are entitled to ignore.
+      pending.ageMs > STALE_PENDING_MS || resume === null ? "warn" : "pass",
       `${pendingPath(paths.profilesDir, pending.name)} (mode=${pending.mode}) was staged ` +
-        `${formatAge(pending.ageMs)} ago and holds an unsaved token pair`,
+        `${elapsedPhrase(pending.ageMs)} and holds an unsaved token pair`,
       resume
         ? `Finish it with \`${resume}\`, or clear it with \`${discard}\`. Clearing removes the ` +
             "pair from this computer; it does not revoke the grant at FreshBooks."
@@ -2982,6 +3086,7 @@ function pendingChecks(paths: SetupPaths): DoctorCheck[] {
  */
 function rescueChecks(paths: SetupPaths): DoctorCheck[] {
   const found: { file: string; path: string; profile: string | null }[] = [];
+  const scanFailure: DoctorCheck[] = [];
 
   const baseRescue = `${paths.baseEnvPath}${RESCUE_SUFFIX}`;
   if (existsSync(baseRescue)) {
@@ -3001,7 +3106,10 @@ function rescueChecks(paths: SetupPaths): DoctorCheck[] {
       }
     }
   } catch (err) {
-    return [
+    // Collected, NOT returned: the base `.env`'s rescue is found outside this
+    // directory, and dropping it because `profiles/` happens to be unreadable
+    // would hide a token pair that may be the only live one.
+    scanFailure.push(
       doctorCheck(
         "rescue-files",
         "save-login",
@@ -3009,19 +3117,19 @@ function rescueChecks(paths: SetupPaths): DoctorCheck[] {
         `${paths.profilesDir} could not be scanned for rescue files (${errorMessage(err)})`,
         `Make sure ${paths.profilesDir} is readable, then run --doctor again.`,
       ),
-    ];
+    );
   }
 
-  if (!found.length) {
+  if (!found.length && !scanFailure.length) {
     return [
       doctorCheck("rescue-files", "save-login", "pass", "no rescue file is lingering"),
     ];
   }
 
-  return found.map((rescue) => {
+  const findings = found.map((rescue) => {
     let age = "";
     try {
-      age = ` (${formatAge(Date.now() - statSync(rescue.path).mtimeMs)} old)`;
+      age = ` (written ${elapsedPhrase(Date.now() - statSync(rescue.path).mtimeMs)})`;
     } catch {
       // A file that vanished between the scan and the stat needs no age.
     }
@@ -3040,6 +3148,8 @@ function rescueChecks(paths: SetupPaths): DoctorCheck[] {
         "at the next refresh that is actually needed.",
     );
   });
+
+  return [...findings, ...scanFailure];
 }
 
 /** Every file whose loose permissions would expose a credential. */

@@ -37,13 +37,28 @@ import {
  *
  * The framing prose OUTSIDE the markers is hand-written and deliberately
  * unpinned — but it may never duplicate what a fence already says (the kickoff
- * prompt is the tested case: SETUP.md links to README's copy).
+ * prompt is the tested case: SETUP.md links to README's copy), and the two
+ * HONESTY CLAIMS the spec drafts (per-rung time, rung-2 touchpoint floor) are
+ * pinned by substring: they are the only load-bearing sentences the generator
+ * cannot restore if someone tidies them away.
  */
 
 const ROOT = join(__dirname, "..");
 const readDoc = (name: string): string => readFileSync(join(ROOT, name), "utf8");
 const SETUP_MD = readDoc("SETUP.md");
 const README_MD = readDoc("README.md");
+
+/**
+ * SETUP.md with every generated region removed — the hand-written framing
+ * prose, and nothing else. The honesty pins assert against THIS, not the whole
+ * document: a sentence the Book happened to render into some step's block would
+ * otherwise satisfy a naive containment check while the prose a reader meets
+ * before any step stayed silent.
+ */
+const FRAMING_PROSE = SETUP_MD.replace(
+  /^<!-- setup-step:[a-z0-9-]+ BEGIN -->\n[\s\S]*?\n<!-- setup-step:[a-z0-9-]+ END -->$/gm,
+  "",
+);
 
 const DOCS_STEPS = SETUP_FLOW.filter((s) => s.surfaces.includes("docs"));
 
@@ -210,6 +225,48 @@ describe("SETUP.md structure", () => {
   });
 });
 
+/**
+ * Spec §Docs impact, "honest expectations". Both claims exist to stop a reader
+ * from discovering the real cost halfway through: the time estimate is
+ * per-rung (the old flat "about 15 minutes" was only ever true when Claude
+ * could run the commands), and the touchpoint floor names how many things stay
+ * the user's even on the rung where Claude drives. Neither is derivable from
+ * the Book, so nothing but these assertions keeps them in the document.
+ */
+describe("SETUP.md honest expectations", () => {
+  /** Spec §Docs impact, drafted verbatim. */
+  const TIME_HONESTY =
+    "15 minutes if Claude can run commands for you; up to an hour your first time by hand";
+  /** Spec §Docs impact — "~35–40 user actions" (en dash, as the spec writes it). */
+  const TOUCHPOINT_FLOOR = "35–40";
+
+  it("states the per-rung time, in the framing prose, not a flat number", () => {
+    expect(FRAMING_PROSE, "SETUP.md lost the per-rung time claim").toContain(TIME_HONESTY);
+    // The pinned fragment the brief names, asserted in its own right so a
+    // reworded second half cannot quietly take the first half with it.
+    expect(FRAMING_PROSE).toContain("15 minutes if Claude can run commands");
+    expect(
+      FRAMING_PROSE,
+      "the old unqualified 'about 15 minutes' promise is back",
+    ).not.toContain("and about 15 minutes");
+  });
+
+  it("states the touchpoint floor inside the limitations section", () => {
+    const limitations = headings(FRAMING_PROSE).find((h) => /limitation/i.test(h.title));
+    expect(limitations, "SETUP.md has no limitations section").toBeDefined();
+    const body = FRAMING_PROSE.slice(limitations!.at, limitations!.bodyEnd);
+    expect(body, `the limitations section does not state the ${TOUCHPOINT_FLOOR} floor`).toContain(
+      TOUCHPOINT_FLOOR,
+    );
+    expect(body).toContain("user actions");
+  });
+
+  it("keeps the framing prose free of fenced content (the strip actually stripped)", () => {
+    expect(FRAMING_PROSE).not.toContain("setup-step:");
+    expect(FRAMING_PROSE.length).toBeLessThan(SETUP_MD.length);
+  });
+});
+
 describe("the generator itself", () => {
   const doc = [
     "# Title",
@@ -238,6 +295,15 @@ describe("the generator itself", () => {
     expect(filled.slice(0, filled.indexOf(beginMarker("verify")))).toBe(
       doc.slice(0, doc.indexOf(beginMarker("verify"))),
     );
+  });
+
+  it("refuses a body that does not end in a newline instead of eating its last line", () => {
+    // The splice drops the trailing "" that a newline-terminated body's split
+    // leaves behind. Handed a body without one, it would silently swallow the
+    // final line — a truncated block that still passes every marker check.
+    expect(() => replaceStepRegion(doc, "verify", "fresh\nlines")).toThrow(/newline/);
+    // The empty region stays legal: that is how a fresh skeleton starts out.
+    expect(() => replaceStepRegion(doc, "verify", "")).not.toThrow();
   });
 
   it("refuses a document whose markers are missing, duplicated, or out of order", () => {

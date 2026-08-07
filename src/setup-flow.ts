@@ -301,8 +301,13 @@ export const SETUP_FLOW: SetupStep[] = [
       "First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet.",
       "Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again.",
     ],
-    agentGuidance:
-      "Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)",
+    // No `check()` on this step, deliberately: its check IS the raw
+    // `node --version` the humanScript prints, and the doctor's `node-version`
+    // check is independent of it by design (it reads the running process's own
+    // version — see `nodeVersionCheck` in `scripts/setup-headless.ts`). That is
+    // a note to whoever edits this file, not copy for a reader, so it lives
+    // here rather than in `agentGuidance`.
+    agentGuidance: "Run the check yourself where you can; relay the install steps verbatim and wait.",
     successCheck: "`node --version` prints v18 or higher.",
     docPhrases: ["that's the expected answer", "that's the normal installer, not me"],
     troubleshooting: [
@@ -540,7 +545,13 @@ export const SETUP_FLOW: SetupStep[] = [
     troubleshooting: [
       {
         symptom: "exit 11 / could not look up the account details",
-        fix: "Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor.",
+        // The where-to-find-it sentence is PROBED, not guessed (spec: the same
+        // REPORT_PARAMS discipline). Observed live 2026-08-07 on
+        // my.freshbooks.com: a single invoice's address carries the account id
+        // as the prefix before the dash. Deliberately claims nothing about the
+        // dashboard, the clients list or settings (checked — the id is absent
+        // from all three), nor about the id's length.
+        fix: "Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor. Need to find the Account ID yourself? In FreshBooks, open any invoice — the web address becomes my.freshbooks.com/#/invoice/XXXXXX-123, and the letters and digits between /invoice/ and the dash are the Account ID.",
       },
       {
         symptom: "quarantined profile mentioned",

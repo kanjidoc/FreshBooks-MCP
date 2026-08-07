@@ -446,6 +446,9 @@ describe("--reauth: the gates that run before the exchange", () => {
       errs = [];
       expect(await runHeadless(resumeArgv("main", ...extra), paths)).toBe(EXIT.USAGE);
       expect(envelope().fix).toContain(extra[0]);
+      // `--reauth` is not in any Book step's `verbs` list, so this rejection
+      // runs on the dispatcher's fallback — which still has to name a step.
+      expect(envelope().stepId).toBe("save-login");
     }
 
     expect(discoverMemberships).not.toHaveBeenCalled();
@@ -733,6 +736,30 @@ describe("--reauth: the resume grammar", () => {
     expectNoCanaryMaterial(allOutput());
   });
 
+  it("does not offer an add-staged pending as resumable under --reauth", async () => {
+    // The mirror of the `--add-login` case: the listing is scoped to the verb
+    // that asked, so a pending this verb's own mode gate would refuse is named
+    // with the verb that can resume it rather than offered here.
+    const paths = fixture();
+    seedProfile(paths, "main", "ACC-1");
+    stageReauth(paths, "acme");
+    stagePending(paths.profilesDir, "beta", {
+      mode: "add",
+      stagedAt: new Date().toISOString(),
+      accessToken: STAGED_ACCESS,
+      refreshToken: STAGED_REFRESH,
+    });
+
+    expect(await runHeadless(resumeArgv("main"), paths)).toBe(EXIT.USAGE);
+
+    const fix: string = envelope().fix;
+    expect(fix).toMatch(/can be resumed: acme\./);
+    expect(fix).toContain("beta");
+    expect(fix).toContain("--add-login");
+    expect(fix).not.toMatch(/can be resumed:[^.]*beta/);
+    expectNoCanaryMaterial(allOutput());
+  });
+
   it("refuses an add-staged pending with exit 2 naming --add-login", async () => {
     const paths = fixture();
     seedProfile(paths, "main", "ACC-1");
@@ -923,6 +950,10 @@ describe("--discard-pending", () => {
     const code = await runHeadless([...discardArgv("main"), "--account-id", "ACC-1"], paths);
 
     expect(code).toBe(EXIT.USAGE);
+    // The Book maps no step to this verb, so the flag rejection has to fall
+    // back — and an empty stepId would strand a driving agent with no part of
+    // SETUP.md to return to.
+    expect(envelope().stepId).toBe("save-login");
     expect(loadPending(paths.profilesDir, "main")).not.toBeNull();
   });
 

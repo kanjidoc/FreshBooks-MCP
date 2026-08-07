@@ -620,9 +620,10 @@ As plan v1 (CHANGELOG complete; full suite; **Open PR 3**; no version bump).
 
 Rules: text in quotes is **verbatim Book content** — copy exactly. Items
 marked *(spec §X)* are NOT restated here — copy them verbatim from that spec
-section. `PROBE:` markers are filled by T1 Step 1 (never guessed). Each step
-lists: Title · humanScript (H) · agentGuidance (A) · successCheck (SC) ·
-docPhrases (DP) · troubleshooting (TR).
+section. `PROBE:` markers are filled by T1 Step 1 (never guessed) — **probe
+completed 2026-08-06; no `PROBE:` marker remains, and the Book carries the
+observed portal content.** Each step lists: Title · humanScript (H) ·
+agentGuidance (A) · successCheck (SC) · docPhrases (DP) · troubleshooting (TR).
 
 **choose-claude** — Title: "Which Claude will you use?"
 H: "Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?" · "If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it. Download the Claude desktop app from claude.ai/download, then come back and continue from here — this guide gets you ready for it."
@@ -732,5 +733,5 @@ appends "(Windows: the file opens in Notepad — select all, paste, Ctrl+S)".
 
 - **Spec coverage re-check:** the 13 round-1 fidelity gaps each landed: SECRETS_RULES-in-block (T15 + T16 tests), plural exit-9 (T7 dispatcher), mcp-json target (T11), general rescue-shred (T13 persistTokens-success + T4 replaceProfileTokens), exit-6 relay + immediately (Appendix A save-login + T1 manifest), sidebar drift (T16), kickoff link-not-duplicate (T16), malformed fixture (T12), quarantine-persists (T10 + Appendix A), exit-11 fix text (Appendix A), PR-1 CHANGELOG (T5), refresh-CLI hygiene note (T14), wizard no-raw-stack (T18).
 - **Reconciliations:** all three landed in spec v3.2; `--trust-exec-path` in HEADLESS_VERBS (T1); env-var override replaced by `SetupPaths` (T7/T11/T12); citation labels fixed (T3, T14 now cite §Typed errors / §Security hardening "Hygiene tests" + §Testing).
-- **Placeholder scan:** the three deliberation residues are flattened; the only `PROBE:` markers are in Appendix A `developer-app` with an owning, blocking probe step (T1 Step 1) — a specified data-collection step, not a placeholder; the exit-11 pointer carries drafted interim text with its PR-3 replacement step (T19).
+- **Placeholder scan:** the three deliberation residues are flattened; the only `PROBE:` markers are in Appendix A `developer-app` with an owning, blocking probe step (T1 Step 1) — a specified data-collection step, not a placeholder; the exit-11 pointer carries drafted interim text with its PR-3 replacement step (T19). *(Both probes have since completed — developer-app 2026-08-06, the account-ID pointer 2026-08-07 — and both now ship as observed text; no `PROBE:` marker and no interim text remains.)*
 - **Type consistency:** `SECRETS_RULES` shape is `{rows, selfTest, honestyNotes}` everywhere; `tryAdoptRescue` returns boolean matching its flow and tests; `runHeadless(argv, paths?)` threading matches T12's `runDoctor(paths)` and T10's lock check; file-structure task labels corrected.

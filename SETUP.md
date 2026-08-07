@@ -46,7 +46,11 @@ place, and the steps are the same either way.
   claude.ai tab cannot use it; the first step below sorts this out.
 - **A FreshBooks account** — any regular plan. You will create a free
   "developer app" inside it. That is normal, and it is the longest step.
-- **A Mac or Windows computer**, and about 15 minutes.
+- **A Mac or Windows computer**, and some time. How much depends on who does the
+  typing:
+  **15 minutes if Claude can run commands for you; up to an hour your first time by hand.**
+  Most of that hour is the one-time developer-app form below — the rest of the
+  guide is short either way.
 
 ## The setup steps
 
@@ -123,7 +127,7 @@ Check for Node.js 18 or newer and install it from nodejs.org if it is missing.
 
 ### If Claude can run commands on your computer:
 
-Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)
+Run the check yourself where you can; relay the install steps verbatim and wait.
 
 ### If you are typing every command yourself:
 
@@ -417,7 +421,7 @@ The setup finds this login's account details and saves them into its own profile
 
 | If you see | Do this |
 |---|---|
-| exit 11 / could not look up the account details | Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor. |
+| exit 11 / could not look up the account details | Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor. Need to find the Account ID yourself? In FreshBooks, open any invoice — the web address becomes my.freshbooks.com/#/invoice/XXXXXX-123, and the letters and digits between /invoice/ and the dash are the Account ID. |
 | quarantined profile mentioned | Two profiles share one company; the extra safety stays on until the duplicate is resolved — the doctor explains which file to remove or mark. |
 <!-- setup-step:save-login END -->
 
@@ -606,8 +610,17 @@ changing anything). If a login says `REFRESH FAILED`, that login's access was
 revoked — for example the developer app was deleted, or it went unused for about
 a month. Reconnect it by running the setup again.
 
-## A couple of honest limitations
+## Honest limitations
 
+- **Setup needs you at the keyboard, even when Claude drives it.** On the path
+  where Claude can run commands, expect a floor of roughly **35–40 user actions**
+  that only you can take: permission dialogs to read and approve, boxes to fill
+  in on the FreshBooks developer-app form, a browser sign-in and Allow for each
+  login, a few copy-pastes, and one full quit-and-reopen of Claude. (The
+  developer app's scope list is several minutes of repeated clicking on top of
+  that — it is one step, not forty.) Claude cannot take those actions for you.
+  What it can do, and what this guide asks it to do, is tell you what each
+  dialog will say before it appears, and never ask you for the same thing twice.
 - **Creating credit notes and journal entries doesn't work yet.** This is a bug
   in the FreshBooks SDK this project depends on, not in this project. *Reading*
   credit notes and journal-entry data works fine. See [CHANGELOG.md](CHANGELOG.md).

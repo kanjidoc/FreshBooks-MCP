@@ -34,15 +34,27 @@ export type ProfileWriteErrorCode = "NAME_TAKEN" | "DUPLICATE_TOKEN" | "SAME_ACC
  * parsing prose. The MESSAGES are deliberately unchanged from the untyped throws
  * they replace: `scripts/setup.ts` prints `err.message` verbatim to the user and
  * the existing suite matches on that text, so reword nothing here.
+ *
+ * `conflictName` is the OTHER login the guard tripped over — the nickname of the
+ * profile already holding that refresh token or account. It is additive and
+ * optional precisely because the messages are frozen: a caller that wants to
+ * name the incumbent in its own words (the exit-5 envelope tells the agent which
+ * login to reconnect) reads this field rather than parsing `message`.
  */
 export class ProfileWriteError extends Error {
   constructor(
     public readonly code: ProfileWriteErrorCode,
     message: string,
+    public readonly conflictName?: string,
   ) {
     super(message);
     this.name = "ProfileWriteError";
   }
+}
+
+/** The nickname behind a `profiles/<name>.env` filename. */
+export function profileNameFromFile(file: string): string {
+  return file.endsWith(".env") ? file.slice(0, -".env".length) : file;
 }
 
 export function isMigrated(baseEnvContent: string): boolean {
@@ -104,6 +116,11 @@ export function stripTokensFromBaseEnv(content: string): string {
  * `force` that skips the liveness probe — training the user to disable the one safety
  * guarding against permanent lockout is unacceptable. The setup CLI sets it only after
  * interactively asking the user to confirm no server is running.
+ *
+ * A name already taken by a DIFFERENT login throws `ProfileWriteError("NAME_TAKEN")` —
+ * the same typed refusal `writeNewProfile` raises for the same condition, so a caller
+ * that re-prompts for a nickname on one path can re-prompt on the other. Every other
+ * failure here is an untyped `Error`: none of them is answered by a different name.
  */
 export function runMigration(opts: {
   name: string;
@@ -150,7 +167,8 @@ export function runMigration(opts: {
     const sameTokens =
       existing?.accessToken === config.accessToken && existing?.refreshToken === config.refreshToken;
     if (!sameTokens) {
-      throw new Error(
+      throw new ProfileWriteError(
+        "NAME_TAKEN",
         `profiles/${name}.env already exists with a DIFFERENT token set — refusing to overwrite. ` +
           `Manual recovery: inspect profiles/${name}.env and base .env; if the profile is the one to keep, ` +
           `remove the tokens from base .env (or add ${MIGRATED_MARKER}=1) by hand; otherwise rename/remove ` +
@@ -219,6 +237,7 @@ export function writeNewProfile(
           "DUPLICATE_TOKEN",
           `Refresh token already present in profiles/${file} — refusing to write profiles/${name}.env. ` +
             `Two profile files sharing one refresh token guarantee a double-rotation lockout.`,
+          profileNameFromFile(file),
         );
       }
       if (config.accountId && other.accountId === config.accountId) {
@@ -229,6 +248,7 @@ export function writeNewProfile(
             "SAME_ACCOUNT",
             `profiles/${file} already uses accountId ${config.accountId} — refusing to write ` +
               `profiles/${name}.env without confirmation that this is a DISTINCT login.`,
+            profileNameFromFile(file),
           );
         }
         console.warn(

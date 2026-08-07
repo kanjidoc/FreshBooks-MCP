@@ -21,6 +21,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - internal: setup flow extracted into a data-driven core; no behavior change
+- **`npm run setup` is rendered from the same data as the guide.** The wizard
+  no longer keeps its own copy of the setup instructions: every line it prints
+  now comes from `src/setup-flow.ts`, so it cannot describe the setup
+  differently from SETUP.md or from what Claude does on the agent path. What
+  you will notice: the FreshBooks developer-app step matches the portal as it
+  actually reads today (it said *Create an App*; the portal says *Create New
+  App*), it names the exact scopes to tick, and it asks you to read the
+  redirect URI back to yourself. A running checklist shows what is done, what
+  is in flight, and what is still ahead, repeating the per-login steps once per
+  login. The wizard no longer opens a browser for you — it prints the sign-in
+  link and tells you to open it, because two instructions for one action is one
+  too many. Failures print the failing step's own troubleshooting rows rather
+  than a stack trace.
+- **The guide is honest about the time and the effort.** *What you need before
+  you start* now gives a per-rung estimate — 15 minutes if Claude can run the
+  commands, up to an hour your first time by hand — instead of a flat "about 15
+  minutes" that was only ever true on the first path. A new limitation states
+  the floor of roughly 35–40 actions only you can take (permission dialogs, the
+  developer-app form, a browser sign-in per login, one full quit-and-reopen),
+  even when Claude drives.
 - **SETUP.md is now half generated.** One block per setup step is spliced in
   from `src/setup-flow.ts` — the same data the setup program itself runs on — by
   `scripts/generate-setup-docs.ts`, and `test/setup-flow-docs.test.ts`
@@ -36,6 +56,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   when you want Claude to install the server for you, with the opening heading
   its first reply should quote and the fallback for a Claude that cannot read
   the web.
+- **"Could not look up the account details" now tells you where to find the
+  Account ID.** The `save-login` troubleshooting row gained a probed (not
+  guessed) pointer: open any invoice in FreshBooks and the address bar reads
+  `my.freshbooks.com/#/invoice/XXXXXX-123` — the part before the dash is the
+  Account ID. The dashboard, the clients list and settings were each checked
+  and carry it nowhere, so the guide names only the place it was observed.
+- CLAUDE.md documents the setup Book and its three surfaces (the wizard, the
+  headless verbs, the guided docs), and the rule that any Book edit is followed
+  by `npx ts-node scripts/generate-setup-docs.ts` with the regenerated SETUP.md
+  committed alongside it.
 
 ### Fixed
 
@@ -52,6 +82,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stderr. The one deliberate exception is unchanged: the loud-failure recovery
   path that prints freshly rotated tokens to stderr when the post-refresh disk
   write fails (CLAUDE.md "Token persistence safety", invariant 4).
+- **`npm run setup` no longer writes over other MCP servers in `.mcp.json`.**
+  The wizard replaced that file wholesale, deleting any other server entry a
+  project had; it now merges, exactly as the headless `--install` already did.
+- **The wizard's checklist no longer un-ticks work you already finished.** A
+  cancelled or refused *additional* login re-rendered the already-saved login's
+  steps as pending — the "your work did not count" misread, on a screen whose
+  whole job is to say what is done.
+- **`npm run setup` on a second run no longer claims you have no logins.** Adding
+  a login by re-running setup is the documented path, and cancelling the login
+  prompt on such a run warned that nothing was configured — while working
+  profiles sat on disk. It now names the logins that are saved, and keeps the
+  warning for the case where there really are none. In the same stretch, the
+  checklist's *you are here* marker stayed on the login steps while the wizard
+  is still asking about logins (it jumped ahead to *Build the server*), and a
+  migration nickname that is already taken re-prompts for another name instead
+  of ending the run.
+- **Setup failures always name a step to go back to.** A `--reauth` or
+  `--discard-pending` refusal reported an empty step, leaving a driving agent
+  with no part of SETUP.md to return to; both now key to *Save the login*.
+  Exit 5 ("another saved login already holds this token") named the login to
+  reconnect with a literal `<that login's nickname>` placeholder — it now names
+  the actual login. A resume that finds nothing under the name you gave no
+  longer offers a damaged staged pair as resumable, since no command can resume
+  one; it names those separately, with the one command that clears them. That
+  listing is now scoped to the verb that asked, too: a pair staged by `--reauth`
+  is no longer offered to `--add-login` (or the reverse) as resumable — it is
+  named with the verb that can actually resume it, in one step instead of two.
+  Passing `--confirm-different-user` without `--distinct-login` was silently
+  treated as no confirmation at all; it is now refused by name, like its mirror.
+- **The setup doctor.** A lingering rescue file next to the base `.env` was
+  dropped from the report whenever `profiles/` could not be read — hiding a
+  token pair that may be the only live one. A staged pair whose markers are
+  damaged reported `pass` while its only advice was "clear it"; it now warns.
+  And durations under a minute no longer render as "expired just now ago".
 
 ### Security
 

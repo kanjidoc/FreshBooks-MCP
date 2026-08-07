@@ -1,5 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markDistinctLogin } from "../src/migrate";
@@ -28,10 +35,22 @@ const cfg = (a: string, acc: string, extra = "") =>
 
 const roots: string[] = [];
 
+/**
+ * Register a temp ROOT for removal in `afterEach`.
+ *
+ * The assertion is the point: registering a path *underneath* the mkdtemp root
+ * (the profiles dir, say) removes nothing and leaves the root behind in the
+ * system temp dir on every run.
+ */
+function track(root: string): string {
+  expect(existsSync(root), `${root} is not the mkdtemp root afterEach can remove`).toBe(true);
+  roots.push(root);
+  return root;
+}
+
 /** A profiles dir seeded with `files`; removed in afterEach. */
 function seed(files: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "fb-mdl-"));
-  roots.push(root);
+  const root = track(mkdtempSync(join(tmpdir(), "fb-mdl-")));
   const dir = join(root, "profiles");
   mkdirSync(dir);
   for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
@@ -134,8 +153,7 @@ describe("markDistinctLogin", () => {
   });
 
   it("returns [] when the profiles directory does not exist", () => {
-    const dir = join(mkdtempSync(join(tmpdir(), "fb-mdl-none-")), "profiles");
-    roots.push(dir);
+    const dir = join(track(mkdtempSync(join(tmpdir(), "fb-mdl-none-"))), "profiles");
     expect(markDistinctLogin(dir, "A1")).toEqual([]);
   });
 });

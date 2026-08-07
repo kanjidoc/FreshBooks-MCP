@@ -44,6 +44,8 @@ FreshBooks-MCP/
 │   ├── date-helpers.ts         # parseLocalDate() — avoids a UTC off-by-one on date-only fields
 │   ├── docs/                   # Embedded self-documentation for the freshbooks_help tool
 │   │   ├── content.ts          # Static help topic content (overview, architecture, etc.)
+│   │   ├── render-reports.ts   # Renders the reports help topic from REPORT_PARAMS
+│   │   ├── render-setup.ts     # Setup Surface 3 (guided docs) — renders Book steps into SETUP.md's blocks and the help `setup` topic
 │   │   └── render-tools.ts     # Renders the live tool inventory from the registry
 │   ├── tools/                  # Account wrapper, freshbooks_help, freshbooks_list_accounts, + one file per resource domain (17 files)
 │   │   ├── with-refresh.ts     # withAccount() (account injection + per-profile pre-call refresh) and withoutAccount()
@@ -72,8 +74,10 @@ FreshBooks-MCP/
 ├── .gitignore
 ├── .env.example                # Template for the shared OAuth app credentials (no tokens)
 ├── scripts/
-│   ├── setup.ts                # Interactive setup wizard (migration, add-login loop, OAuth, config) — prompts around setup-core.ts
+│   ├── setup.ts                # Setup Surface 1 — the interactive wizard (migration, add-login loop, OAuth, config); prompts around setup-core.ts
+│   ├── setup-headless.ts       # Setup Surface 2 — the headless agent verbs (--init/--auth-url/--add-login/--reauth/--install/--print-config/--doctor)
 │   ├── setup-core.ts           # Non-interactive setup core: OAuth client, auth URL, code exchange, membership discovery, profile writes
+│   ├── generate-setup-docs.ts  # Rewrites SETUP.md's generated blocks from the Book (run after every Book edit)
 │   └── refresh-tokens.ts       # CLI to refresh each profile's token (or audit with --check-only; --profile <name> to target one)
 ├── README.md                   # Project landing page (what it does, architecture, tool list)
 ├── SETUP.md                    # Beginner setup walkthrough — also a script Claude can follow
@@ -192,6 +196,38 @@ One server can serve several FreshBooks logins. Each login is a **profile** — 
 - **One `Client` per profile.** A FreshBooks `Client` is constructed in exactly one place — `getOrCreateClient(profile)` — and cached on `profile.client`, so each login's rotating token state lives on a single object. Never call `new Client(...)` elsewhere. Exception: pre-profile OAuth clients during setup are constructed via `buildOAuthClient` in `scripts/setup-core.ts` — the invariant governs the serving path (`src/`), where `getOrCreateClient` remains the only site.
 - **Discovery is validated.** `discoverProfiles` excludes malformed files (`broken`), refuses duplicate refresh tokens (`duplicates`), and quarantines a profile that shares an `accountId` with another but carries a distinct token (until an explicit `# freshbooks-distinct-login` opt-in marker) so its possibly-superseded token is never auto-rotated.
 - **Server lock for migration safety.** `src/server-lock.ts` writes `.server.lock` (`{ pid }`) at startup. Migration refuses to run while a live server holds the lock — judged by **PID liveness only** (`process.kill(pid, 0)`), with no file-age bound and no heartbeat — so it can never rotate a token concurrently with a running server. A reused PID after an uncleaned crash fails closed; the `confirmNoServer` override on `runMigration` is the only recovery.
+
+## Setup: the Book and its three surfaces
+
+**The Book pattern.** All setup copy — every step title, instruction, agent
+script, success check and troubleshooting row — is DATA in `src/setup-flow.ts`
+(the Book). That module imports nothing and does no I/O; each step declares
+which `surfaces` render it. Nothing downstream hand-writes step copy. The defect
+this exists to kill is the wizard, the guide, and Claude's memory of the flow
+drifting apart, and a banner typed into a surface is exactly how that starts.
+
+**The three-surface contract.** One Book, three renderings — never three copies:
+
+| Surface | Module | Who reads it |
+|---|---|---|
+| **Surface 1** — the interactive wizard | `scripts/setup.ts` | a human at a terminal, running `npm run setup` |
+| **Surface 2** — the headless agent verbs | `scripts/setup-headless.ts` | Claude, when it can run commands (`--headless <verb>`) |
+| **Surface 3** — the guided docs | `src/docs/render-setup.ts` | Claude when it *cannot* act, reading SETUP.md aloud, and any human reading it directly |
+
+Surface 3 is the bottom rung of the capability ladder: Claude fetches SETUP.md
+and walks the person through it. That is why every rendered block carries BOTH
+role variants (*If Claude can run commands on your computer* / *If you are
+typing every command yourself*) — the reader's rung, not the renderer's, picks
+the column. The same renderer serves the `freshbooks_help` `setup` topic, so an
+assistant installing this server elsewhere reads the Book rather than
+remembering it.
+
+**After ANY Book edit, run `npx ts-node scripts/generate-setup-docs.ts` and
+commit the regenerated SETUP.md.** The generator rewrites the blocks between
+`<!-- setup-step:<id> BEGIN/END -->` markers; `test/setup-flow-docs.test.ts`
+re-renders each region and asserts byte-equality, so a forgotten regeneration
+fails the build and names the step. Never hand-edit inside a marker pair — if a
+block reads wrong, fix the Book or the renderer.
 
 ## FreshBooks SDK Patterns
 
@@ -616,9 +652,10 @@ try {
 
 ## Doc-maintenance contract
 
-The tool inventory and tool count appear in multiple documents. When tools are
-added, renamed, or removed, this is the authoritative map of what must change
-and what catches you if you forget:
+The tool inventory, the tool count, and the setup flow each appear in multiple
+documents. When tools are added, renamed, or removed — or the Book changes —
+this is the authoritative map of what must change and what catches you if you
+forget:
 
 **Test-enforced (a failing test names the file):**
 - Tool **count** — README.md, SETUP.md, `package.json` description, CLAUDE.md,
@@ -627,14 +664,22 @@ and what catches you if you forget:
   (both directions: missing AND stale) → `test/doc-inventory.test.ts`
 - **Report params** — schemas vs `src/report-params.ts` → `test/report-params.test.ts`
 - **Annotations** — the action-prefix convention → `test/tool-inventory.test.ts`
+- **Setup flow** — SETUP.md anchors/blocks + README kickoff vs
+  `src/setup-flow.ts` → `test/setup-flow-docs.test.ts`
 
 **Derived automatically (zero edits):** `freshbooks_help` topics `tools`
-(renders the live registry) and `reports` (renders `REPORT_PARAMS`).
+(renders the live registry), `reports` (renders `REPORT_PARAMS`), and `setup`
+(renders the Book's docs-surface steps). Adding a topic means updating the
+`index` and `overview` lists too — `test/help-topics.test.ts` enforces both
+directions.
 
 **Hand-written and rot-prone (no guard — check deliberately):** SETUP.md's
-example prompts and limitations list; `src/docs/content.ts` prose topics;
-`CHANGELOG.md`. When you add a capability, grep these for the affected
-resource before shipping.
+example prompts and limitations list; **SETUP.md's framing prose outside the
+`setup-step` fences** (what the guide is, what you need, what to do once it
+works — the generator never touches it, so it is the one part of that document
+that can go stale silently, the two pinned honesty claims aside);
+`src/docs/content.ts` prose topics; `CHANGELOG.md`. When you add a capability,
+grep these for the affected resource before shipping.
 
 ### Claude Desktop caches the tool list (stale-subset symptom)
 

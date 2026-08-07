@@ -10,13 +10,15 @@
  * supply their own I/O around these calls, so both drive exactly the same
  * logic.
  *
- * This module is also the project's ONLY process-spawning site outside the
- * wizard's own browser/build calls: `isClaudeCliAvailable` and
- * `claudeMcpAddJson` shell out to the `claude` CLI. They live here rather than
- * in `scripts/setup-headless.ts` so that module can keep its
- * "imports no process spawner" invariant (and the structural test that proves
- * it) while `--install code` still reaches the CLI through this seam — which is
- * also what lets a test stub the CLI instead of executing it.
+ * This module is also the project's ONLY process-spawning site:
+ * `isClaudeCliAvailable` and `claudeMcpAddJson` shell out to the `claude` CLI,
+ * and `runBuild` shells out to npm. They live here rather than in
+ * `scripts/setup-headless.ts` so that module can keep its "imports no process
+ * spawner" invariant (and the structural test that proves it) while
+ * `--install code` still reaches the CLI through this seam — which is also what
+ * lets a test stub the CLI instead of executing it. `runBuild` is here for the
+ * same reason: the wizard's `build` step must be stubbable, or its transcript
+ * test would compile the project on every run.
  *
  * Extracted from `scripts/setup.ts` behavior-identically; the wizard now
  * delegates to it rather than inlining the same steps.
@@ -32,7 +34,7 @@
  * credentials, never tokens. Both create at mode 0600.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -48,7 +50,7 @@ import { Client } from "@freshbooks/api";
 import { writeAtomic, readTokenMarkers } from "../src/atomic-write";
 import { buildClaudeCodeServerJson, buildClaudeServerConfig } from "../src/mcp-config";
 import { applyTokensToEnv } from "../src/freshbooks-client";
-import { ProfileWriteError, writeNewProfile } from "../src/migrate";
+import { ProfileWriteError, profileNameFromFile, writeNewProfile } from "../src/migrate";
 import { parseProfileConfig, type ProfileConfig } from "../src/profiles";
 
 /**
@@ -254,6 +256,7 @@ export function assertNoForeignDuplicate(
         "DUPLICATE_TOKEN",
         `Refresh token already present in profiles/${file} — refusing to write profiles/${name}.env. ` +
           `Two profile files sharing one refresh token guarantee a double-rotation lockout.`,
+        profileNameFromFile(file),
       );
     }
   }
@@ -627,6 +630,29 @@ export function installDesktop(paths: InstallPaths, commandPath?: string): Insta
 /** Add the server to the project-scoped `.mcp.json`, keeping every other entry. */
 export function installMcpJson(paths: InstallPaths, commandPath?: string): InstallOutcome {
   return upsertServerEntry(paths.mcpJsonPath, paths.rootDir, commandPath);
+}
+
+/**
+ * Compile the server — the Book's `build` step, as the wizard performs it.
+ *
+ * `execSync` rather than `execFileSync`: `npm` is a shell script on POSIX and a
+ * `.cmd` shim on Windows, and only the shell form resolves both. The command is
+ * a fixed literal with no interpolation, so there is nothing for a shell to
+ * expand. `stdio: "inherit"` deliberately lets `tsc`'s own errors reach the
+ * user's terminal — a build failure is exactly the moment to show the real
+ * compiler output rather than a paraphrase of it.
+ *
+ * Returns whether the build succeeded; it never throws, because a failed build
+ * is a reportable outcome the wizard continues past (the config is still worth
+ * writing), not an exception.
+ */
+export function runBuild(projectDir: string): boolean {
+  try {
+    execSync("npm run build", { cwd: projectDir, stdio: "inherit" });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** True if the `claude` CLI (Claude Code) is installed and on PATH. */
