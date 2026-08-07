@@ -4,7 +4,7 @@ If you use [Claude Projects](https://claude.ai/), you can give Claude a head sta
 
 This is **optional**. The server works fine without it — the `freshbooks_help` tool already lets Claude discover everything at runtime. The prompt is just a convenience for Claude Projects users who want the guidance baked in.
 
-To install the server itself, see [SETUP.md](../SETUP.md).
+To install the server itself, see [SETUP.md](../SETUP.md) — or paste the kickoff prompt from the [README](../README.md) into a fresh chat and let Claude run the install by the book.
 
 ---
 
@@ -72,7 +72,7 @@ check it to confirm a filter really applied. The balance sheet takes
 
 **Accounts:** `freshbooks_list_accounts` — lists the configured FreshBooks logins (each profile's name, account/business id, company, and token health). Account-free (takes no `account` parameter).
 
-**Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend). Account-free (takes no `account` parameter).
+**Self-documentation:** `freshbooks_help` — returns the server's own documentation (architecture, conventions, the live tool inventory, how to extend). Account-free (takes no `account` parameter). Notable topics: `setup` (the full install/add-a-login/reconnect guide, rendered from the same data the setup program runs on — use it when the user asks about installing, connecting another FreshBooks login, or fixing a broken connection) and `reports` (the per-endpoint report parameter matrix).
 
 ### Important conventions
 

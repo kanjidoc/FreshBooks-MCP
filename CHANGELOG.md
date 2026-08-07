@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- The Claude Projects system prompt points at the `freshbooks_help` `setup`
+  topic and the README kickoff prompt, so a Project-hosted Claude can guide an
+  install or reconnect instead of only using the tools.
+
 ## [2.3.0] - 2026-08-07
 
 ### Added
