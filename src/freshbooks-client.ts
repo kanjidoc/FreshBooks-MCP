@@ -1,5 +1,13 @@
 import { Client } from "@freshbooks/api";
-import { existsSync, accessSync, readFileSync, constants as fsConstants } from "node:fs";
+import {
+  existsSync,
+  accessSync,
+  chmodSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  constants as fsConstants,
+} from "node:fs";
 import { writeAtomic, readTokenMarkers } from "./atomic-write";
 import { currentProfile, getRegistry, type ProfileState } from "./profiles";
 
@@ -35,6 +43,24 @@ export function decodeJwtExp(token: string): number | null {
     if (parts.length !== 3) return null;
     const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
     return typeof payload.exp === "number" ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Decode a JWT's `iat` (epoch seconds), or null if the token is opaque/invalid.
+ *
+ * `iat` — not `exp` — is what orders two token pairs: a rescued pair and the
+ * pair in the profile file can share an expiry window, but the one FreshBooks
+ * issued LAST is the only one whose refresh token is still live.
+ */
+export function decodeJwtIat(token: string): number | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf8"));
+    return typeof payload.iat === "number" ? payload.iat : null;
   } catch {
     return null;
   }
@@ -133,14 +159,175 @@ function preflightEnvFile(filePath: string): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The rescue file — `<profile-file>.rescue` (spec §Security hardening)
+// ---------------------------------------------------------------------------
+//
+// A refresh that succeeds FreshBooks-side and then fails to write the profile
+// file leaves the only live token pair in memory: the pair on disk is revoked,
+// so the next process to start is locked out of that login. The rescue file is
+// where that pair goes instead of onto stderr, and the refresh path — not the
+// user, not a later verb — owns adopting it back.
+//
+// Two rules keep it from becoming a second, competing token store:
+//
+//   1. ADOPT ONLY WHAT IS NEWER. Adoption compares the access tokens' `iat`
+//      against the pair ON DISK, and only a strictly newer rescue is adopted.
+//   2. EVERY VERIFIED GUARDED WRITE SHREDS IT. `persistTokens` here and
+//      `replaceProfileTokens` (the `--reauth` path) both delete it on success,
+//      so a deliberate re-auth can never be silently reverted by a later
+//      adoption.
+
+/** Where a profile's rescued pair lives. */
+function rescuePathFor(filePath: string): string {
+  return `${filePath}.rescue`;
+}
+
+/**
+ * Write the rescued pair next to the profile file, 0600. Returns false — never
+ * throws — when the write fails, because the caller's fallback is the last-resort
+ * stderr print and it must still happen.
+ *
+ * The content is the two dotenv token lines and nothing else: it parses as a
+ * profile fragment (`parseProfileConfig` requires exactly these two), so the
+ * adopting read is the same `readTokenMarkers` every other token read uses.
+ */
+function writeRescue(filePath: string, access: string, refresh: string): boolean {
+  const path = rescuePathFor(filePath);
+  try {
+    writeFileSync(
+      path,
+      `FRESHBOOKS_ACCESS_TOKEN=${access}\nFRESHBOOKS_REFRESH_TOKEN=${refresh}\n`,
+      { mode: 0o600 },
+    );
+    try {
+      // `mode` applies at creation only — an overwritten older rescue would
+      // otherwise keep its (possibly looser) permissions.
+      chmodSync(path, 0o600);
+    } catch {
+      // Best-effort; `--doctor`'s permission check reports what is left loose.
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Delete a superseded rescue. Best-effort: a stale one is a warning, not a lockout. */
+function shredRescue(filePath: string, why: string): void {
+  const path = rescuePathFor(filePath);
+  try {
+    rmSync(path, { force: true });
+  } catch (err: any) {
+    console.error(
+      `[freshbooks] could not delete ${path} (${err?.message ?? err}) — ${why}; ` +
+        "delete it by hand.",
+    );
+  }
+}
+
+/**
+ * Adopt `<file>.rescue` when it holds a pair NEWER than the profile file's, and
+ * return whether it did.
+ *
+ * Comparison is against the token ON DISK, never `profile.config`: on the
+ * same-process persist-failure path A10 has already synced `config` to the
+ * rescued pair, so a config comparison would read "equal", shred the rescue,
+ * and leave the disk holding the revoked pair — the exact lockout the rescue
+ * exists to prevent.
+ *
+ * Adoption is BOTH halves — the profile file AND the in-memory pair (config +
+ * the live client, mirroring U3's adopt) — because a rescue older than the
+ * access-token lifetime fails the freshness gate, and rotation would then run
+ * with the revoked in-memory refresh token and burn the family in exactly the
+ * unattended-overnight-restart case this mechanism exists for.
+ *
+ * Fail closed: an undecodable pair on either side is neither adopted NOR
+ * shredded, so `--doctor` keeps reporting it and no guess rotates anything.
+ */
+function tryAdoptRescue(profile: ProfileState): boolean {
+  const path = rescuePathFor(profile.filePath);
+  if (!existsSync(path)) return false;
+
+  let rescue: { access?: string; refresh?: string };
+  try {
+    rescue = readTokenMarkers(path);
+  } catch (err: any) {
+    console.error(
+      `[freshbooks] ${path} could not be read (${err?.message ?? err}) — keeping it, not adopting.`,
+    );
+    return false;
+  }
+  if (!rescue.access || !rescue.refresh) {
+    console.error(`[freshbooks] ${path} is missing a token line — keeping it, not adopting.`);
+    return false;
+  }
+
+  const rescueIat = decodeJwtIat(rescue.access);
+  const diskIat = decodeJwtIat(readTokenMarkers(profile.filePath).access ?? "");
+  if (rescueIat === null || diskIat === null) {
+    console.error(
+      `[freshbooks] ${path} cannot be ordered against ${profile.filePath} ` +
+        "(an access token has no decodable iat) — keeping it, not adopting.",
+    );
+    return false;
+  }
+
+  if (rescueIat <= diskIat) {
+    // Announce first, shred second: a failed shred prints its own correction
+    // right after this line rather than contradicting it from above.
+    console.error(
+      `[freshbooks] discarding superseded rescue file ${path} for profile "${profile.name}" ` +
+        "— the profile file already holds an equally new or newer pair.",
+    );
+    shredRescue(profile.filePath, "it is superseded");
+    return false;
+  }
+
+  // Newer: write it into the profile file first, verified, so the in-memory
+  // adopt below is never the only record of it. A failure here keeps the rescue
+  // and throws — loudly, with the pair still on disk to try again from.
+  const next = applyTokensToEnv(
+    readFileSync(profile.filePath, "utf8"),
+    rescue.access,
+    rescue.refresh,
+  );
+  writeAtomic(profile.filePath, next);
+  const after = readTokenMarkers(profile.filePath);
+  if (after.access !== rescue.access || after.refresh !== rescue.refresh) {
+    throw new Error(
+      `[freshbooks] adopting ${path} into ${profile.filePath} failed post-write verification`,
+    );
+  }
+
+  // Hand-rolled rather than routed through persistTokens: this is not a
+  // rotation, and persistTokens would shred the rescue before the file write
+  // it is protecting had been verified.
+  profile.config.accessToken = rescue.access;
+  profile.config.refreshToken = rescue.refresh;
+  const client = getOrCreateClient(profile);
+  client.accessToken = rescue.access;
+  client.refreshToken = rescue.refresh;
+
+  console.error(
+    `[freshbooks] adopted the rescued token pair from ${path} into ${profile.filePath}`,
+  );
+  shredRescue(profile.filePath, "it has been adopted");
+  return true;
+}
+
 /**
  * Write rotated tokens into the profile file — atomically (tmp + rename), with a
  * `.bak` backup and post-write read-back verification. The profile `config` is
  * updated to the rotated values on BOTH the success path AND the write-failure
  * path (Amendment A10): the refresh has already rotated FreshBooks-side state, so
  * the in-memory authoritative copy must agree with the (revoked-old) token either
- * way, or this process would churn re-rotations. On write failure the new tokens
- * are printed to stderr so they can be pasted into the file manually.
+ * way, or this process would churn re-rotations.
+ *
+ * On write failure the pair goes to `<file>.rescue` and only its PATH is printed;
+ * the tokens themselves reach stderr solely when even that write fails — the one
+ * sanctioned exception to this project's "tokens never on an output surface"
+ * rule, and the last thing standing between the user and a locked-out login.
  */
 function persistTokens(profile: ProfileState, accessToken: string, refreshToken: string): void {
   try {
@@ -154,10 +341,18 @@ function persistTokens(profile: ProfileState, accessToken: string, refreshToken:
     console.error(
       `[freshbooks] CRITICAL — refresh succeeded but writing ${profile.filePath} failed (profile "${profile.name}").`,
     );
-    console.error(`[freshbooks] NEW ACCESS TOKEN:  ${accessToken}`);
-    console.error(`[freshbooks] NEW REFRESH TOKEN: ${refreshToken}`);
+    if (writeRescue(profile.filePath, accessToken, refreshToken)) {
+      console.error(`[freshbooks] The new token pair was saved to ${rescuePathFor(profile.filePath)} (mode 0600).`);
+      console.error(
+        "[freshbooks] It is adopted automatically at the next refresh that needs it; " +
+          "`npm run setup -- --headless --doctor` reports it until then.",
+      );
+    } else {
+      console.error(`[freshbooks] NEW ACCESS TOKEN:  ${accessToken}`);
+      console.error(`[freshbooks] NEW REFRESH TOKEN: ${refreshToken}`);
+      console.error("[freshbooks] Paste the two tokens above into the profile file NOW.");
+    }
     console.error(`[freshbooks]   ${err?.message ?? err}`);
-    console.error("[freshbooks] Paste the two tokens above into the profile file NOW.");
     // A10: keep config authoritative even on write failure so the live (already-
     // rotated) client and the expiry check agree, avoiding a re-rotation churn
     // loop this process.
@@ -167,6 +362,9 @@ function persistTokens(profile: ProfileState, accessToken: string, refreshToken:
   }
   profile.config.accessToken = accessToken;
   profile.config.refreshToken = refreshToken;
+  // Precedence rule: a verified guarded write supersedes any rescue, whatever it
+  // holds — including one this refresh could not order and therefore kept.
+  shredRescue(profile.filePath, "the profile file now holds a newer pair");
 }
 
 async function refreshAndPersist(
@@ -182,6 +380,19 @@ async function refreshAndPersist(
   const run = (async () => {
     preflightEnvFile(profile.filePath);
     const client = getOrCreateClient(profile); // SAME object the handler uses (A1)
+
+    // A rescued pair from an earlier failed write outranks everything below: it
+    // is the newest pair FreshBooks issued, so the on-disk pair the U3 read is
+    // about to consult may already be revoked. Adoption writes it to disk AND
+    // in memory; if it is still fresh there is nothing left to rotate.
+    const adopted = tryAdoptRescue(profile);
+    if (adopted && isTokenFresh(profile.config.accessToken, bufferSeconds)) {
+      console.error(`[freshbooks] adopted rescue pair for "${profile.name}"; skipping refresh`);
+      return;
+    }
+    // A stale adopted pair falls through deliberately: the rotation below now
+    // runs with the ADOPTED refresh token (the live one) rather than the
+    // revoked pair the profile file held a moment ago.
 
     // U3 — cross-process refresh guard. The in-memory single-flight does not
     // coordinate across separate server processes, and SETUP.md documents

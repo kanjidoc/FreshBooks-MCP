@@ -35,18 +35,30 @@ import {
   buildAuthUrl,
   buildOAuthClient,
   buildTokenClient,
+  claudeMcpAddJson,
   discoverMemberships,
   exchangeCode,
   extractCodeFromUrl,
+  installDesktop,
+  isClaudeCliAvailable,
   saveProfile,
+  writeCredentialFile,
 } from "./setup-core";
+import { runHeadless } from "./setup-headless";
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
 const ENV_PATH = path.resolve(PROJECT_DIR, ".env");
 const PROFILES_DIR = path.resolve(PROJECT_DIR, "profiles");
 const MCP_JSON_PATH = path.resolve(PROJECT_DIR, ".mcp.json");
 const CLAUDE_DESKTOP_CONFIG_PATH = resolveDesktopConfigPath();
-const REDIRECT_URI = "https://localhost/callback";
+/**
+ * The one OAuth redirect URI this project uses, everywhere: the wizard's
+ * `Client`, the base `.env` it writes, the headless `--init`/`--auth-url`, and
+ * the Book's `developer-app` instructions ("set the Redirect URI to exactly
+ * …"). Exported so `scripts/setup-headless.ts` uses this definition rather
+ * than a second copy that could drift.
+ */
+export const REDIRECT_URI = "https://localhost/callback";
 
 function ask(question: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
@@ -112,7 +124,10 @@ export function serializeEnv(vars: Record<string, string>): string {
 }
 
 function writeEnvFile(vars: Record<string, string>) {
-  fs.writeFileSync(ENV_PATH, serializeEnv(vars));
+  // The base `.env` carries the app secret, so it is written 0600 at creation
+  // and an existing file is tightened BEFORE the new content lands — the shared
+  // writer the headless `--init` uses, so the two cannot drift.
+  writeCredentialFile(ENV_PATH, serializeEnv(vars));
 }
 
 function writeMcpJson(projectDir: string) {
@@ -124,39 +139,27 @@ function writeMcpJson(projectDir: string) {
   fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(config, null, 2) + "\n");
 }
 
-function upsertClaudeDesktopConfig(projectDir: string): boolean {
-  try {
-    fs.mkdirSync(path.dirname(CLAUDE_DESKTOP_CONFIG_PATH), { recursive: true });
-    let existing: any = {};
-    if (fs.existsSync(CLAUDE_DESKTOP_CONFIG_PATH)) {
-      try {
-        existing = JSON.parse(fs.readFileSync(CLAUDE_DESKTOP_CONFIG_PATH, "utf8"));
-      } catch {
-        console.log(
-          `   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`,
-        );
-        return false;
-      }
-    }
-    existing.mcpServers = existing.mcpServers ?? {};
-    existing.mcpServers.freshbooks = buildClaudeServerConfig(projectDir);
-    fs.writeFileSync(CLAUDE_DESKTOP_CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
-    return true;
-  } catch (err: any) {
-    console.log(`   Warning: could not write Claude Desktop config (${err.message}).`);
-    return false;
-  }
-}
+/**
+ * The launcher-config writers live in `setup-core.ts` so the wizard and the
+ * headless `--install` verb share one merge implementation (and one set of
+ * foreign-entry guarantees). The wizard keeps its own wording for every
+ * outcome — the core returns a `reason` token, never prose.
+ */
+const INSTALL_PATHS = {
+  rootDir: PROJECT_DIR,
+  desktopConfigPath: CLAUDE_DESKTOP_CONFIG_PATH,
+  mcpJsonPath: MCP_JSON_PATH,
+};
 
-/** True if the `claude` CLI (Claude Code) is installed and on PATH. */
-function isClaudeCliAvailable(): boolean {
-  const { execFileSync } = require("child_process");
-  try {
-    execFileSync("claude", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+function upsertClaudeDesktopConfig(): boolean {
+  const result = installDesktop(INSTALL_PATHS);
+  if (result.ok) return true;
+  console.log(
+    result.reason === "invalid-json"
+      ? `   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`
+      : `   Warning: could not write Claude Desktop config (${result.detail}).`,
+  );
+  return false;
 }
 
 /**
@@ -165,19 +168,8 @@ function isClaudeCliAvailable(): boolean {
  * entry is removed first. Returns whether registration succeeded.
  */
 function installIntoClaudeCode(projectDir: string): boolean {
-  const { execFileSync } = require("child_process");
-  const serverJson = JSON.stringify(buildClaudeCodeServerJson(projectDir));
   try {
-    try {
-      execFileSync("claude", ["mcp", "remove", "freshbooks", "--scope", "user"], {
-        stdio: "ignore",
-      });
-    } catch {
-      // Not previously installed — nothing to remove.
-    }
-    execFileSync("claude", ["mcp", "add-json", "freshbooks", serverJson, "--scope", "user"], {
-      stdio: "ignore",
-    });
+    claudeMcpAddJson(projectDir);
     return true;
   } catch (err: any) {
     console.log(`   Warning: could not register with Claude Code (${err.message}).`);
@@ -462,6 +454,15 @@ async function addLogin(clientId: string, clientSecret: string): Promise<boolean
 }
 
 async function main() {
+  // The headless (agent) surface shares this entry point: `--headless <verb>`
+  // hands the whole run to the verb dispatcher and the wizard never starts.
+  // `process.exitCode` rather than `process.exit()` — the latter can truncate a
+  // piped `--json` stdout before it flushes.
+  if (process.argv.includes("--headless")) {
+    process.exitCode = await runHeadless(process.argv.slice(2));
+    return;
+  }
+
   console.log(`
 ${"=".repeat(70)}
    FreshBooks MCP Server — Setup
@@ -572,7 +573,7 @@ STEP 5: Connecting to Claude
 
   let desktopInstalled = false;
   if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "), true)) {
-    desktopInstalled = upsertClaudeDesktopConfig(PROJECT_DIR);
+    desktopInstalled = upsertClaudeDesktopConfig();
     if (desktopInstalled) {
       console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
     }

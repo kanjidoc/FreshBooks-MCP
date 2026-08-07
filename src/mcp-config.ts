@@ -6,10 +6,18 @@ import * as path from "path";
  * `env` block — the server loads its credentials from `.env` itself (see
  * `src/load-env.ts`), so a rotating token is never duplicated into a launcher
  * config where it would go stale.
+ *
+ * `commandPath` is the absolute `node` to launch with, chosen by
+ * `selectCommandPath` (`scripts/setup-headless.ts`) — probed host locations,
+ * an explicit `--command-path`, or `process.execPath` when the caller vouches
+ * for the shell. It defaults to the bare `"node"`, which is what every existing
+ * caller got before the option existed and what the last-resort fallback picks:
+ * correct only when Claude launches with a PATH that includes node, which is
+ * why the fallback ships with a stated caveat rather than silently.
  */
-export function buildClaudeServerConfig(projectDir: string) {
+export function buildClaudeServerConfig(projectDir: string, commandPath?: string) {
   return {
-    command: "node",
+    command: commandPath ?? "node",
     args: [path.join(projectDir, "dist", "index.js")],
   };
 }
@@ -19,9 +27,9 @@ export function buildClaudeServerConfig(projectDir: string) {
  * `{ command, args }` plus an explicit `type: "stdio"`. No `env` block, for the
  * same reason as above.
  */
-export function buildClaudeCodeServerJson(projectDir: string) {
+export function buildClaudeCodeServerJson(projectDir: string, commandPath?: string) {
   return {
     type: "stdio" as const,
-    ...buildClaudeServerConfig(projectDir),
+    ...buildClaudeServerConfig(projectDir, commandPath),
   };
 }

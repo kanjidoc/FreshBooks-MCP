@@ -7,9 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Headless setup surface for agents.** `npx ts-node scripts/setup.ts --headless <verb>` —
+  `--init`, `--auth-url`, `--add-login` (staged pendings, resumable branches),
+  `--reauth`, `--discard-pending`, `--install`/`--print-config`, and a
+  Book-keyed `--doctor`; typed exit codes and token-free JSON envelopes.
+- **Agent-path docs, generated from the Book.** SETUP.md's setup steps are now
+  generated blocks rendered from `src/setup-flow.ts` (drift-tested
+  byte-for-byte); README gains the kickoff prompt; `freshbooks_help` gains a
+  `setup` topic.
+
 ### Changed
 
 - internal: setup flow extracted into a data-driven core; no behavior change
+- **SETUP.md is now half generated.** One block per setup step is spliced in
+  from `src/setup-flow.ts` — the same data the setup program itself runs on — by
+  `scripts/generate-setup-docs.ts`, and `test/setup-flow-docs.test.ts`
+  re-renders every block to assert byte-equality, so the guide and the program
+  can no longer describe the setup differently. Each step now states who
+  performs it and carries both variants side by side: what Claude does when it
+  can run commands on your computer, and the exact text to type when it cannot.
+  The manual Claude Desktop / Claude Code configuration blocks moved into the
+  "Connect the server to your Claude" step (they are the fallback path's raw
+  material), leaving the appendix scoped to the manual token exchange — gated
+  to humans, since that route handles raw tokens by hand.
+- **README carries the kickoff prompt**: the text to paste into a fresh chat
+  when you want Claude to install the server for you, with the opening heading
+  its first reply should quote and the fallback for a Claude that cannot read
+  the web.
 
 ### Fixed
 
@@ -26,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   stderr. The one deliberate exception is unchanged: the loud-failure recovery
   path that prints freshly rotated tokens to stderr when the post-refresh disk
   write fails (CLAUDE.md "Token persistence safety", invariant 4).
+
+### Security
+
+- Credential files are written 0600-at-creation; a rescue-file lifecycle
+  preserves rotated tokens through failed writes (adopt-newer,
+  shred-superseded); token-hygiene tests sweep every headless verb's output
+  streams.
 
 ## [2.2.0] - 2026-07-29
 

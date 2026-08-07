@@ -20,6 +20,16 @@ describe("gitignore protects all token stores", () => {
     expect(ignored(".env.bak")).toBe(true);
     expect(ignored("profiles/acme.env.bak")).toBe(true);
   });
+  it("ignores staged pendings and rescue writes — GLOBALLY, not just under profiles/", () => {
+    expect(ignored("profiles/x.env.pending")).toBe(true);
+    // The legacy profile's own file IS the repo-root .env (src/profiles.ts:202-214),
+    // so its rescue lands at the unignored root — `.env` matches only `.env` itself.
+    expect(ignored(".env.rescue")).toBe(true);
+    expect(ignored("profiles/x.env.rescue")).toBe(true);
+    // profiles/ already covers anything under it, so a root-level case is what
+    // actually proves `*.pending` is a global rule.
+    expect(ignored(".env.pending")).toBe(true);
+  });
   it("ignores the advisory server lock — the WHOLE per-pid family", () => {
     expect(ignored(".server.lock")).toBe(true);
     // Per-pid lock files (.server.lock.<pid>): one WAS committed when the

@@ -1,5 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -12,6 +21,7 @@ import {
   extractCodeFromUrl,
   replaceProfileTokens,
   saveProfile,
+  writeCredentialFile,
 } from "../scripts/setup-core";
 import { ProfileWriteError } from "../src/migrate";
 
@@ -284,5 +294,44 @@ describe("replaceProfileTokens", () => {
     );
     // The file keeps its old content — a failed substitution writes nothing.
     expect(readFileSync(path, "utf8")).toBe("FRESHBOOKS_ACCESS_TOKEN=at-old\nFRESHBOOKS_ACCOUNT_ID=A1\n");
+  });
+});
+
+describe("writeCredentialFile", () => {
+  it("writes the content it was given", () => {
+    const dir = seed({});
+    const path = join(dir, "creds.env");
+
+    writeCredentialFile(path, "FRESHBOOKS_CLIENT_SECRET=s\n");
+
+    expect(readFileSync(path, "utf8")).toBe("FRESHBOOKS_CLIENT_SECRET=s\n");
+  });
+
+  it("lets a genuine write failure through to the caller", () => {
+    const dir = seed({});
+
+    expect(() => writeCredentialFile(join(dir, "no-such-dir", "creds.env"), "x\n")).toThrow();
+  });
+
+  it.skipIf(process.platform === "win32")("creates a new file 0600", () => {
+    const dir = seed({});
+    const path = join(dir, "creds.env");
+
+    writeCredentialFile(path, "x\n");
+
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === "win32")("tightens an existing file BEFORE writing to it", () => {
+    const dir = seed({ "creds.env": "old\n" });
+    const path = join(dir, "creds.env");
+    // 0400 makes the ordering observable: a write that is not preceded by the
+    // tighten fails outright (EACCES) rather than landing in a loose file.
+    chmodSync(path, 0o400);
+
+    writeCredentialFile(path, "new\n");
+
+    expect(readFileSync(path, "utf8")).toBe("new\n");
+    expect(statSync(path).mode & 0o777).toBe(0o600);
   });
 });
