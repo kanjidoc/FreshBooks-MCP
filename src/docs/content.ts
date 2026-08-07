@@ -48,8 +48,8 @@ come from your FreshBooks login and are stored in that profile's
 \`profiles/<name>.env\`.
 
 Call \`freshbooks_help\` with other topics — \`architecture\`, \`tools\`,
-\`authentication\`, \`extending\`, \`conventions\`, \`troubleshooting\`,
-\`version\` — to go deeper.`;
+\`reports\`, \`authentication\`, \`setup\`, \`extending\`, \`conventions\`,
+\`troubleshooting\`, \`version\` — to go deeper.`;
 }
 
 /**
