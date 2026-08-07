@@ -127,7 +127,7 @@ Check for Node.js 18 or newer and install it from nodejs.org if it is missing.
 
 ### If Claude can run commands on your computer:
 
-Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)
+Run the check yourself where you can; relay the install steps verbatim and wait.
 
 ### If you are typing every command yourself:
 

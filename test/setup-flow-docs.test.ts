@@ -297,6 +297,15 @@ describe("the generator itself", () => {
     );
   });
 
+  it("refuses a body that does not end in a newline instead of eating its last line", () => {
+    // The splice drops the trailing "" that a newline-terminated body's split
+    // leaves behind. Handed a body without one, it would silently swallow the
+    // final line — a truncated block that still passes every marker check.
+    expect(() => replaceStepRegion(doc, "verify", "fresh\nlines")).toThrow(/newline/);
+    // The empty region stays legal: that is how a fresh skeleton starts out.
+    expect(() => replaceStepRegion(doc, "verify", "")).not.toThrow();
+  });
+
   it("refuses a document whose markers are missing, duplicated, or out of order", () => {
     expect(() => readStepRegion(doc, "restart")).toThrow(/restart/);
     expect(() => readStepRegion(doc + beginMarker("verify") + "\n", "verify")).toThrow(/exactly one/);

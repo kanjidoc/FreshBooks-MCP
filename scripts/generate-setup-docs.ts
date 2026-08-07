@@ -89,7 +89,16 @@ export function readStepRegion(md: string, id: string): string {
 /** Replace one step's region, leaving every other byte of the document alone. */
 export function replaceStepRegion(md: string, id: string, body: string): string {
   const { lines, begin, end } = markerLines(md, id);
-  // `body` ends with exactly one newline, so its split has a trailing "" to drop.
+  // The splice below drops the trailing "" a newline-terminated body's split
+  // leaves behind. Handed a body without that newline it would swallow the
+  // block's LAST LINE instead — a truncation that still passes every marker
+  // check and every idempotence check, so refuse it here rather than trust the
+  // one caller to keep honoring the contract.
+  if (body !== "" && !body.endsWith("\n"))
+    throw new Error(
+      `setup step "${id}": the block to splice in must end with a newline (an empty block is ` +
+        "the only exception)",
+    );
   const bodyLines = body === "" ? [] : body.split("\n").slice(0, -1);
   return [...lines.slice(0, begin + 1), ...bodyLines, ...lines.slice(end)].join("\n");
 }

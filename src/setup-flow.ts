@@ -301,8 +301,13 @@ export const SETUP_FLOW: SetupStep[] = [
       "First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet.",
       "Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again.",
     ],
-    agentGuidance:
-      "Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)",
+    // No `check()` on this step, deliberately: its check IS the raw
+    // `node --version` the humanScript prints, and the doctor's `node-version`
+    // check is independent of it by design (it reads the running process's own
+    // version — see `nodeVersionCheck` in `scripts/setup-headless.ts`). That is
+    // a note to whoever edits this file, not copy for a reader, so it lives
+    // here rather than in `agentGuidance`.
+    agentGuidance: "Run the check yourself where you can; relay the install steps verbatim and wait.",
     successCheck: "`node --version` prints v18 or higher.",
     docPhrases: ["that's the expected answer", "that's the normal installer, not me"],
     troubleshooting: [

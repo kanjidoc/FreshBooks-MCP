@@ -150,9 +150,9 @@ page and the setup program ever disagree, that is a bug in this server, not a
 choice for you to referee.
 
 Each step below carries both roles: what to do when Claude can run commands on
-this computer, and what to type when it cannot. Steps marked **Who does this:
-you** need a person — a browser, an installer, or a restart — no matter which
-Claude is reading.
+this computer, and what to type when it cannot. A step marked
+**Who does this:** you needs a person — a browser, an installer, or a restart —
+no matter which Claude is reading.
 
 ## The kickoff prompt
 

@@ -42,6 +42,15 @@ describe("structure", () => {
     for (const s of SETUP_FLOW) for (const p of s.docPhrases ?? [])
       expect(allText(s)).toContain(p);
   });
+  it("no step's copy talks about the Book's own machinery", () => {
+    // `check()` / `appliesIf()` are Book FIELDS — invisible to every reader of
+    // SETUP.md, the help topic and the wizard, and meaningless to all three.
+    // Notes about them belong in a TS comment on the step, not in copy the
+    // renderer ships (same exclusion the fence-machinery prose got).
+    for (const s of SETUP_FLOW)
+      expect(allText(s), `${s.id} carries implementer-facing meta-commentary`)
+        .not.toMatch(/\b(?:check|appliesIf)\(\)/);
+  });
 });
 
 describe("persona-string manifest (content pins — the strings the design exists for)", () => {
@@ -175,8 +184,11 @@ const block = (id: string) => renderSetupStepMd(step(id));
 const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
 
 describe("renderSetupStepMd", () => {
-  it("heads each block with the step's own title", () => {
-    for (const s of DOCS_STEPS) expect(renderSetupStepMd(s)).toContain(`# ${s.title}`);
+  it("heads each block with the step's own title, at H2", () => {
+    // The LEVEL is pinned, not just the text: `## x` contains `# x`, so a
+    // level-blind assertion would pass on any heading depth — and the depth is
+    // what SETUP.md's structure (and T16's byte-equality) is built on.
+    for (const s of DOCS_STEPS) expect(renderSetupStepMd(s).split("\n")[0]).toBe(`## ${s.title}`);
   });
 
   it("renders BOTH capability-keyed role headings for every docs-surface step", () => {
@@ -307,8 +319,8 @@ describe("renderSetupTopic", () => {
     const topic = renderSetupTopic();
     let cursor = -1;
     for (const s of DOCS_STEPS) {
-      const at = topic.indexOf(`# ${s.title}`);
-      expect(at, `setup topic omits ${s.id}`).toBeGreaterThan(-1);
+      const at = topic.indexOf(`\n## ${s.title}\n`);
+      expect(at, `setup topic omits ${s.id} (or renders it at the wrong level)`).toBeGreaterThan(-1);
       expect(at, `setup topic renders ${s.id} out of Book order`).toBeGreaterThan(cursor);
       cursor = at;
     }
@@ -317,6 +329,20 @@ describe("renderSetupTopic", () => {
   it("carries the kickoff prompt verbatim and the no-web fallback", () => {
     expect(renderSetupTopic()).toContain(KICKOFF_PROMPT);
     expect(renderSetupTopic()).toContain(SIDEBAR_TEXT);
+  });
+
+  it("quotes the who-does-this marker as the blocks actually render it", () => {
+    // The preamble tells a reader to scan for a literal bolded phrase. If the
+    // preamble's version of that phrase is not the rendered one, the scan finds
+    // nothing — so the preamble is asserted against a real block, not by eye.
+    const rendered = /^\*\*Who does this:\*\* (?:you|you or Claude)\.$/m.exec(
+      renderSetupStepMd(step("developer-app")),
+    );
+    expect(rendered, "the who-does-this marker changed shape").not.toBeNull();
+    const topic = renderSetupTopic();
+    expect(topic.slice(0, topic.indexOf("## The kickoff prompt"))).toContain(
+      "**Who does this:** you",
+    );
   });
 
   it("carries the secrets table exactly once", () => {
