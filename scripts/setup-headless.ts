@@ -38,7 +38,13 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import * as dotenv from "dotenv";
 import { resolveDesktopConfigPath } from "../src/config-paths";
-import { isMigrated, MIGRATED_MARKER, ProfileWriteError } from "../src/migrate";
+import { decodeJwtExp } from "../src/freshbooks-client";
+import {
+  isMigrated,
+  markDistinctLogin,
+  MIGRATED_MARKER,
+  ProfileWriteError,
+} from "../src/migrate";
 import { normalizeProfileName, parseProfileConfig, type ProfileConfig } from "../src/profiles";
 import { EXIT8_DIRECTIVE, EXIT8_QUESTION, SETUP_FLOW } from "../src/setup-flow";
 import {
@@ -48,6 +54,8 @@ import {
   discoverMemberships,
   exchangeCode,
   extractCodeFromUrl,
+  listPendings,
+  loadPending,
   saveProfile,
   shredPending,
   stagePending,
@@ -731,7 +739,7 @@ function runAuthUrl(emit: Emit, paths: SetupPaths): number {
 }
 
 // ---------------------------------------------------------------------------
-// Verb: --add-login (the fresh-authorization form)
+// Verb: --add-login
 // ---------------------------------------------------------------------------
 //
 // The spec's `--add-login` state machine, in the order it draws it:
@@ -755,8 +763,13 @@ function runAuthUrl(emit: Emit, paths: SetupPaths): number {
 //      disk rather than a burned grant. That is why the pending is written
 //      first and shredded only after the profile write is verified.
 //
-// The resume forms (`--add-login --name N` with no `--callback-url`) are not
-// part of this build yet; they land with the branch-exit resume grammar.
+// A RESUME (`--add-login --name N` with no `--callback-url`) picks that machine
+// up at the discover stage, on the pair the interrupted run staged. It has its
+// own three load-bearing rules, all in `runAddLoginResume` below: it never
+// re-runs the availability gate (that would recreate the exit-4 dead loop the
+// crash-idempotence rule exists to prevent), it refuses a pending staged by the
+// other verb, and it short-circuits to exit 0 before touching the network when
+// the pair it holds is already saved.
 
 /** Flags that belong to a resume, not to the `--callback-url` form. */
 const RESUME_ONLY_FLAGS = [
@@ -766,35 +779,25 @@ const RESUME_ONLY_FLAGS = [
   "--confirm-different-user",
 ];
 
+/**
+ * How close to expiry a staged access token may be before a resume renews it.
+ *
+ * A resume's very next act is a `users.me()` call; a token that expires while
+ * that request is in flight would surface as a discovery failure (exit 11) on a
+ * perfectly good grant.
+ */
+const STAGED_TOKEN_BUFFER_SECONDS = 60;
+
+/** A flag's trimmed value, or undefined when the flag was not given. */
+function flagValue(parsed: ParsedArgs, flag: string): string | undefined {
+  const raw = parsed.flags.get(flag);
+  return typeof raw === "string" ? raw.trim() : undefined;
+}
+
 async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): Promise<number> {
   const verb = "add-login";
   const saveStep = stepFor("save-login");
   const nameStep = stepFor("nickname");
-  const authorizeStep = stepFor("authorize");
-
-  const callbackUrl = parsed.flags.get("--callback-url");
-  if (typeof callbackUrl !== "string") {
-    return usage(
-      emit,
-      verb,
-      saveStep.id,
-      "--add-login needs the address the user pasted back from FreshBooks; the resume forms are " +
-        "not implemented in this build.",
-      "Re-run as --add-login --name <nickname> --callback-url '<the pasted address>' — " +
-        "single-quoted, because the address contains ? and =.",
-    );
-  }
-  for (const flag of RESUME_ONLY_FLAGS) {
-    if (parsed.flags.has(flag)) {
-      return usage(
-        emit,
-        verb,
-        saveStep.id,
-        `${flag} belongs to a resume, not to the --callback-url form.`,
-        `Re-run --add-login with --name and --callback-url only, and drop ${flag}.`,
-      );
-    }
-  }
 
   const rawName = parsed.flags.get("--name");
   if (typeof rawName !== "string") {
@@ -806,6 +809,40 @@ async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): P
       "Re-run with --name <nickname> — lowercase letters and digits, like acme.",
     );
   }
+
+  const callbackUrl = parsed.flags.get("--callback-url");
+  if (typeof callbackUrl !== "string") {
+    return runAddLoginResume(parsed, emit, paths, rawName);
+  }
+
+  // The two forms consume different flags, and a mixed invocation is ambiguous
+  // about which one the agent meant — an `--account-id` alongside a callback
+  // URL would look like it skipped discovery when it did not.
+  for (const flag of RESUME_ONLY_FLAGS) {
+    if (parsed.flags.has(flag)) {
+      return usage(
+        emit,
+        verb,
+        saveStep.id,
+        `${flag} belongs to a resume, not to the --callback-url form.`,
+        `Re-run --add-login with --name and --callback-url only, and drop ${flag}.`,
+      );
+    }
+  }
+  return runAddLoginFresh(emit, paths, rawName, callbackUrl);
+}
+
+/** The `--callback-url` form: name gate → exchange → stage → discover → save. */
+async function runAddLoginFresh(
+  emit: Emit,
+  paths: SetupPaths,
+  rawName: string,
+  callbackUrl: string,
+): Promise<number> {
+  const verb = "add-login";
+  const saveStep = stepFor("save-login");
+  const nameStep = stepFor("nickname");
+  const authorizeStep = stepFor("authorize");
 
   const credentials = readAppCredentials(paths);
   if (!credentials) return missingCredentials(emit, verb, paths);
@@ -901,6 +938,259 @@ async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): P
     return EXIT.FAIL;
   }
 
+  return discoverAndSave(emit, paths, {
+    name,
+    credentials,
+    pair: tokens,
+    businessId: undefined,
+    confirmedDistinct: false,
+  });
+}
+
+/**
+ * The resume forms — `--add-login --name N` with no `--callback-url`.
+ *
+ * Order is the contract here, and each step exists because of a specific way
+ * the naive order fails:
+ *
+ *   1. MODE GATE. A pending staged by `--reauth` holds a pair destined for an
+ *      EXISTING profile's token lines. Resuming it under `--add-login` would
+ *      write a second profile from it (and shred the pending the real resume
+ *      needs), so a cross-verb resume is a usage error, never a best effort.
+ *   2. THE PRE-DISCOVERY SHORT-CIRCUIT, before the network and before the
+ *      staged-token refresh. If `profiles/<name>.env` already carries the
+ *      pending's refresh token, the previous run got as far as the verified
+ *      write and died before shredding: the work is done. Without this, that
+ *      profile's own accountId trips the same-account branch (exit 8) before
+ *      the save stage is ever reached, and the promised idempotent exit 0 is
+ *      unreachable.
+ *   3. THE STAGED-TOKEN REFRESH, whose rotated pair is re-staged IMMEDIATELY.
+ *      The staged pair is its own token family; leaving the old pair in the
+ *      pending after a rotation would mean the next resume presents a revoked
+ *      refresh token and burns the grant.
+ *
+ * The availability gate is deliberately absent: re-validating a name that the
+ * interrupted run already claimed would refuse every resume with exit 4.
+ */
+async function runAddLoginResume(
+  parsed: ParsedArgs,
+  emit: Emit,
+  paths: SetupPaths,
+  rawName: string,
+): Promise<number> {
+  const verb = "add-login";
+  const saveStep = stepFor("save-login");
+  const nameStep = stepFor("nickname");
+
+  let name: string;
+  try {
+    name = normalizeProfileName(rawName);
+  } catch {
+    // An unusable name cannot have a pending under it, so this is the same
+    // "nothing to resume" state as a missing pending — exit 2, not exit 4.
+    return usage(
+      emit,
+      verb,
+      nameStep.id,
+      `"${rawName}" is not a usable name for a login, so nothing can be staged under it.`,
+      "Re-run the resume with the nickname the interrupted run used — lowercase letters and " +
+        "digits, like acme.",
+    );
+  }
+
+  const pending = loadPending(paths.profilesDir, name);
+  if (!pending) {
+    const staged = listPendings(paths.profilesDir).map((p) => p.name);
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      `Nothing is staged under the name "${name}", so there is no login to resume.`,
+      staged.length
+        ? `These logins are staged and can be resumed: ${staged.join(", ")}. To start a new ` +
+            "login instead, run --auth-url and pass the pasted address to --add-login --name " +
+            "<nickname> --callback-url '<the pasted address>'."
+        : "Nothing is staged at all: run --auth-url and pass the pasted address to --add-login " +
+            `--name ${name} --callback-url '<the pasted address>' — single-quoted, because the ` +
+            "address contains ? and =.",
+    );
+  }
+
+  // (1) The mode gate — see the cross-verb hazard above.
+  if (pending.mode !== "add") {
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      `The pair staged under "${name}" was staged by --reauth, not by --add-login.`,
+      `Resume it with --reauth --name ${name}, or clear it with --discard-pending --name ${name}.`,
+    );
+  }
+
+  const distinctLogin = parsed.flags.has("--distinct-login");
+  const confirmedDifferentUser = parsed.flags.has("--confirm-different-user");
+  if (distinctLogin && !confirmedDifferentUser) {
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      "--distinct-login was passed without --confirm-different-user.",
+      `Ask the user the exit-8 question first and obey its directive: ${EXIT8_DIRECTIVE}. Only ` +
+        "with an affirmative reply in hand, re-run the resume with both --distinct-login and " +
+        "--confirm-different-user.",
+    );
+  }
+
+  const accountId = flagValue(parsed, "--account-id");
+  const businessId = flagValue(parsed, "--business-id");
+  if (accountId === "" || businessId === "") {
+    return usage(
+      emit,
+      verb,
+      saveStep.id,
+      "--account-id / --business-id was given with an empty value.",
+      "Drop the flag to re-run discovery, or re-run the resume with the id it should assert.",
+    );
+  }
+
+  // (2) The pre-discovery short-circuit — before the network AND before the
+  // staged-token refresh.
+  //
+  // The REFRESH token alone decides this: it is the identity of the token
+  // family, and a saved profile whose access token has since been rotated by a
+  // running server is still the very profile this resume was going to write.
+  const profilePath = join(paths.profilesDir, `${name}.env`);
+  const saved = existsSync(profilePath) ? parseProfileConfig(safeRead(profilePath)) : null;
+  if (saved && saved.refreshToken === pending.refreshToken) {
+    shredPending(paths.profilesDir, name);
+    emitOk(emit, verb, {
+      name,
+      accountId: saved.accountId,
+      businessId: saved.businessId,
+      profilePath,
+    });
+    return EXIT.OK;
+  }
+
+  const credentials = readAppCredentials(paths);
+  if (!credentials) return missingCredentials(emit, verb, paths);
+
+  // (3) The staged-token refresh, re-staged before anything else can fail.
+  let pair = { accessToken: pending.accessToken, refreshToken: pending.refreshToken };
+  if (stagedTokenNeedsRefresh(pair.accessToken)) {
+    let rotated: { accessToken: string; refreshToken: string };
+    try {
+      const result = await buildTokenClient(
+        credentials.clientId,
+        credentials.clientSecret,
+        credentials.redirectUri,
+        pair.accessToken,
+        pair.refreshToken,
+      ).refreshAccessToken();
+      if (!result) throw new Error("FreshBooks returned no tokens for the staged refresh token");
+      rotated = { accessToken: result.accessToken, refreshToken: result.refreshToken };
+    } catch (err) {
+      emitErr(
+        emit,
+        verb,
+        EXIT.CODE_REJECTED,
+        stepFor("authorize").id,
+        "The staged authorization has expired and FreshBooks would not renew it.",
+        `Clear it with --discard-pending --name ${name}, then run --auth-url, have the user ` +
+          "approve the connection afresh, and pass the new address to --add-login.",
+        errorMessage(err),
+      );
+      return EXIT.CODE_REJECTED;
+    }
+
+    try {
+      stagePending(paths.profilesDir, name, {
+        mode: "add",
+        stagedAt: new Date().toISOString(),
+        accessToken: rotated.accessToken,
+        refreshToken: rotated.refreshToken,
+      });
+    } catch (err) {
+      // The rotation already happened, so what is on disk is a revoked pair and
+      // every later resume would fail on it. Say so instead of continuing on a
+      // pair only this process holds.
+      emitErr(
+        emit,
+        verb,
+        EXIT.FAIL,
+        saveStep.id,
+        `The renewed authorization could not be re-staged in ${paths.profilesDir}, so the staged ` +
+          "pair on disk is the revoked one.",
+        `Clear it with --discard-pending --name ${name}, then run --auth-url and pass the new ` +
+          "address to --add-login.",
+        errorMessage(err),
+      );
+      return EXIT.FAIL;
+    }
+    pair = rotated;
+  }
+
+  // `--account-id` skips discovery entirely: the ids are the user's assertion,
+  // which is the whole point of the flag (it is the exit-11 escape hatch).
+  if (accountId !== undefined) {
+    return saveLogin(emit, paths, {
+      name,
+      config: { ...pair, accountId, businessId: businessId ?? "" },
+      company: undefined,
+      confirmedDistinct: distinctLogin && confirmedDifferentUser,
+    });
+  }
+
+  return discoverAndSave(emit, paths, {
+    name,
+    credentials,
+    pair,
+    businessId,
+    confirmedDistinct: distinctLogin && confirmedDifferentUser,
+  });
+}
+
+/**
+ * Is this staged access token at (or within a minute of) expiry?
+ *
+ * An UNDECODABLE token answers false. `isTokenFresh`'s server-side rule is the
+ * opposite — there, "cannot prove fresh" must mean "refresh" — but the costs are
+ * reversed here: a needless refresh rotates the staged family for nothing and
+ * can itself fail (exit 3) on a grant that was fine, while proceeding on a token
+ * that turns out to be dead costs one discovery failure whose pending is still
+ * resumable. Only a decoded, genuinely-near-expiry `exp` justifies the rotation.
+ */
+function stagedTokenNeedsRefresh(accessToken: string): boolean {
+  const exp = decodeJwtExp(accessToken);
+  if (exp === null) return false;
+  return exp - Math.floor(Date.now() / 1000) < STAGED_TOKEN_BUFFER_SECONDS;
+}
+
+/** What the discover-and-save stage needs, whichever form got it there. */
+interface DiscoverAndSaveArgs {
+  name: string;
+  credentials: AppCredentials;
+  pair: { accessToken: string; refreshToken: string };
+  /** The membership the resume named (`--business-id`), if it named one. */
+  businessId: string | undefined;
+  confirmedDistinct: boolean;
+}
+
+/**
+ * The shared tail of both forms: read this login's businesses, decide which one
+ * the profile means, and save it. Every exit from here leaves the staged pair on
+ * disk except the ones that finish the job (exit 0) or prove it can never
+ * finish (exit 5).
+ */
+async function discoverAndSave(
+  emit: Emit,
+  paths: SetupPaths,
+  args: DiscoverAndSaveArgs,
+): Promise<number> {
+  const verb = "add-login";
+  const saveStep = stepFor("save-login");
+  const { credentials, pair } = args;
+
   let memberships: Memberships;
   try {
     memberships = await discoverMemberships(
@@ -908,8 +1198,8 @@ async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): P
         credentials.clientId,
         credentials.clientSecret,
         credentials.redirectUri,
-        tokens.accessToken,
-        tokens.refreshToken,
+        pair.accessToken,
+        pair.refreshToken,
       ),
     );
   } catch (err) {
@@ -925,10 +1215,31 @@ async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): P
     return EXIT.DISCOVERY_FAILED;
   }
 
-  // An EMPTY list is not a failure — it is an accounting-only login, which
-  // legitimately carries no businessId. Only more than one membership is a
-  // question, and it is the user's to answer, never this CLI's.
-  if (memberships.list.length > 1) {
+  let chosen: Memberships["list"][number] | undefined;
+  if (args.businessId !== undefined) {
+    // The resume answering exit 6 (or correcting a wrong choice): the named
+    // membership must actually be one of this login's, or the ids saved would
+    // be a guess.
+    chosen = memberships.list.find((m) => m.businessId === args.businessId);
+    if (!chosen) {
+      emitErr(
+        emit,
+        verb,
+        EXIT.USAGE,
+        saveStep.id,
+        `This login has no business with id ${args.businessId}.`,
+        "Re-run the resume with one of the ids in the memberships payload — ask the user using " +
+          "the labels only, numbered, never the ids.",
+        `--business-id ${args.businessId} matches none of the ${memberships.list.length} ` +
+          "memberships this login returned.",
+        { memberships: memberships.list },
+      );
+      return EXIT.USAGE;
+    }
+  } else if (memberships.list.length > 1) {
+    // An EMPTY list is not a failure — it is an accounting-only login, which
+    // legitimately carries no businessId. Only more than one membership is a
+    // question, and it is the user's to answer, never this CLI's.
     emitErr(
       emit,
       verb,
@@ -942,45 +1253,129 @@ async function runAddLogin(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): P
       { memberships: memberships.list },
     );
     return EXIT.BUSINESS_CHOICE;
+  } else {
+    // `chosen` is genuinely absent for an accounting-only login (the empty
+    // list), which is why every read of it is optional even though TypeScript
+    // types the index access as present: blank IDs are a valid profile, and
+    // they throw at call time only if a tool actually needs them.
+    chosen = memberships.list[0];
   }
 
-  // `chosen` is genuinely absent for an accounting-only login (the empty list),
-  // which is why every read of it is optional even though TypeScript types the
-  // index access as present: blank IDs are a valid profile, and they throw at
-  // call time only if a tool actually needs them.
-  const chosen = memberships.list[0];
-  const config: ProfileConfig = {
-    accessToken: tokens.accessToken,
-    refreshToken: tokens.refreshToken,
-    accountId: chosen?.accountId ?? "",
-    businessId: chosen?.businessId ?? "",
-  };
+  return saveLogin(emit, paths, {
+    name: args.name,
+    config: {
+      ...pair,
+      accountId: chosen?.accountId ?? "",
+      businessId: chosen?.businessId ?? "",
+    },
+    company: chosen?.label,
+    confirmedDistinct: args.confirmedDistinct,
+  });
+}
+
+/**
+ * The save stage: `writeNewProfile` through `saveProfile`, plus the backstops
+ * the spec draws under it.
+ *
+ * Every branch here is keyed on `ProfileWriteError.code`, never on its message:
+ * the codes are the typed contract, the messages are prose that may be reworded.
+ *
+ * The same-account decision has exactly ONE implementation — `writeNewProfile`'s
+ * own scan, selected by `onSameAccount` — rather than a second scan here. That
+ * matters beyond de-duplication: `writeNewProfile` skips the file it is about to
+ * write, so a resume whose own `profiles/<name>.env` carries the discovered
+ * accountId still reaches the NAME_TAKEN rows below (the crash-idempotent and
+ * degenerate-state backstops the spec draws under the save stage), which a scan
+ * that treated that file as an incumbent would make unreachable.
+ */
+function saveLogin(
+  emit: Emit,
+  paths: SetupPaths,
+  args: {
+    name: string;
+    config: ProfileConfig;
+    company: string | undefined;
+    confirmedDistinct: boolean;
+  },
+): number {
+  const verb = "add-login";
+  const saveStep = stepFor("save-login");
+  const { name, config, company } = args;
+  const profilePath = join(paths.profilesDir, `${name}.env`);
 
   try {
     // `onSameAccount: "refuse"` on every UNCONFIRMED path: a company that is
     // already connected must reach a human before a second token family for it
     // is written, because un-quarantining a superseded family is a lockout
     // vector. Only the confirmed distinct-login resume passes "warn".
-    const profilePath = saveProfile(paths.profilesDir, name, config, { onSameAccount: "refuse" });
+    const written = saveProfile(paths.profilesDir, name, config, {
+      onSameAccount: args.confirmedDistinct ? "warn" : "refuse",
+    });
+    // The quarantine opt-in covers the whole group, and the fresh scan inside
+    // `markDistinctLogin` picks up the file just written. It runs BEFORE the
+    // shred so a failure here still leaves a resumable pending.
+    if (args.confirmedDistinct) markDistinctLogin(paths.profilesDir, config.accountId);
     shredPending(paths.profilesDir, name);
     emitOk(emit, verb, {
       name,
-      company: chosen?.label,
+      company,
       accountId: config.accountId,
       businessId: config.businessId,
-      profilePath,
+      profilePath: written,
     });
     return EXIT.OK;
   } catch (err) {
-    if (err instanceof ProfileWriteError && err.code === "SAME_ACCOUNT") {
-      return sameAccountRefusal(emit, verb, paths, name, config.accountId, chosen?.label ?? "");
+    if (!(err instanceof ProfileWriteError)) {
+      // A genuine write failure leaves the pending in place and travels to the
+      // dispatcher's envelope (message only, never the object). Keeping the pair
+      // staged through an unexplained failure is exactly why it is staged.
+      throw err;
     }
-    // Anything else — a name/duplicate-token collision that only a resume can
-    // adjudicate, or a genuine write failure — leaves the pending in place and
-    // travels to the dispatcher's envelope (message only, never the object).
-    // Keeping the pair staged through an unexplained failure is exactly why it
-    // is staged.
-    throw err;
+
+    if (err.code === "SAME_ACCOUNT") {
+      return sameAccountRefusal(emit, verb, paths, name, config.accountId, company ?? "");
+    }
+
+    if (err.code === "NAME_TAKEN") {
+      // The crash-between-save-and-shred case, reached here only when the save
+      // landed AFTER this run's short-circuit looked (a concurrent resume).
+      // Same pair, same file: the work is done — idempotent success.
+      const existing = parseProfileConfig(safeRead(profilePath));
+      if (existing && existing.refreshToken === config.refreshToken) {
+        shredPending(paths.profilesDir, name);
+        emitOk(emit, verb, {
+          name,
+          company,
+          accountId: existing.accountId,
+          businessId: existing.businessId,
+          profilePath,
+        });
+        return EXIT.OK;
+      }
+    }
+
+    // Both remaining codes are degenerate states a resume cannot adjudicate, and
+    // both discard the staged pair: the live profile keeps its own token family,
+    // so what is staged is a freshly minted grant with nowhere to go.
+    shredPending(paths.profilesDir, name);
+    const symptom =
+      err.code === "NAME_TAKEN"
+        ? `A login named "${name}" is already saved with a different token pair.`
+        : "Another saved login already holds this staged login's refresh token.";
+    emitErr(
+      emit,
+      verb,
+      EXIT.DUP_PAIR,
+      saveStep.id,
+      symptom,
+      `Reconnect the saved login with --reauth --name ${
+        err.code === "NAME_TAKEN" ? name : "<that login's nickname>"
+      }. But if --doctor shows that profile healthy, the save already completed (a server ` +
+        "rotation raced the resume) and nothing more is needed: this exit has already discarded " +
+        "the staged pair.",
+      err.message,
+    );
+    return EXIT.DUP_PAIR;
   }
 }
 
@@ -1002,7 +1397,7 @@ function sameAccountRefusal(
   company: string,
 ): number {
   const saveStep = stepFor("save-login");
-  const existingProfile = findProfileWithAccountId(paths.profilesDir, accountId);
+  const existingProfile = findProfileWithAccountId(paths.profilesDir, accountId, name);
 
   if (!existingProfile) {
     // The writer refused on a profile that a fresh scan cannot find: the
@@ -1032,10 +1427,14 @@ function sameAccountRefusal(
       `profiles/${existingProfile}.env.`,
     {
       existingProfile,
-      confirmQuestion: EXIT8_QUESTION.replace("<company>", company).replace(
-        "<existing profile>",
-        existingProfile,
-      ),
+      // The company label is unknown only on the `--account-id` resume, which
+      // asserts ids without a discovery call to name them. The question must
+      // still read as a sentence a human can answer, so the placeholder gets a
+      // truthful description rather than a blank or an id.
+      confirmQuestion: EXIT8_QUESTION.replace(
+        "<company>",
+        company || "the company on this login",
+      ).replace("<existing profile>", existingProfile),
       directive: EXIT8_DIRECTIVE,
     },
   );
@@ -1043,17 +1442,25 @@ function sameAccountRefusal(
 }
 
 /**
- * The name of the first saved profile using `accountId`, or null.
+ * The name of the first OTHER saved profile using `accountId`, or null.
  *
  * A FRESH directory scan, never the memoized registry — the same rule
  * `markDistinctLogin` follows, and for the same reason: a snapshot taken before
  * this run would miss a profile written since. Only `*.env` files are read, so
  * a staged `<name>.env.pending` can never name itself as the incumbent.
+ *
+ * `exclude` is the profile being written, skipped for the same reason
+ * `writeNewProfile`'s own scan skips it: it is not the incumbent this collision
+ * is about, and reporting it would name the file the caller is trying to create.
  */
-function findProfileWithAccountId(profilesDir: string, accountId: string): string | null {
+function findProfileWithAccountId(
+  profilesDir: string,
+  accountId: string,
+  exclude: string,
+): string | null {
   if (!accountId || !existsSync(profilesDir)) return null;
   for (const file of readdirSync(profilesDir).sort()) {
-    if (!file.endsWith(".env")) continue;
+    if (!file.endsWith(".env") || file === `${exclude}.env`) continue;
     const config = parseProfileConfig(safeRead(join(profilesDir, file)));
     if (config?.accountId === accountId) return file.slice(0, -".env".length);
   }
