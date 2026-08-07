@@ -50,6 +50,17 @@ function projectStructureTree(md: string): string {
 
 const TREE_LINES = projectStructureTree(CLAUDE_MD).split("\n");
 
+/**
+ * The tree line whose NAME column is `basename` — not merely a line mentioning
+ * it. Tree descriptions cite sibling modules ("prompts around setup-core.ts"),
+ * so a plain substring search settles on the wrong row and every assertion
+ * about "the entry" then reads a different module's description.
+ */
+function treeEntryFor(basename: string): string | undefined {
+  const named = new RegExp(`(?:^|[^\\w.\\-])${basename.replace(/\./g, "\\.")}\\s*$`);
+  return TREE_LINES.find((line) => named.test(line.split("#")[0]));
+}
+
 describe.each([
   ["src/setup-flow.ts"],
   [SETUP_CORE],
@@ -66,10 +77,13 @@ describe.each([
     });
 
     it("the tree lists it, with a description", () => {
-      const entry = TREE_LINES.find((line) => line.includes(basename));
+      const entry = treeEntryFor(basename);
       expect(entry, `the project-structure tree omits ${modulePath}`).toBeDefined();
       // `<name>  # <what it does>` — a bare filename is not documentation.
       expect(entry).toMatch(/#\s+\S/);
+      // …and the description is this module's own, not a neighbour's whose
+      // comment happens to name this file.
+      expect(entry!.split("#")[0]).toContain(basename);
     });
   },
 );
