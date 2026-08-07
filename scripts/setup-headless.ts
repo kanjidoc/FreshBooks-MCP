@@ -391,12 +391,13 @@ function bookFix(stepId: string, symptomFragment: string): string {
  * and has never been migrated.
  *
  * This is the SAME content predicate as `SetupCtx.legacyNeedsMigration`
- * (`src/setup-flow.ts`) — a non-empty `FRESHBOOKS_REFRESH_TOKEN=` line (the
- * wizard's regex, `scripts/setup.ts`'s `maybeMigrateLegacyEnv`) AND no
+ * (`src/setup-flow.ts`) — a non-empty `FRESHBOOKS_REFRESH_TOKEN=` line AND no
  * `FRESHBOOKS_MIGRATED` marker. Exported because three surfaces must agree on
  * it byte for byte: this dispatcher (which refuses), `--doctor` (which reports
- * it), and the wizard (which offers the migration). A surface that re-derives
- * the predicate instead of calling this is how the three drift apart.
+ * it), and the wizard, which calls this to fill `ctx.legacyNeedsMigration`
+ * before rendering its checklist or offering the migration
+ * (`runWizard` in `scripts/setup.ts`). A surface that re-derives the predicate
+ * instead of calling this is how the three drift apart.
  *
  * An unreadable `.env` answers `false` — "cannot tell" must not be reported as
  * "unmigrated", and the verb that actually needs the file will fail with its
@@ -2153,8 +2154,9 @@ const BARE_COMMAND_CAVEAT =
 
 /**
  * The open-this-folder script the spec's code branch calls for. Its wording
- * mirrors the wizard's long-standing manual text (`printMcpConfig` in
- * `scripts/setup.ts`) rather than inventing a second way to say the same thing.
+ * mirrors the wizard's long-standing manual text — which now renders from the
+ * Book's `install-config` humanScript — rather than inventing a second way to
+ * say the same thing.
  */
 const OPEN_THIS_FOLDER_SCRIPT =
   'Claude Code: open this folder as your project in Claude Code and enable the "freshbooks" server when ' +

@@ -60,7 +60,8 @@ vi.mock("../scripts/setup-core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../scripts/setup-core")>();
   return {
     ...actual,
-    // The ONLY two functions in the project that spawn a process.
+    // The only two process spawners this surface can reach (`runBuild` is the
+    // third in the project, and only the wizard calls it).
     isClaudeCliAvailable: vi.fn(),
     claudeMcpAddJson: vi.fn(),
   };
