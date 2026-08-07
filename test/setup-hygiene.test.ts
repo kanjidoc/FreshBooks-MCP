@@ -430,20 +430,22 @@ describe("the sweep itself", () => {
     );
 
     /**
-     * The named imports one module takes from `src/freshbooks-client` — ALL of
-     * them. A second import statement from the same module is legal TypeScript,
-     * so reading only the first would let a later borrow in unseen.
+     * The runtime values one module borrows from `src/freshbooks-client` — ALL
+     * of them. Every import statement naming that module is collected (a second
+     * one is legal TypeScript, and reading only the first would let a later
+     * borrow in unseen), type-only imports are dropped since they carry no
+     * runtime value, and what is left must be a named-brace import: a namespace
+     * or default import would reach past the expected list entirely.
      */
     const borrowed = (source: string): string[] => {
       const statements = [
-        ...source.matchAll(/import\s*\{([^}]*)\}\s*from\s*"\.\.\/src\/freshbooks-client"/g),
-      ];
-      // Every import of that module must be a named-brace one: a namespace or
-      // default import would reach past this list entirely.
-      const all = [...source.matchAll(/from\s*"\.\.\/src\/freshbooks-client"/g)];
-      expect(statements.length, "a non-named import of src/freshbooks-client").toBe(all.length);
-      return statements
-        .flatMap((m) => m[1].split(","))
+        ...source.matchAll(/import\s+(type\s+)?([^;]*?)from\s*"\.\.\/src\/freshbooks-client"/g),
+      ].filter((m) => !m[1]);
+      const clauses = statements.map((m) => m[2].trim());
+      for (const clause of clauses)
+        expect(clause, "a non-named import of src/freshbooks-client").toMatch(/^\{[^}]*\}$/);
+      return clauses
+        .flatMap((clause) => clause.slice(1, -1).split(","))
         .map((name) => name.trim())
         .filter(Boolean)
         .sort();
