@@ -1,250 +1,561 @@
 # FreshBooks MCP — Setup Guide
 
-This guide gets the FreshBooks MCP server running and connected to Claude, so you
-can manage your FreshBooks accounting by just talking to Claude in plain English.
+This guide connects the FreshBooks MCP server to Claude, so you can run your
+accounting by talking to Claude in plain English — *"who owes me money?"*,
+*"create an invoice for Acme for 10 hours of consulting"*, *"how much did I
+spend on software this year?"*
 
-**It takes about 15 minutes. You do not need to know how to code.**
+**You do not need to know how to code.** You need a FreshBooks account, a Mac or
+Windows computer, and Claude installed on that computer.
 
----
+## Two readers, one guide
 
-## 📖 How to use this guide
+Every step below is written for two readers at once, and says which one it is
+talking to.
 
-This guide has two kinds of reader. Find yourself:
+**If you are a person:** work top to bottom. Each step says **who does this** —
+you, or Claude, or either — how to check it worked, and what to do when it
+doesn't. Nothing assumes you have done anything like this before.
 
-**🧑 If you are a person:** follow the steps in order, top to bottom. Every step
-tells you *what to do*, *how to know it worked* (✅), and *what to do if it
-didn't* (⚠️). Don't skip ahead.
+**If you are Claude, installing this for someone:** this guide is your script.
+Follow it exactly, in order. Each step carries two sections — *If Claude can run
+commands on your computer* (what you do, and the wording to use) and *If you are
+typing every command yourself* (the exact text to relay when you cannot act).
+Do every step you can do yourself; for the rest give exact clicks or exact text,
+one step at a time, and wait for the person to confirm. When the screen doesn't
+match the guide, do not invent a method — use that step's troubleshooting table.
 
-**🤖 If you are Claude** (someone pasted this project and asked you to install it):
-treat this guide as a script. Follow it top to bottom. For each step:
+## Start by asking Claude
 
-- If you can do it yourself (running terminal commands, creating/editing files),
-  do it — then tell the user what you did and what the success check showed.
-- Some steps are marked **🧑 Your turn**. Those are interactive or happen in a web
-  browser — you *cannot* do them. For those, give the user the exact command or
-  the exact clicks, tell them what success looks like, and **wait** for them to
-  confirm before you continue.
-- If a step fails, stop and use the Troubleshooting table at the bottom before
-  moving on.
+The shortest path is to let Claude drive. Open a fresh chat with the Claude you
+want to use FreshBooks from, and paste [the kickoff prompt in README.md](README.md#install-it-by-asking-claude) — it tells Claude to fetch this
+guide and follow it, including the parts only you can do.
 
----
+Claude's first reply should quote this guide's opening heading and its final
+line. That is how you know it is reading the real guide, all the way to the end,
+instead of remembering an older version of this project.
+
+You can also simply work through the steps yourself. Both paths end in the same
+place, and the steps are the same either way.
 
 ## What you need before you start
 
-- **Claude** — either:
-  - **Claude Desktop** — the app you download from [claude.ai/download](https://claude.ai/download), or
-  - **Claude Code** — Claude running in a terminal window or inside VS Code / a JetBrains IDE.
+- **Claude on your computer** — the Claude desktop app (from
+  [claude.ai/download](https://claude.ai/download)), or Claude Code in a
+  terminal window or IDE. This server runs on your machine, so a browser-only
+  claude.ai tab cannot use it; the first step below sorts this out.
+- **A FreshBooks account** — any regular plan. You will create a free
+  "developer app" inside it. That is normal, and it is the longest step.
+- **A Mac or Windows computer**, and about 15 minutes.
 
-  Step 1 helps you tell which one you have.
-- **A FreshBooks account** — any regular plan. You will create a free "developer
-  app" inside it; that is normal and takes two minutes.
-- **A computer** running macOS or Windows.
+## The setup steps
 
-That's everything. No coding experience required.
+Do these in order. A step that only applies to some people says so in its first
+line, and the three per-login steps (naming, signing in, saving) repeat once for
+every FreshBooks login you connect — most people connect exactly one.
 
----
+<!-- The step blocks below are GENERATED from src/setup-flow.ts — the same data
+     the setup program itself runs on. Never edit inside a marker pair; change
+     the Book and run `npx ts-node scripts/generate-setup-docs.ts`. -->
 
-## Step 1 — Which Claude do you have?
+<!-- setup-step:choose-claude BEGIN -->
+## Which Claude will you use?
 
-This guide works for both, but a few steps differ. Find yourself in this table:
+Ask which Claude the user chats with — the desktop app or a browser tab — because that is the install target.
 
-| If you have… | You are using… |
+**Who does this:** you or Claude.
+
+### If Claude can run commands on your computer:
+
+Ask the target question exactly; never infer the target from your own runtime. If the answer is claude.ai-web, deliver the isn't-supported script honestly (kickoff rule 4's exception). If the user pastes SETUP.md instead of you fetching it, confirm the paste by quoting its opening heading and final line — and if you received the wrong file say: "that looks like the project README — I need the file called SETUP.md; on the repository page click it, then use the copy button."
+
+### If you are typing every command yourself:
+
+Do you open Claude as its own app from your Dock or taskbar, or in a browser tab?
+
+If you chat at claude.ai in a browser tab: this server runs on your computer, and a browser-only Claude isn't supported for chatting with it. Download the Claude desktop app from claude.ai/download, then come back and continue from here — this guide gets you ready for it.
+
+**How to check it worked:** You know which Claude the server will be installed into.
+
+**If something goes wrong**
+
+| If you see | Do this |
 |---|---|
-| The **Claude app** you downloaded from claude.ai | **Claude Desktop** |
-| Claude in a **terminal window**, or inside **VS Code / a JetBrains IDE** | **Claude Code** |
-
-Remember your answer. Later steps are labelled **(Desktop)** or **(Code)** where
-they differ.
-
-> **The difference in one sentence:** with **Claude Code**, Claude can run most of
-> the setup commands *for you*. With **Claude Desktop**, you run them yourself —
-> this guide gives you every command to copy and paste.
+| Claude can't read the web | If Claude says it can't read the web: on the repository page click the file named `SETUP.md`, press the copy button (two overlapping squares, top right of the file), and paste it into the chat. |
+<!-- setup-step:choose-claude END -->
 
 ---
 
-## Step 2 — Make sure Node.js is installed
+<!-- setup-step:get-project BEGIN -->
+## Get the project onto the computer
 
-Node.js is the engine this server runs on. You need version **18 or newer**.
+Get the project folder onto the computer, by ZIP download or by the blessed fetch command.
 
-- **(Code)** You already have Node.js — Claude Code itself runs on it. **Skip to Step 3.**
-- **(Desktop)** Open a Terminal (see the box below) and type this, then press Enter:
+**Who does this:** you or Claude.
 
-  ```
-  node --version
-  ```
+### If Claude can run commands on your computer:
 
-  - ✅ You see a version like `v20.11.0` (any number **18 or higher**) — you're set.
-  - ⚠️ You see "command not found" — install Node.js: go to
-    [nodejs.org](https://nodejs.org), click the big **"LTS"** download button, run
-    the installer with all the default options, then **close and reopen Terminal**
-    and try `node --version` again.
+"I'll ask your approval between eight and ten times during this install — each time, I'll tell you first what the dialog will say and why it's safe." (State this BEFORE the first command; number every later pre-brief "approval N of about 9"; if the degraded path adds dialogs, say so and restate the remaining count.)
 
-> **How to open a Terminal**
-> - **Mac:** press `Cmd + Space`, type `Terminal`, press Enter.
-> - **Windows:** click the Start button, type `PowerShell`, press Enter.
+Fetch without git: `mkdir FreshBooks-MCP && curl -L https://github.com/kanjidoc/FreshBooks-MCP/archive/refs/heads/main.tar.gz | tar xz --strip-components=1 -C FreshBooks-MCP`. Re-extracting over an existing folder is credential-safe (`.env`/`profiles/` are not in the tarball).
+
+### If you are typing every command yourself:
+
+Download: on the repository page click Code → Download ZIP, unzip it, and remember where the folder is. Mac tip: to point Terminal at it later, type cd, then a space, then drag the folder onto the Terminal window — then press Enter. Windows: type cd, a space, paste the folder's path from the Explorer address bar, then press Enter.
+
+**How to check it worked:** A folder containing package.json exists.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| git asks to install developer tools | You don't need git — use the download command above (or the ZIP). |
+<!-- setup-step:get-project END -->
 
 ---
 
-## Step 3 — Get this project onto your computer
+<!-- setup-step:node-install BEGIN -->
+## Install Node.js (the engine)
 
-You need the project's files on your machine. Pick **one** option:
+Check for Node.js 18 or newer and install it from nodejs.org if it is missing.
 
-**Option A — Download a ZIP (easiest, needs no extra tools)**
+**Who does this:** you.
 
-1. Open [github.com/kanjidoc/FreshBooks-MCP](https://github.com/kanjidoc/FreshBooks-MCP).
-2. Click the green **"Code"** button, then **"Download ZIP"**.
-3. Unzip the downloaded file. You'll get a folder named `FreshBooks-MCP-main`
-   (GitHub adds the `-main`). Move it somewhere you'll remember — your home folder
-   is fine. You can rename it to just `FreshBooks-MCP` if you prefer.
-4. Note the folder's full location — you'll need it in the next step.
+### If Claude can run commands on your computer:
 
-**Option B — Clone with Git (if you already have Git installed)**
+Run the check yourself where you can; relay the install steps verbatim and wait. (No `check()` — this step's check is the raw command; the doctor's node check is deliberately independent.)
 
+### If you are typing every command yourself:
+
+Open Terminal: press Cmd+Space, type Terminal, press Enter (Windows: open the Start menu, type cmd, press Enter).
+
+First check: type `node --version` and press Enter. If it prints a version of 18 or higher, skip the rest of this step. If it says command not found — that's the expected answer, not something broken; it just means Node isn't installed yet.
+
+Install: go to nodejs.org, click the big LTS button, open the downloaded file, and keep clicking Continue. Your Mac will ask for your password — that's the normal installer, not me. Then check again.
+
+**How to check it worked:** `node --version` prints v18 or higher.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| still command not found after installing | Close the Terminal window completely and open a new one — it reads the new installation only on startup. |
+<!-- setup-step:node-install END -->
+
+---
+
+<!-- setup-step:npm-install BEGIN -->
+## Install the building blocks and build
+
+Install the project's dependencies and build it, as one combined command.
+
+**Who does this:** you or Claude.
+
+### If Claude can run commands on your computer:
+
+One pre-briefed approval for the combined command.
+
+### If you are typing every command yourself:
+
+In the project folder run: `npm install && npm run build` — one command, a few minutes. Near the end npm may print a line about vulnerabilities; that's a routine npm notice, not a problem with your setup.
+
+**How to check it worked:** It ends without red ERR lines; a dist folder now exists.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| Cannot find module 'ts-node'... MODULE_NOT_FOUND | npm install hasn't run (or didn't finish) in this folder — run `npm install` and retry. |
+<!-- setup-step:npm-install END -->
+
+---
+
+<!-- setup-step:build BEGIN -->
+## Build the server
+
+Compile the server so that dist/index.js exists.
+
+**Who does this:** you or Claude.
+
+### If Claude can run commands on your computer:
+
+Normally folded into npm-install's combined command.
+
+### If you are typing every command yourself:
+
+If you ran the combined command above, this already happened. Otherwise: `npm run build`.
+
+**How to check it worked:** dist/index.js exists.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| Cannot find module .../dist/index.js | Run `npm run build` in the project folder. |
+<!-- setup-step:build END -->
+
+---
+
+<!-- setup-step:developer-app BEGIN -->
+## Create your FreshBooks app connection
+
+Create the FreshBooks developer app and collect its Client ID and Client Secret.
+
+**Who does this:** you.
+
+### If Claude can run commands on your computer:
+
+Relay one numbered item at a time; wait for confirmation each time.
+
+### If you are typing every command yourself:
+
+Sign in at freshbooks.com with your normal FreshBooks email — if FreshBooks emails you a code, that's their sign-in check, not part of this setup.
+
+Open the Developer Portal: my.freshbooks.com/#/developer, click Create New App.
+
+Application name: My Claude Connection — the name doesn't matter.
+
+The form asks for an Application Type — choose Private App ("Not listed in the app store").
+
+The Description box is optional (140 characters max) — any short sentence works, try: Lets me manage my own FreshBooks from Claude.
+
+Scopes control what your connection can reach. The form starts with user:profile:read already added; click Add Scope and add every scope that starts with user: — one at a time, 46 more. It is a few minutes of clicking, one time, and it is what lets every FreshBooks feature work from chat.
+
+Set the Redirect URI to exactly: https://localhost/callback — then read it back to yourself character by character.
+
+Any field these steps don't mention: leave it as-is.
+
+After saving, the page shows your Client ID and Client Secret. The Client Secret is hidden behind a Reveal (eye) toggle — click it before copying.
+
+Already created this app once? Open it instead of creating another — click the Reveal (eye) toggle, and confirm the Redirect URI is still exactly https://localhost/callback.
+
+Keep this page open — the next step needs both values.
+
+**How to check it worked:** The app page shows a Client ID and a revealed Client Secret, and the Redirect URI reads exactly https://localhost/callback.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| the form shows something these steps don't mention | Read any red text to Claude first, then the labels of the boxes you're asked to fill, top to bottom — skip menus and banners. |
+<!-- setup-step:developer-app END -->
+
+---
+
+<!-- setup-step:app-credentials BEGIN -->
+## Hand over the app credentials
+
+Hand the app credentials to the setup program without putting them in the chat.
+
+**Who does this:** you or Claude.
+
+### If Claude can run commands on your computer:
+
+The reassurance line, delivered at exactly the paste prompt: "The portal tells you to keep this secret — correct. This is the one credential designed to be handed to me: I'll pass it straight to the setup program, never repeat it, and it can't touch your books by itself."
+
+Then the secret-file pre-brief: "one longer command; your secret is read from a scratch file the setup program deletes itself — the dialog will not contain it."
+
+Secret-file choreography (single approval, blessed shape): the agent writes the secret to `<project folder>/.client-secret.tmp` (covered by `.gitignore`'s `*.tmp`; `--doctor` warns if one is found lingering), then one approved command run from `<project folder>`: `npx ts-node scripts/setup.ts --headless --init --client-id <id> --client-secret-file .client-secret.tmp` — the CLI reads the file once and immediately deletes it (before doing anything else with the secret; the delete runs unconditionally, success or failure, and the CLI errors loudly if it fails) — so the secret's on-disk lifetime ends the moment the CLI starts, and a crash-before-read leftover is caught by `--doctor`'s lingering-tmp check. Honest window: between the agent's file-write and the CLI run the file sits at default permissions for seconds — unavoidable with agent file tools (a shell-side `umask` write would put the secret into the approval dialog, which is worse).
+
+Confirm receipt by shape, never echo: "that looks right — about 32 characters — I won't repeat it again."
+
+If the user volunteers the secret in chat on rung 3: acknowledge, never repeat it, and offer rotation — before the credentials are entered into the setup program, rotate freely; after, rotate and then redo this step.
+
+Rung-3 wizard handoff (this is the first wizard-owned stretch): "The setup program is the guide now — follow its questions; I'll stand by until it prints DONE! or something surprises you." Never pre-narrate the wizard's prompts.
+
+### If you are typing every command yourself:
+
+In the same Terminal window type `npm run setup` and press Enter — the setup program starts and asks its questions right there.
+
+Copy the Client ID and Client Secret from the portal page and paste these only into the setup window — never into this chat.
+
+**Where each credential may go**
+
+| Credential | If Claude can run commands on your computer | If you are typing every command yourself |
+|---|---|---|
+| Client ID + Secret | User pastes into chat **by design** (reassurance line at exactly that prompt); agent passes the secret to `--init` via **`--client-secret-file`** (preferred — the CLI reads, uses, and shreds the file itself, so a failed cleanup is a loud CLI error, not a forgotten agent step) or `--client-secret-stdin`; never argv. Agent confirms by shape, never echoes. | Only into the wizard's terminal prompt; humanScript: *"paste these only into the setup window — never into this chat"*; volunteered-slip script per `app-credentials`. |
+| Authorization code | Transits chat; single-use, minutes-lived. It also appears inside the `--add-login` approval dialog — pre-briefed (see `save-login`). | Pasted into the wizard. |
+| Access/refresh tokens | **Never** in chat, stdout, or argv, any rung. | Same. |
+
+**Not sure which column is yours?** has Claude been asking permission to run things, or only telling you what to type?
+
+**Honest notes on the above:**
+
+- The durable transcript residue is the app-credential pair — its long-term weight is that it converts any future token-file leak into full API access (a refresh needs client id + secret + refresh token) and enables a convincing re-consent phish via the app's own auth flow; the residual controls are the fresh browser Allow every grant requires and kickoff rule 6's no-transmit hard stop.
+- The secret-transport claim, stated precisely: the secret never appears in argv, `ps`, shell history, or the Bash approval dialog; it appears once in the agent's file-write (the same exposure class as the user's own paste into chat).
+
+**How to check it worked:** The setup program (or --init) reports the credentials saved.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| pasted value much shorter than ~32 characters | The paste truncated — reveal the secret again and copy the whole value. |
+<!-- setup-step:app-credentials END -->
+
+---
+
+<!-- setup-step:migrate-legacy BEGIN -->
+## Move an older single-login setup into a named profile
+
+The setup program shows this step only if it applies to you.
+
+Move tokens from an older single-login setup file into a named profile file.
+
+**Who does this:** you.
+
+### If Claude can run commands on your computer:
+
+Headless verbs refuse this state (exit 9); tell the user to run `npm run setup`, wait for their confirmation, then resume with `--doctor`. Never pre-narrate the wizard's prompts.
+
+### If you are typing every command yourself:
+
+You have tokens from an older version of this project stored in the main .env file; the setup moves them into their own profile file, keeping everything you had.
+
+Before saying yes: fully quit Claude (and any other program running this FreshBooks server). Here's why, in plain terms: FreshBooks hands out a one-time key that gets swapped for a new one every time it's used. If two programs hold the same key and both try to use it, FreshBooks locks the whole chain and you'd have to reconnect from scratch. Quitting first makes sure only the setup holds the key.
+
+Answering no just skips the move for now — nothing is deleted.
+
+**How to check it worked:** The wizard prints Migrated existing tokens → profiles/<name>.env.
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| migration says a server appears to be running | Something still holds the tokens — fully quit Claude Desktop (Cmd+Q) and any Claude Code sessions, then re-run `npm run setup`. |
+<!-- setup-step:migrate-legacy END -->
+
+---
+
+<!-- setup-step:nickname BEGIN -->
+## Name this login
+
+Pick the short name this FreshBooks login will be known by.
+
+**Who does this:** you or Claude.
+
+This step repeats once for every FreshBooks login you connect.
+
+### If Claude can run commands on your computer:
+
+First login: choose `main` yourself and inform ("I'll call this login main — you'd only ever type it if you add a second account"); ask only when profiles already exist. Validate + check availability BEFORE issuing the auth URL.
+
+### If you are typing every command yourself:
+
+Pick a short nickname for this FreshBooks login — lowercase letters and digits, like acme. From then on, when you have more than one login, you'll use it in chat: 'list unpaid invoices for acme'. With a single login you'll never need to type it.
+
+**How to check it worked:** The name is accepted (no already-exists message).
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| name already taken | That login may already be connected — ask Claude to run the setup doctor, and to reconnect it if needed. |
+<!-- setup-step:nickname END -->
+
+---
+
+<!-- setup-step:authorize BEGIN -->
+## Sign in and approve the connection
+
+Sign in at FreshBooks, approve the connection, and copy the one-time code back.
+
+**Who does this:** you.
+
+This step repeats once for every FreshBooks login you connect.
+
+### If Claude can run commands on your computer:
+
+Issue `--auth-url` only after the nickname is validated; never open a browser yourself. After relaying the checklist, add (rungs 1–2 only — an approval dialog follows the paste there): "After you paste, stay with me — I need one more approval from you within a minute or two."
+
+### If you are typing every command yourself:
+
+1. Open the sign-in link the setup program just printed — copy it into your browser (or hold Cmd and double-click it).
+
+2. Sign in (use a private/incognito window if connecting a second account) and click Allow.
+
+3. Your browser will land on a page that CAN'T BE REACHED — that's normal and means it worked. The address bar now holds a one-time code.
+
+4. Click once inside the address bar so the whole address highlights, press Cmd+C (Ctrl+C on Windows), and paste it back.
+
+**How to check it worked:** You pasted a long address starting with https://localhost/callback?code=...
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| Closed the tab before copying? | Click the sign-in link again and re-Allow — no harm done. |
+| the wizard says the address looks incomplete | That was only part of the address — click once in the address bar so the whole thing highlights, then copy again. |
+<!-- setup-step:authorize END -->
+
+---
+
+<!-- setup-step:save-login BEGIN -->
+## Save the login
+
+Exchange the code, look up the account details, and save the login into its own profile file.
+
+**Who does this:** you or Claude.
+
+This step repeats once for every FreshBooks login you connect.
+
+### If Claude can run commands on your computer:
+
+Run `--add-login` immediately upon receiving the pasted address — the code lives minutes. Pre-brief its approval dialog: "the dialog will show the address you just pasted, including the long code — that's expected; it works only once and only with this approval."
+
+If it asks which business (exit 6): relay labels only, numbered, never IDs — "Which business is this for: (1) …, (2) …?" — and map the answer to `--business-id` yourself.
+
+If it reports the company is already connected (exit 8): relay the question exactly — This FreshBooks company (<company>) is already connected as '<existing profile>'. Is this a **different person's** login for the same company, are you **reconnecting** the login you already added — or did we pick the **wrong business** a moment ago? — and obey its directive: do not pass `--distinct-login` without an affirmative human reply in this conversation; anything short of a clear 'different person' is a no — re-ask once, then run `--doctor`.
+
+### If you are typing every command yourself:
+
+The setup finds this login's account details and saves them into its own profile file.
+
+**How to check it worked:** It prints the login's nickname, company, and account ID (never tokens).
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| exit 11 / could not look up the account details | Retry first — lookups usually fail transiently. If it keeps failing, ask Claude to run the setup doctor. |
+| quarantined profile mentioned | Two profiles share one company; the extra safety stays on until the duplicate is resolved — the doctor explains which file to remove or mark. |
+<!-- setup-step:save-login END -->
+
+---
+
+<!-- setup-step:install-config BEGIN -->
+## Connect the server to your Claude
+
+Add the server entry to the chosen Claude's configuration file.
+
+**Who does this:** you or Claude.
+
+### If Claude can run commands on your computer:
+
+Target: on agent rungs, take it from choose-claude; on the wizard surface this step asks its own target questions.
+
+Pre-brief: "this next dialog will mention a file outside this folder — it's Claude's own settings file; this one Allow adds one entry to it, and approving it means you never edit a file by hand."
+
+On deny, re-ask once, verbatim: "No problem — that dialog mentions a file outside this folder because it's Claude's own settings file. If you'd rather not approve it, I'll walk you through pasting one file in Claude's Settings screen instead — about five extra minutes. Or approve it once and I do it in five seconds. Want me to ask again?"
+
+Degraded path (second deny, or exit 10, or sandbox): raw material from `--print-config` (denied-permission case) or the exit-10 payload — both emit command/args via the SAME command-selection rule as `--install` (probes + `--command-path` + `"node"` caveat); the degraded path is exactly where a sandboxed `process.execPath` would poison the host config by hand.
+
+Disclosure first: "your Claude settings file may contain access keys for other connectors you've installed; showing it to me puts those in this chat." The agent keeps every foreign entry byte-identical in the merged file and never quotes their `env` values back outside the returned file itself.
+
+Then the two-branch merge protocol: (1) pre-brief a read-only peek ("this dialog is me looking at the file — it changes nothing on disk"); if granted and the file is absent/empty → hand the user a COMPLETE file; if it has content → the agent merges and hands back the complete merged file; (2) if the read is denied too → the reveal script: "open Claude's Settings, choose Developer, then click Edit Config — a Finder window appears with a file highlighted; double-click that file (it opens in TextEdit); select everything you see and paste it to me" → agent returns the merged complete file.
+
+Both branches end with the same self-contained insertion script: "open Claude's Settings, choose Developer, click Edit Config, and double-click the highlighted file — then in TextEdit select all, paste over everything, press Cmd+S" (Windows: the file opens in Notepad — select all, paste, Ctrl+S) (branch (2) already has the file open; repeating the open is harmless). A complete file is NEVER synthesized from the block alone when the current contents are unknown — that wipes existing `mcpServers` entries. If the degraded branch adds dialogs beyond the promised range, the agent says so and restates the remaining count.
+
+Rung-2 mandatory confirmation: after a successful `--install desktop` under Cowork, the agent has the user visually confirm the entry via the Edit-Config door before the restart step. Three touchpoints; the alternative is the doctor→install→doctor sandbox loop. If the user reports the entry is NOT there, that IS the virtualized-sandbox signal: enter the degraded path immediately and never re-run `--install`.
+
+### If you are typing every command yourself:
+
+Manual Claude Desktop setup — if you skipped the automatic install, add the server to Claude Desktop yourself.
+
+1. Open Claude Desktop's config file (create it if it doesn't exist). Mac: `~/Library/Application Support/Claude/claude_desktop_config.json`. Windows: `%APPDATA%\Claude\claude_desktop_config.json`.
+
+2. Add the block below, with the absolute path to your `dist/index.js`. It holds no credentials — the server reads those from `.env` itself:
+
+```json
+{
+  "mcpServers": {
+    "freshbooks": {
+      "command": "node",
+      "args": ["<project folder>/dist/index.js"]
+    }
+  }
+}
 ```
-git clone https://github.com/kanjidoc/FreshBooks-MCP.git
+
+3. Fully quit and reopen Claude Desktop.
+
+Manual Claude Code setup — the setup writes a project-scoped `.mcp.json` into the project folder; that's the file Claude Code reads when this folder is your open project.
+
+To make FreshBooks available in every Claude Code project, register it at "user" scope with the `claude` command-line tool:
+
+```bash
+claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["<project folder>/dist/index.js"]}' --scope user
 ```
 
-> **🤖 Claude (Code):** if you can run a terminal, do Option B yourself, then `cd`
-> into the new `FreshBooks-MCP` folder. If `git` is not available, tell the user to
-> use Option A and tell you where they unzipped the folder.
+(Claude Code stores user-scoped servers in `~/.claude.json` — note that an `mcpServers` block in `~/.claude/settings.json` does not work.)
+
+**How to check it worked:** Claude's config lists the freshbooks server (the install prints the exact file path it wrote).
+
+**If something goes wrong**
+
+| If you see | Do this |
+|---|---|
+| Edit Config opened a folder window, not an editor | That's right — double-click the highlighted file and it opens in TextEdit. |
+<!-- setup-step:install-config END -->
 
 ---
 
-## Step 4 — Install the project's building blocks
+<!-- setup-step:verify BEGIN -->
+## Check everything
 
-Open a Terminal, go into the project folder, and install its dependencies:
+Run the setup doctor and confirm every check passes.
 
-```
-cd path/to/FreshBooks-MCP
-npm install
-```
+**Who does this:** you or Claude.
 
-Replace `path/to/FreshBooks-MCP` with the real location from Step 3. (Tip: on Mac
-you can type `cd `, then drag the folder onto the Terminal window — it fills in the
-path for you.)
+### If Claude can run commands on your computer:
 
-- ✅ It finishes with a line like `added 200 packages`. A few yellow warnings are normal.
-- ⚠️ `npm: command not found` — Node.js isn't installed. Go back to Step 2.
+Run `--doctor`; read failing checks' fix texts aloud; act only within them.
 
----
+### If you are typing every command yourself:
 
-## Step 5 — Create your FreshBooks "developer app"
+Ask Claude to run the setup doctor — or in Terminal, from the project folder: `npx ts-node scripts/setup.ts --headless --doctor`. Every line should say pass.
 
-This is how FreshBooks lets the server connect to your account securely. You only
-do this once.
+**How to check it worked:** Doctor exits with all checks passing.
 
-**🧑 Your turn** — this happens in your web browser, so Claude cannot do it for you:
+**If something goes wrong**
 
-1. Log in at [freshbooks.com](https://www.freshbooks.com).
-2. Open the Developer Portal: [my.freshbooks.com/#/developer](https://my.freshbooks.com/#/developer).
-3. Click **"Create an App"**.
-4. Set **Application Type** to **"Private App"**.
-5. Set the **Redirect URI** to exactly this (copy it precisely):
-
-   ```
-   https://localhost/callback
-   ```
-
-6. Save. **Keep this browser tab open** — the next step needs the **Client ID** and
-   **Client Secret** shown on this page.
+| If you see | Do this |
+|---|---|
+| config entry missing but a previous session said install succeeded | The write was virtualized by the sandbox — use the manual Edit Config route now; do NOT re-run `--install`. |
+| command isn't an absolute path | Either a legacy entry (re-run `--install`) or the deliberate sandbox fallback ('node') — the doctor's line says which. |
+<!-- setup-step:verify END -->
 
 ---
 
-## Step 6 — Run the setup wizard
+<!-- setup-step:restart BEGIN -->
+## Restart Claude and say hello
 
-This is the main event. One command collects your FreshBooks credentials, logs you
-in, finds your account IDs, saves everything, and builds the server.
+Restart Claude and confirm the FreshBooks tools answer.
 
-**🧑 Your turn** — the wizard asks you questions and opens your browser, so **you**
-run it. Open a **normal Terminal window** (not inside Claude), go to the project
-folder, and run:
+**Who does this:** you.
 
-```
-cd path/to/FreshBooks-MCP
-npm run setup
-```
+### If Claude can run commands on your computer:
 
-> **🤖 Claude:** this step is interactive and opens a browser — you cannot run it.
-> Tell the user to run `npm run setup` themselves in a regular Terminal window,
-> explain what the wizard will ask (below), and wait for them to tell you it
-> finished before you continue.
+Deliver the ENTIRE parting note before the user restarts (your session may end with it). Failure lines, per rung — rung 2: "open a new chat in this folder and paste: Run the FreshBooks setup doctor and follow SETUP.md's troubleshooting for whatever it reports." Rung 3: "open a new chat, paste the same kickoff prompt you started with, and add: The install finished but the test failed after restart."
 
-The wizard prints its own headers, `STEP 1` through `STEP 5`. Here is what each
-one does:
+### If you are typing every command yourself:
 
-- **`STEP 1` — Create a FreshBooks Developer App.** It re-shows the app-creation
-  instructions; you already did this in Step 5 above, so just have your **Client
-  ID** and **Client Secret** ready to paste. (If you have an older single-login
-  `.env` from a previous version, the wizard first offers to **migrate** it into a
-  named profile — say yes; your existing tokens move into `profiles/<name>.env`
-  and nothing is lost.)
-- **`STEP 2` — Authorize your FreshBooks login(s).** For each login the wizard
-  opens a FreshBooks page; click **"Allow"**. Your browser then jumps to a page
-  that **fails to load** — *that is expected and correct*. Copy the **full web
-  address** from the address bar and paste it back into the wizard. It then finds
-  that login's Account ID and Business ID for you (letting you pick which business
-  if the login has more than one), and saves the tokens to its own
-  `profiles/<name>.env`. When it asks **"Add another login?"**, answer **y** to
-  connect more accounts or **N** to finish — you can always re-run setup later to
-  add more.
-- **`STEP 3` — Saving configuration.** It writes the base `.env` (your shared app
-  credentials only — *no tokens*) and the `.mcp.json` launcher config.
-- **`STEP 4` — Building the MCP server.** It compiles the server.
-- **`STEP 5` — Connecting to Claude.** It offers to install the server into
-  **Claude Desktop**, and (if the `claude` command-line tool is present) into
-  **Claude Code** as well. Say **yes** to whichever Claude you use — saying yes to
-  both is fine. If you skip both, it prints the configuration to add by hand.
+(Desktop) Our conversation is saved — nothing is lost when you quit.
 
-- ✅ The wizard ends with a line that says **`DONE!`**.
-- ⚠️ Something went wrong — see the Troubleshooting table at the bottom of this guide.
+1. Quit Claude completely: Cmd+Q, not just closing the window (Windows: quit from the system-tray icon).
 
-> **Keep your credentials private.** The wizard stores each FreshBooks login's
-> tokens in its own `profiles/<name>.env` file inside the project folder — those
-> files are the only place your tokens live. The base `.env` holds only your
-> shared app credentials, no tokens. Don't share or upload any of them; they hold
-> the keys to your accounting account. (They're already excluded from Git, so they
-> won't be committed by accident.)
+2. Reopen it and open this same chat.
 
----
+3. The first time a FreshBooks tool runs you'll see one more permission dialog — Allow it.
 
-## Step 7 — Connect the server to Claude
+4. Type: List my recent FreshBooks invoices.
 
-If you said **yes** to the install for your Claude in Step 6, the connection is
-already made — **skip to Step 8.** Otherwise:
+(Code) Start a new session in this folder; if asked to enable the freshbooks server, say yes; then type: List my recent FreshBooks invoices.
 
-**(Desktop)** See *Manual Claude Desktop setup* in the Appendix.
+**How to check it worked:** Claude lists your invoices.
 
-**(Code)** The wizard always writes a file called `.mcp.json` inside the project
-folder. Claude Code reads it automatically when that folder is your open project:
+**If something goes wrong**
 
-1. Open the project folder (the one you installed into — it contains a file named
-   `.mcp.json`) as your project/workspace in Claude Code.
-2. Claude Code will ask whether to enable the **"freshbooks"** MCP server — say yes.
-
-That makes FreshBooks available inside this folder. To use it from *any* Claude
-Code project, let the wizard's Claude Code install do it (Step 6), or see *Manual
-Claude Code setup* in the Appendix.
-
----
-
-## Step 8 — Restart Claude and test it
-
-1. **Quit Claude completely and reopen it.** This is required — Claude only notices
-   a new server on a fresh start.
-   - **(Desktop)** Quit the app entirely (don't just close the window) and relaunch it.
-   - **(Code)** Start a new Claude Code session.
-2. Ask Claude:
-
-   > *"List my recent FreshBooks invoices"*
-
-- ✅ Claude lists your invoices. **🎉 You're done — setup is complete.**
-- ⚠️ Claude says it has no FreshBooks tools, or you get an error — see Troubleshooting.
+| If you see | Do this |
+|---|---|
+| no FreshBooks tools after restart | Make sure you fully quit (Cmd+Q) — then check the doctor; its config check names the file and path to inspect. |
+<!-- setup-step:restart END -->
 
 ---
 
 ## You're set up — now what?
 
-Just talk to Claude in plain English. For example:
+Talk to Claude in plain English. For example:
 
 - *"How much did I invoice last month?"*
 - *"Show me all my unpaid invoices."*
@@ -255,166 +566,118 @@ Just talk to Claude in plain English. For example:
 - *"Who owes me money, and how overdue are they?"* (accounts aging)
 - *"Does my ledger balance?"* (trial balance)
 
-There are **97 tools** in total. To see what's possible, ask Claude:
-*"What FreshBooks tools do you have?"* or *"Show me the FreshBooks help."*
-
-> **More than one FreshBooks login?** This server can connect several. Run `npm
-> run setup` again to add another login (see [Connecting more than one FreshBooks
-> account](#connecting-more-than-one-freshbooks-account) below), then **name the
-> account** in your request — e.g. *"list recent invoices for acme."* Ask
-> *"what FreshBooks accounts are configured?"* and Claude will call
-> `freshbooks_list_accounts` to show you the names. With a single login you never
-> need to name it.
-
----
+There are **97 tools** in total. To see what is possible, ask Claude *"what
+FreshBooks tools do you have?"* or *"show me the FreshBooks help."*
 
 ## Connecting more than one FreshBooks account
 
 One server can manage several FreshBooks logins at once — useful if you keep
-separate books for multiple companies, or have been granted access to a client's
-account. Each login is called a **profile**.
+separate books for more than one company, or have been granted access to a
+client's account. Each login is called a **profile**, and lives in its own
+`profiles/<name>.env` file.
 
-- **Add a login.** Re-run `npm run setup` in the project folder. It keeps your
-  existing logins and walks you through authorizing another one (its own browser
-  "Allow", its own business selection). Each login is saved to its own
-  `profiles/<name>.env` — the name is the bit you'll use to refer to it.
+- **Add a login.** Run the setup again (or ask Claude to). It keeps the logins
+  you already have and walks through authorizing another one — its own browser
+  Allow, its own business selection. That is the naming / signing-in / saving
+  trio of steps above, once more.
 - **Name the account in your request.** With two or more logins configured, tell
-  Claude which one to use: *"list unpaid invoices for acme"*, *"add an expense to
-  beta"*. With a single login, you never need to name it.
+  Claude which one you mean: *"list unpaid invoices for acme"*, *"add an expense
+  to beta"*. With a single login you never need to name it.
 - **Forgot the names?** Ask *"what FreshBooks accounts are configured?"* — Claude
   calls `freshbooks_list_accounts`, which lists each profile's name, company, and
-  token health. (If you forget to name an account when more than one exists, the
-  server replies with the list of valid names.)
-- **Keeping tokens fresh per login.** `npm run check-tokens` audits every profile;
-  `npm run refresh-tokens` refreshes each that needs it; add `-- --profile <name>`
-  to target just one.
-
----
+  token health. (If you forget to name one when several exist, the server answers
+  with the list of valid names rather than guessing.)
 
 ## Keeping it running
 
-Each FreshBooks login token expires every so often, but the server **refreshes
-them automatically** — at startup and before every action. You should never have
-to think about it.
+Each login's access expires every so often, and the server **refreshes it
+automatically** — at startup and before every action. You should never have to
+think about it.
 
-If FreshBooks ever stops working, run this in the project folder:
+If FreshBooks ever stops answering, run this in the project folder:
 
 ```
 npm run refresh-tokens
 ```
 
 It checks every configured login and refreshes the ones that need it (add
-`-- --profile <name>` to refresh just one). If a login reports `REFRESH FAILED`,
-that login's access was revoked (for example, the developer app was deleted, or it
-went unused for about a month). Just re-run `npm run setup` to reconnect it.
-
-> **(Code)** This project also ships a small "token refresh" helper for Claude Code.
-> When the FreshBooks-MCP folder is open, you can simply ask Claude
-> *"check my FreshBooks tokens"* and it will handle the rest, naming the specific
-> account/profile that needs attention.
-
----
+`-- --profile <name>` to do just one; `npm run check-tokens` reports without
+changing anything). If a login says `REFRESH FAILED`, that login's access was
+revoked — for example the developer app was deleted, or it went unused for about
+a month. Reconnect it by running the setup again.
 
 ## A couple of honest limitations
 
-- **Creating credit notes and journal entries doesn't work yet.** This is caused by
-  a bug in the FreshBooks SDK this project depends on, not by this project. *Reading*
+- **Creating credit notes and journal entries doesn't work yet.** This is a bug
+  in the FreshBooks SDK this project depends on, not in this project. *Reading*
   credit notes and journal-entry data works fine. See [CHANGELOG.md](CHANGELOG.md).
-- **Bills, bill payments, and bill vendors** can only be *created* if your FreshBooks
-  account has the **Accounts Payable** add-on enabled. *Listing* them always works.
+- **Bills, bill payments, and bill vendors** can only be *created* if your
+  FreshBooks account has the **Accounts Payable** add-on enabled. *Listing* them
+  always works.
 - **Some reports depend on your FreshBooks plan.** A report tool returning a
-  **403** means that feature isn't included in that login's FreshBooks plan or
-  role (for example, accounts-*payable* aging needs the AP add-on). That's a
-  FreshBooks entitlement, not a bug — retrying won't change it.
+  **403** means that feature isn't included in that login's plan or role (for
+  example, accounts-*payable* aging needs the AP add-on). That is a FreshBooks
+  entitlement, not a bug — retrying won't change it.
 
 Everything else — invoices, clients, expenses, payments, time tracking, items,
-projects, reports, and more — works on a regular FreshBooks account.
-
----
+projects, reports and more — works on a regular FreshBooks account.
 
 ## Troubleshooting
 
+Each step above has its own **If something goes wrong** table; read that one
+first, because it is written for exactly where you are. This table is for
+problems that turn up later, or that belong to no single step.
+
 | Problem | What to do |
 |---|---|
-| `node: command not found` or `npm: command not found` | Node.js isn't installed. See Step 2. |
-| The setup wizard didn't open my browser | Copy the authorization URL the wizard printed in the Terminal and paste it into your browser yourself. |
-| Browser shows "this page can't be reached" after I click Allow | That is expected. Copy the **full address** from the address bar and paste it into the wizard. |
-| The wizard says the authorization code was rejected | Codes are short-lived — the wizard lets you paste a fresh redirect URL and retry, so try again first. If it keeps failing, your app's Redirect URI must be **exactly** `https://localhost/callback` — fix it in the FreshBooks Developer Portal. |
-| `FRESHBOOKS_CLIENT_ID is not set` | The server has no credentials. Re-run `npm run setup`. |
-| "401 Unauthorized" from FreshBooks | Your token expired. Run `npm run refresh-tokens`. If that says `REFRESH FAILED`, re-run `npm run setup`. |
-| `invalid_grant` while refreshing | The login was revoked or expired. Re-run `npm run setup` for a fresh connection. |
-| `Cannot find module .../dist/index.js` | The server wasn't built. Run `npm run build` in the project folder. |
-| Claude has no FreshBooks tools after setup | Make sure you **fully quit and reopened** Claude. **(Desktop)** check the config path points to the real `dist/index.js`; look for the tools/hammer icon. **(Code)** make sure the project folder is open and the "freshbooks" server was enabled. |
-| Claude Desktop shows only *some* of the tools after an update (often just the newest ones) | A known Claude Desktop bug: the app caches a server's tool list by name and doesn't refresh it when the list changes — restarting the app or re-enabling tools in settings won't help. The fix: fully quit Claude Desktop → remove the `"freshbooks"` entry from `claude_desktop_config.json` → open Claude Desktop once → quit it again → put the entry back exactly as it was → reopen. Claude Code and claude.ai web are unaffected. |
-| One login has more than one FreshBooks business | The wizard lists them and lets you pick which business that login's profile should use. To connect more than one as separate accounts, re-run `npm run setup` and add another login. |
-| Claude picked the wrong account, or asks which account | With two or more logins configured, name the account in your request (e.g. "for acme"). Ask "what FreshBooks accounts are configured?" to see the valid names. |
-| Claude asks permission for every FreshBooks action | Deliberate: the recommended allowlist names each tool exactly instead of wildcarding all of them, so every money-touching write keeps a human gate. Allow the individual read-only tools you use often; keep approving writes one by one. |
+| The setup says the authorization code was rejected | Codes are short-lived — paste a fresh address and retry first. If it keeps failing, your app's Redirect URI must be **exactly** `https://localhost/callback`; fix it in the FreshBooks Developer Portal and try again. |
+| `FRESHBOOKS_CLIENT_ID is not set` | The server has no app credentials yet — run the setup again. |
+| "401 Unauthorized" from FreshBooks | The access token expired. Run `npm run refresh-tokens`. If that says `REFRESH FAILED`, reconnect that login by running the setup again. |
+| `invalid_grant` while refreshing | That login was revoked or expired. Run the setup again for a fresh connection. |
+| Claude Desktop shows only *some* of the tools after an update (often just the newest ones) | A known Claude Desktop bug: it caches a server's tool list by name and doesn't refresh it when the list changes — restarting the app or toggling tools in settings won't help. Fully quit Claude Desktop → remove the `"freshbooks"` entry from `claude_desktop_config.json` → open Claude Desktop once → quit it again → put the entry back exactly as it was → reopen. Claude Code and claude.ai web are unaffected. |
+| Claude picked the wrong account, or asks which account | With two or more logins configured, name the account in your request (e.g. "for acme"). Ask *"what FreshBooks accounts are configured?"* to see the valid names. |
+| Claude asks permission for every FreshBooks action | Deliberate: the recommended allowlist names each tool instead of wildcarding all of them, so every money-touching write keeps a human gate. Allow the read-only tools you use often; keep approving writes one at a time. |
 | A report answer starts with `WARNING_INCOMPLETE` | The listing stopped early at a safety limit, so totals computed from it would be wrong. Ask again with a narrower date range or filter. |
 
 Still stuck? Open an issue at
 [github.com/kanjidoc/FreshBooks-MCP/issues](https://github.com/kanjidoc/FreshBooks-MCP/issues).
 
----
+## Other ways to use the server
 
-## Appendix — Advanced / manual setup
+- **claude.ai in a browser:** the web environment cannot launch a program on your
+  computer, and your tokens live in local `profiles/<name>.env` files that must
+  never be committed to a repository — so this server is run locally, from the
+  Claude desktop app or Claude Code.
+- **Claude Agent SDK (for developers):** import `freshbooksServer` from
+  `src/server.ts` and pass it to `query()` as an MCP server. [README.md](README.md)
+  has a code example, and explains how the server works.
 
-Most people only need Steps 1–8 above. This section is for people who want to wire
-things up by hand or use Claude in other ways.
+## Appendix — manual setup (humans only)
 
-### Manual Claude Desktop setup
+Almost nobody needs this section. The manual configuration blocks for Claude
+Desktop and Claude Code live in the *Connect the server to your Claude* step
+above, where they belong — this appendix is only for wiring up the credentials
+themselves by hand.
 
-If you skipped the wizard's auto-install, add the server to Claude Desktop yourself.
+### Manual token exchange (raw tokens, by hand)
 
-1. Open Claude Desktop's config file (create it if it doesn't exist):
-   - **Mac:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-   - **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-2. Add the block below, with the **absolute path** to your `dist/index.js`. It
-   holds no credentials — the server reads those from `.env` itself:
+Installing agents must never use this section — it handles raw tokens. Ask the
+person to run the setup program instead; it does all of this without a token
+ever passing through a chat.
 
-```json
-{
-  "mcpServers": {
-    "freshbooks": {
-      "command": "node",
-      "args": ["/absolute/path/to/FreshBooks-MCP/dist/index.js"]
-    }
-  }
-}
-```
-
-3. Fully quit and reopen Claude Desktop.
-
-### Manual Claude Code setup
-
-The wizard always writes a project-scoped `.mcp.json` into the project folder —
-that's the file Claude Code reads when this folder is your open project.
-
-To make FreshBooks available in **every** Claude Code project, register it at
-"user" scope with the `claude` command-line tool:
-
-```bash
-claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["/absolute/path/to/FreshBooks-MCP/dist/index.js"]}' --scope user
-```
-
-The setup wizard offers to run this for you in Step 6 whenever the `claude` tool
-is installed. (Claude Code stores user-scoped servers in `~/.claude.json` — note
-that an `mcpServers` block in `~/.claude/settings.json` does **not** work.)
-
-### Setting up without the wizard
-
-If you can't run `npm run setup`, you can configure everything by hand. Tokens are
+If you cannot run the setup at all, you can do its job yourself. Credentials
 split across two kinds of file: the base `.env` holds only your shared **app**
 credentials, and each FreshBooks login's tokens go in its own
 `profiles/<name>.env`.
 
 1. `cp .env.example .env` and fill in the three app values
    (`FRESHBOOKS_CLIENT_ID`, `FRESHBOOKS_CLIENT_SECRET`, `FRESHBOOKS_REDIRECT_URI`).
-   Do **not** put tokens here.
-2. **Client ID / Client Secret** come from the Developer Portal app (Step 5).
-3. **Access Token / Refresh Token** — complete the OAuth flow:
+   Do **not** put tokens here. The Client ID and Client Secret come from the
+   developer app you created above.
+2. **Access token / refresh token** — complete the OAuth flow yourself:
    - Visit (with your real Client ID):
      `https://auth.freshbooks.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=https://localhost/callback`
-   - Click **Allow**, then copy the `code` value from the redirected URL.
+   - Click **Allow**, then copy the `code` value out of the address bar.
    - Exchange it for tokens:
      ```bash
      curl -X POST https://api.freshbooks.com/auth/oauth/token \
@@ -427,15 +690,15 @@ credentials, and each FreshBooks login's tokens go in its own
          "redirect_uri": "https://localhost/callback"
        }'
      ```
-4. **Account ID / Business ID** — call the identity endpoint:
+3. **Account ID / business ID** — call the identity endpoint:
    ```bash
    curl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
      https://api.freshbooks.com/auth/api/v1/users/me
    ```
    Use `business_memberships[0].business.account_id` and
    `business_memberships[0].business.id`.
-5. Create `profiles/<name>.env` (pick a short lowercase `<name>`, e.g.
-   `profiles/default.env`) containing the four per-login values:
+4. Create `profiles/<name>.env` (a short lowercase `<name>`, e.g.
+   `profiles/main.env`) holding the four per-login values:
 
    ```
    FRESHBOOKS_ACCESS_TOKEN=...
@@ -444,21 +707,11 @@ credentials, and each FreshBooks login's tokens go in its own
    FRESHBOOKS_BUSINESS_ID=...
    ```
 
-   Repeat for each additional login (one file per login). All `profiles/*.env`
-   files are already excluded from Git.
-6. Run `npm run build`, then add the server to Claude using one of the blocks above.
-
-### Other ways to use the server
-
-- **claude.ai/code (web):** the web environment reads a project-scoped `.mcp.json`,
-  but your FreshBooks tokens live in local `profiles/<name>.env` files that must
-  not be committed to a repository — so this server is best run locally, via Claude
-  Desktop or Claude Code.
-- **Claude Agent SDK (for developers):** import `freshbooksServer` from
-  `src/server.ts` and pass it to `query()` as an MCP server. See
-  [README.md](README.md) for a code example.
+   Repeat for each additional login — one file per login. Every `profiles/*.env`
+   is already excluded from Git.
+5. Run `npm run build`, then connect the server to Claude with the blocks in the
+   *Connect the server to your Claude* step above.
 
 ---
 
-Once you're up and running, [README.md](README.md) explains how the server works
-and lists every tool. Welcome aboard. 🎉
+— end of setup guide —
