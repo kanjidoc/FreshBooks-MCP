@@ -379,18 +379,6 @@ function stepIdForVerb(verbFlag: string, fallback: string): string {
 }
 
 /**
- * The Book's own fix text for one troubleshooting row, looked up by a fragment
- * of its symptom.
- *
- * Envelope `fix` strings are normally written here, but where the Book already
- * words a state for a human — a truncated callback address, a failed account
- * lookup — the envelope quotes the Book rather than paraphrasing it, so the CLI
- * and SETUP.md can never say two different things about the same failure (and a
- * later edit to the row flows into the envelope for free). Missing rows throw:
- * a silent fallback would be exactly the drift this exists to prevent, and the
- * dispatcher turns the throw into a safe envelope.
- */
-/**
  * "What IS staged", for the exit-2 a resume emits when its `--name` has nothing
  * under it.
  *
@@ -416,6 +404,18 @@ function stagedListing(pendings: ReturnType<typeof listPendings>): string {
   return parts.join(" ");
 }
 
+/**
+ * The Book's own fix text for one troubleshooting row, looked up by a fragment
+ * of its symptom.
+ *
+ * Envelope `fix` strings are normally written here, but where the Book already
+ * words a state for a human — a truncated callback address, a failed account
+ * lookup — the envelope quotes the Book rather than paraphrasing it, so the CLI
+ * and SETUP.md can never say two different things about the same failure (and a
+ * later edit to the row flows into the envelope for free). Missing rows throw:
+ * a silent fallback would be exactly the drift this exists to prevent, and the
+ * dispatcher turns the throw into a safe envelope.
+ */
 function bookFix(stepId: string, symptomFragment: string): string {
   const row = stepFor(stepId).troubleshooting.find((t) => t.symptom.includes(symptomFragment));
   if (!row) {
