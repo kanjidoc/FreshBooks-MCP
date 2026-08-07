@@ -28,17 +28,30 @@
  *  4. NO PROCESS SPAWNING. This module deliberately imports no child-process
  *     API: `--auth-url` prints a URL and never opens a browser (the Book's
  *     `authorize` step: "never open a browser yourself"), and a test asserts
- *     the absence structurally.
+ *     the absence structurally. The one verb that must reach an external
+ *     program — `--install code`, which registers through the `claude` CLI —
+ *     goes through `setup-core`'s `isClaudeCliAvailable`/`claudeMcpAddJson`
+ *     seam, so the spawn stays in one reviewable place and a test can stub it
+ *     rather than execute a real CLI.
  *
  * Exit codes are the spec's table (§"Exit codes"), exported as `EXIT`.
  */
 
-import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import * as dotenv from "dotenv";
 import { resolveDesktopConfigPath } from "../src/config-paths";
 import { decodeJwtExp } from "../src/freshbooks-client";
+import { buildClaudeServerConfig } from "../src/mcp-config";
 import {
   isMigrated,
   markDistinctLogin,
@@ -58,9 +71,13 @@ import {
   buildAuthUrl,
   buildOAuthClient,
   buildTokenClient,
+  claudeMcpAddJson,
   discoverMemberships,
   exchangeCode,
   extractCodeFromUrl,
+  installDesktop,
+  installMcpJson,
+  isClaudeCliAvailable,
   listPendings,
   loadPending,
   pendingPath,
@@ -411,6 +428,8 @@ const VERB_FLAGS: Record<string, string[]> = {
   // discovery IS the wrong-account protection (spec exit-11 row), so there is no
   // way to assert ids past it. See `runReauth`'s ruling 1.
   "--reauth": ["--name", "--callback-url"],
+  "--install": ["--command-path", "--trust-exec-path"],
+  "--print-config": ["--command-path", "--trust-exec-path"],
   "--discard-pending": ["--name"],
 };
 
@@ -1977,6 +1996,329 @@ function warnIfQuarantined(paths: SetupPaths, name: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Verbs: --install and --print-config
+// ---------------------------------------------------------------------------
+//
+// Both verbs answer the same question — "what entry connects this build to
+// Claude, and where does it go?" — and differ only in whether they write it.
+// Three rulings hold them together:
+//
+//   1. ONE COMMAND-SELECTION RULE, shared. `--print-config` is the degraded
+//      path's lawful source when a denied permission means `--install` never
+//      ran, so a block it emits must name the same `node` the install would
+//      have written. Two rules would mean the by-hand file and the automatic
+//      one disagree about what launches the server.
+//   2. `--print-config` READS NOTHING. The entry is `{command, args}` with a
+//      deliberate no-`env` design, so producing it never requires knowing what
+//      the user's config already contains — which is what makes the read-only
+//      claim structural rather than a promise. (The dispatcher's exit-9
+//      precondition does read the base `.env`; that is a different file and a
+//      different question.)
+//   3. A FAILED WRITE HANDS BACK ITS RAW MATERIAL. Exit 10 carries
+//      `{configBlock, path}` precisely so the agent can switch to the by-hand
+//      route without re-running anything — and a refusal never overwrites the
+//      file it could not parse, because the neighbours in it may be the only
+//      copy of another connector's configuration.
+
+/** The install targets (spec verb table). `both` = desktop + code. */
+const INSTALL_TARGETS = ["desktop", "code", "mcp-json", "both"] as const;
+type InstallTarget = (typeof INSTALL_TARGETS)[number];
+/** A target that names exactly one config location — what `both` fans out to. */
+type ConcreteTarget = Exclude<InstallTarget, "both">;
+
+/**
+ * Where a host `node` normally lives, in probe order (spec §verb table).
+ *
+ * Probing beats `process.execPath` by default because a sandboxed agent's
+ * `execPath` may be an interpreter that only exists inside its sandbox; writing
+ * that path into the host's Claude config produces an entry that cannot start.
+ * `--trust-exec-path` is how a caller on a real host shell opts out.
+ */
+export const NODE_PROBE_PATHS: string[] = [
+  "/opt/homebrew/bin/node",
+  "/usr/local/bin/node",
+  "/usr/bin/node",
+];
+
+/** Said out loud whenever the entry falls back to the bare `node`. */
+const BARE_COMMAND_CAVEAT =
+  'No absolute node was found at the standard locations, so this entry launches the bare command "node" — ' +
+  "it works only if Claude starts with a PATH that includes node. If the server does not appear after a " +
+  "restart, re-run --install with --command-path <absolute path to node>.";
+
+/**
+ * The open-this-folder script the spec's code branch calls for. Its wording
+ * mirrors the wizard's long-standing manual text (`printMcpConfig` in
+ * `scripts/setup.ts`) rather than inventing a second way to say the same thing.
+ */
+const OPEN_THIS_FOLDER_SCRIPT =
+  'Claude Code: open this folder as your project in Claude Code and enable the "freshbooks" server when ' +
+  "prompted. To make it available in every project instead, install the `claude` command-line tool and " +
+  "re-run --install code.";
+
+/** What an agent does with an exit-10 payload (spec §install-config choreography). */
+const INSTALL_FAILED_FIX =
+  "Re-running --install will not fix this — switch to the degraded path: disclose that the file may hold " +
+  "other connectors' access keys, get the file's current contents, merge the configBlock in this payload " +
+  "into it without altering any other entry, and hand back the complete file for the user to paste.";
+
+/**
+ * Which `node` the written entry should launch.
+ *
+ * `exists` is an injected seam so the probe order is testable without depending
+ * on what happens to be installed on the machine running the tests; production
+ * callers take the default.
+ */
+export function selectCommandPath(
+  opts: { trustExecPath?: boolean; override?: string },
+  exists: (candidate: string) => boolean = existsSync,
+): { command: string; caveat?: string } {
+  if (opts.override) return { command: opts.override };
+  if (opts.trustExecPath) return { command: process.execPath };
+  for (const candidate of NODE_PROBE_PATHS) {
+    if (exists(candidate)) return { command: candidate };
+  }
+  return { command: "node", caveat: BARE_COMMAND_CAVEAT };
+}
+
+/** The complete block a human pastes for one target — the by-hand raw material. */
+function renderConfigBlock(projectDir: string, command: string): string {
+  return JSON.stringify(
+    { mcpServers: { freshbooks: buildClaudeServerConfig(projectDir, command) } },
+    null,
+    2,
+  );
+}
+
+/**
+ * Which file a target's block belongs in.
+ *
+ * `code` answers with the project-scoped `.mcp.json`, not `~/.claude.json`:
+ * Claude Code's user scope is the CLI's to own, so the by-hand route — the only
+ * route this path is ever used for — is the project file.
+ */
+function configPathFor(target: ConcreteTarget, paths: SetupPaths): string {
+  return target === "desktop" ? paths.desktopConfigPath : paths.mcpJsonPath;
+}
+
+/** `both` is the only target that fans out. */
+function expandTarget(target: InstallTarget): ConcreteTarget[] {
+  return target === "both" ? ["desktop", "code"] : [target];
+}
+
+type TargetArgs =
+  | { ok: true; target: InstallTarget; command: string }
+  | { ok: false; code: number };
+
+/**
+ * The grammar both verbs share: a valid target, and the command selection —
+ * whose caveat, when there is one, is stated on the human channel in BOTH
+ * output modes (the `--json` shapes for these verbs are fixed, so a caveat
+ * cannot ride along inside them).
+ */
+function resolveTargetAndCommand(parsed: ParsedArgs, emit: Emit, verb: string): TargetArgs {
+  const step = stepFor("install-config");
+
+  const target = parsed.verbValue as InstallTarget | undefined;
+  if (!target || !(INSTALL_TARGETS as readonly string[]).includes(target)) {
+    return {
+      ok: false,
+      code: usage(
+        emit,
+        verb,
+        step.id,
+        `"${target ?? ""}" is not an install target.`,
+        `Re-run --${verb} with one of: ${INSTALL_TARGETS.join(" | ")}.`,
+      ),
+    };
+  }
+
+  const override = parsed.flags.get("--command-path");
+  if (typeof override === "string" && !isAbsolute(override)) {
+    return {
+      ok: false,
+      code: usage(
+        emit,
+        verb,
+        step.id,
+        `--command-path needs an absolute path; "${override}" is relative.`,
+        "Re-run with the full path to node (`which node` prints it), or omit --command-path to let " +
+          "the standard locations be probed.",
+      ),
+    };
+  }
+
+  const selection = selectCommandPath({
+    override: typeof override === "string" ? override : undefined,
+    trustExecPath: parsed.flags.get("--trust-exec-path") === true,
+  });
+  if (selection.caveat) console.error(`Note: ${selection.caveat}`);
+
+  return { ok: true, target, command: selection.command };
+}
+
+/** The `args` array the written entry carries — always exactly one dist path. */
+function entryArgs(paths: SetupPaths, command: string): string[] {
+  return buildClaudeServerConfig(paths.rootDir, command).args;
+}
+
+/** Exit 10 plus the payload that lets the agent finish by hand. */
+function installFailed(
+  emit: Emit,
+  paths: SetupPaths,
+  command: string,
+  configPath: string,
+  symptom: string,
+  detail: string,
+): number {
+  emitErr(
+    emit,
+    "install",
+    EXIT.INSTALL_FAILED,
+    stepFor("install-config").id,
+    symptom,
+    INSTALL_FAILED_FIX,
+    detail,
+    { configBlock: renderConfigBlock(paths.rootDir, command), path: configPath },
+  );
+  return EXIT.INSTALL_FAILED;
+}
+
+/**
+ * Claude Code's CLI branch: register at user scope through `claude mcp
+ * add-json`.
+ *
+ * The reported path is the user-scope config the CLI writes — this project
+ * never opens it, so the `mtime` is reported only when the file is actually
+ * there to stat rather than asserted from a write we did not perform.
+ */
+function installViaClaudeCli(emit: Emit, paths: SetupPaths, command: string): number {
+  try {
+    claudeMcpAddJson(paths.rootDir, command);
+  } catch (err) {
+    return installFailed(
+      emit,
+      paths,
+      command,
+      paths.mcpJsonPath,
+      "The claude CLI could not register the server at user scope.",
+      errorMessage(err),
+    );
+  }
+
+  const fields: Record<string, unknown> = {
+    target: "code",
+    path: paths.claudeJsonPath,
+    command,
+    args: entryArgs(paths, command),
+  };
+  try {
+    fields.mtime = statSync(paths.claudeJsonPath).mtimeMs;
+  } catch {
+    // The CLI owns that file; report no timestamp rather than a guessed one.
+  }
+  emitOk(emit, "install", fields);
+  return EXIT.OK;
+}
+
+/** Install one concrete target, emitting its own object either way. */
+function installOne(
+  target: ConcreteTarget,
+  emit: Emit,
+  paths: SetupPaths,
+  command: string,
+): number {
+  // The spec's code decision tree: CLI present → the CLI; else the project file
+  // plus the open-this-folder script.
+  if (target === "code" && isClaudeCliAvailable()) {
+    return installViaClaudeCli(emit, paths, command);
+  }
+
+  const outcome =
+    target === "desktop" ? installDesktop(paths, command) : installMcpJson(paths, command);
+
+  if (!outcome.ok) {
+    const symptom =
+      outcome.reason === "invalid-json"
+        ? `${outcome.path} is not valid JSON — merging into it would have destroyed the other ` +
+          "connectors it lists, so nothing was written."
+        : `${outcome.path} could not be written.`;
+    return installFailed(emit, paths, command, outcome.path, symptom, outcome.detail);
+  }
+
+  if (target === "code") console.error(OPEN_THIS_FOLDER_SCRIPT);
+
+  emitOk(emit, "install", {
+    target,
+    path: outcome.path,
+    mtime: outcome.mtimeMs,
+    command,
+    args: entryArgs(paths, command),
+  });
+  return EXIT.OK;
+}
+
+/**
+ * Write the launcher entry for one or both targets.
+ *
+ * `both` emits one JSON object per target, one per line (the
+ * `refresh-tokens --json` precedent), and each target is judged on its own: a
+ * desktop refusal does not stop the code install, and the run's exit code is
+ * the failure if either failed.
+ */
+function runInstall(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): number {
+  const verb = "install";
+  const args = resolveTargetAndCommand(parsed, emit, verb);
+  if (!args.ok) return args.code;
+
+  // The entry names `dist/index.js`; writing one that points at a file which
+  // does not exist installs a server that cannot start, and the failure would
+  // surface much later as "no FreshBooks tools after restart". The Book's
+  // `build` step owns this state, and its own fix text is what we quote.
+  const distPath = join(paths.rootDir, "dist", "index.js");
+  if (!existsSync(distPath)) {
+    emitErr(
+      emit,
+      verb,
+      EXIT.PRECONDITION,
+      stepFor("build").id,
+      `The server is not built: ${distPath} does not exist, so the entry would point at a missing file.`,
+      bookFix("build", "Cannot find module"),
+      `${distPath} is missing.`,
+    );
+    return EXIT.PRECONDITION;
+  }
+
+  let result: number = EXIT.OK;
+  for (const target of expandTarget(args.target)) {
+    const code = installOne(target, emit, paths, args.command);
+    if (code !== EXIT.OK) result = code;
+  }
+  return result;
+}
+
+/**
+ * Emit the entry a target needs WITHOUT writing anything — and without reading
+ * the existing config (ruling 2 above). Deliberately has no build precondition:
+ * this is the degraded path's raw material, and an agent may legitimately ask
+ * for it at any point, including before the build.
+ */
+function runPrintConfig(parsed: ParsedArgs, emit: Emit, paths: SetupPaths): number {
+  const verb = "print-config";
+  const args = resolveTargetAndCommand(parsed, emit, verb);
+  if (!args.ok) return args.code;
+
+  for (const target of expandTarget(args.target)) {
+    emitOk(emit, verb, {
+      target,
+      path: configPathFor(target, paths),
+      configBlock: renderConfigBlock(paths.rootDir, args.command),
+    });
+  }
+  return EXIT.OK;
+}
+
+// ---------------------------------------------------------------------------
 // Verb: --discard-pending
 // ---------------------------------------------------------------------------
 
@@ -2177,6 +2519,10 @@ async function dispatch(
       return runAddLogin(parsed, emit, paths);
     case "--reauth":
       return runReauth(parsed, emit, paths);
+    case "--install":
+      return runInstall(parsed, emit, paths);
+    case "--print-config":
+      return runPrintConfig(parsed, emit, paths);
     case "--discard-pending":
       return runDiscardPending(parsed, emit, paths);
     default:

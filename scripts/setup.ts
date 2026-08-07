@@ -35,9 +35,12 @@ import {
   buildAuthUrl,
   buildOAuthClient,
   buildTokenClient,
+  claudeMcpAddJson,
   discoverMemberships,
   exchangeCode,
   extractCodeFromUrl,
+  installDesktop,
+  isClaudeCliAvailable,
   saveProfile,
 } from "./setup-core";
 import { runHeadless } from "./setup-headless";
@@ -132,39 +135,27 @@ function writeMcpJson(projectDir: string) {
   fs.writeFileSync(MCP_JSON_PATH, JSON.stringify(config, null, 2) + "\n");
 }
 
-function upsertClaudeDesktopConfig(projectDir: string): boolean {
-  try {
-    fs.mkdirSync(path.dirname(CLAUDE_DESKTOP_CONFIG_PATH), { recursive: true });
-    let existing: any = {};
-    if (fs.existsSync(CLAUDE_DESKTOP_CONFIG_PATH)) {
-      try {
-        existing = JSON.parse(fs.readFileSync(CLAUDE_DESKTOP_CONFIG_PATH, "utf8"));
-      } catch {
-        console.log(
-          `   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`,
-        );
-        return false;
-      }
-    }
-    existing.mcpServers = existing.mcpServers ?? {};
-    existing.mcpServers.freshbooks = buildClaudeServerConfig(projectDir);
-    fs.writeFileSync(CLAUDE_DESKTOP_CONFIG_PATH, JSON.stringify(existing, null, 2) + "\n");
-    return true;
-  } catch (err: any) {
-    console.log(`   Warning: could not write Claude Desktop config (${err.message}).`);
-    return false;
-  }
-}
+/**
+ * The launcher-config writers live in `setup-core.ts` so the wizard and the
+ * headless `--install` verb share one merge implementation (and one set of
+ * foreign-entry guarantees). The wizard keeps its own wording for every
+ * outcome — the core returns a `reason` token, never prose.
+ */
+const INSTALL_PATHS = {
+  rootDir: PROJECT_DIR,
+  desktopConfigPath: CLAUDE_DESKTOP_CONFIG_PATH,
+  mcpJsonPath: MCP_JSON_PATH,
+};
 
-/** True if the `claude` CLI (Claude Code) is installed and on PATH. */
-function isClaudeCliAvailable(): boolean {
-  const { execFileSync } = require("child_process");
-  try {
-    execFileSync("claude", ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+function upsertClaudeDesktopConfig(): boolean {
+  const result = installDesktop(INSTALL_PATHS);
+  if (result.ok) return true;
+  console.log(
+    result.reason === "invalid-json"
+      ? `   Warning: existing ${CLAUDE_DESKTOP_CONFIG_PATH} is not valid JSON. Skipping auto-merge.`
+      : `   Warning: could not write Claude Desktop config (${result.detail}).`,
+  );
+  return false;
 }
 
 /**
@@ -173,19 +164,8 @@ function isClaudeCliAvailable(): boolean {
  * entry is removed first. Returns whether registration succeeded.
  */
 function installIntoClaudeCode(projectDir: string): boolean {
-  const { execFileSync } = require("child_process");
-  const serverJson = JSON.stringify(buildClaudeCodeServerJson(projectDir));
   try {
-    try {
-      execFileSync("claude", ["mcp", "remove", "freshbooks", "--scope", "user"], {
-        stdio: "ignore",
-      });
-    } catch {
-      // Not previously installed — nothing to remove.
-    }
-    execFileSync("claude", ["mcp", "add-json", "freshbooks", serverJson, "--scope", "user"], {
-      stdio: "ignore",
-    });
+    claudeMcpAddJson(projectDir);
     return true;
   } catch (err: any) {
     console.log(`   Warning: could not register with Claude Code (${err.message}).`);
@@ -589,7 +569,7 @@ STEP 5: Connecting to Claude
 
   let desktopInstalled = false;
   if (isYes(await ask("   Add the server to Claude Desktop? [Y/n]: "), true)) {
-    desktopInstalled = upsertClaudeDesktopConfig(PROJECT_DIR);
+    desktopInstalled = upsertClaudeDesktopConfig();
     if (desktopInstalled) {
       console.log(`   Claude Desktop config updated: ${CLAUDE_DESKTOP_CONFIG_PATH}\n`);
     }

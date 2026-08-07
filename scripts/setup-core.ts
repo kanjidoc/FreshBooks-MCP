@@ -3,10 +3,20 @@
  *
  * Every setup step that talks to FreshBooks or to disk lives here: building the
  * OAuth client, minting the authorization URL, exchanging the callback code,
- * reading the login's businesses, and writing tokens into `profiles/<name>.env`.
- * Nothing in this module prompts, prints, or reads `process.argv` — the wizard
- * (`scripts/setup.ts`) and the headless verbs each supply their own I/O around
- * these calls, so both drive exactly the same logic.
+ * reading the login's businesses, writing tokens into `profiles/<name>.env`,
+ * and — at the bottom — writing the launcher configs that connect the built
+ * server to Claude. Nothing in this module prompts, prints, or reads
+ * `process.argv` — the wizard (`scripts/setup.ts`) and the headless verbs each
+ * supply their own I/O around these calls, so both drive exactly the same
+ * logic.
+ *
+ * This module is also the project's ONLY process-spawning site outside the
+ * wizard's own browser/build calls: `isClaudeCliAvailable` and
+ * `claudeMcpAddJson` shell out to the `claude` CLI. They live here rather than
+ * in `scripts/setup-headless.ts` so that module can keep its
+ * "imports no process spawner" invariant (and the structural test that proves
+ * it) while `--install code` still reaches the CLI through this seam — which is
+ * also what lets a test stub the CLI instead of executing it.
  *
  * Extracted from `scripts/setup.ts` behavior-identically; the wizard now
  * delegates to it rather than inlining the same steps.
@@ -21,6 +31,7 @@
  * there.
  */
 
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -31,9 +42,10 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Client } from "@freshbooks/api";
 import { writeAtomic, readTokenMarkers } from "../src/atomic-write";
+import { buildClaudeCodeServerJson, buildClaudeServerConfig } from "../src/mcp-config";
 import { applyTokensToEnv } from "../src/freshbooks-client";
 import { ProfileWriteError, writeNewProfile } from "../src/migrate";
 import { parseProfileConfig, type ProfileConfig } from "../src/profiles";
@@ -426,4 +438,161 @@ export function listPendings(profilesDir: string): { name: string; mode: string;
         ageMs: Math.max(0, now - Date.parse(readStagedAt(raw, path))),
       };
     });
+}
+
+// ---------------------------------------------------------------------------
+// Launcher configs — the `install-config` step's writers
+// ---------------------------------------------------------------------------
+//
+// These write the entry that tells Claude how to LAUNCH the server. They carry
+// no credentials by design (`buildClaudeServerConfig` is `{command, args}` with
+// a deliberate no-`env` block), which is what makes the whole install path safe
+// to show a user verbatim — and what makes `--print-config` able to emit the
+// same block without ever reading their existing file.
+//
+// The merge rule is the one thing here that must never be "simplified": a
+// user's config is shared with every other MCP connector they have installed,
+// several of which DO keep API keys in their `env` blocks. So the writer reads,
+// parses, sets exactly `mcpServers.freshbooks`, and re-serializes — and REFUSES
+// (never overwrites) anything it could not parse, because a rewrite-from-blank
+// on unreadable content silently deletes those neighbours.
+
+/** The paths a launcher-config install may touch. `SetupPaths` satisfies it. */
+export interface InstallPaths {
+  /** The project folder — `dist/index.js` under it is what Claude launches. */
+  rootDir: string;
+  /** Claude Desktop's `claude_desktop_config.json` for this OS. */
+  desktopConfigPath: string;
+  /** The project-scoped Claude Code config. */
+  mcpJsonPath: string;
+}
+
+/**
+ * What one config write did. `mtimeMs` is read back from the file after the
+ * write, so the caller reports an observed timestamp rather than a claimed one.
+ *
+ * `reason` is a token, not prose: each surface renders its own sentence from it
+ * (the wizard keeps its long-standing warning wording, the headless envelope
+ * writes the exit-10 symptom/fix), so neither inherits the other's voice.
+ */
+export type InstallOutcome =
+  | { ok: true; path: string; mtimeMs: number }
+  | { ok: false; path: string; reason: "invalid-json" | "write-failed"; detail: string };
+
+/** A non-null, non-array object — the only shape a config document may have. */
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge `mcpServers.freshbooks` into a JSON config file, creating the file (and
+ * its folder) when absent and preserving every other entry byte for byte.
+ *
+ * Shared by the Desktop config and the project `.mcp.json`: the two files differ
+ * only in where they live and who reads them, and having one implementation is
+ * what guarantees a foreign connector is as safe in one as in the other.
+ */
+function upsertServerEntry(
+  configPath: string,
+  projectDir: string,
+  commandPath?: string,
+): InstallOutcome {
+  let document: Record<string, unknown> = {};
+
+  if (existsSync(configPath)) {
+    let raw: string;
+    try {
+      raw = readFileSync(configPath, "utf8");
+    } catch (err) {
+      return { ok: false, path: configPath, reason: "write-failed", detail: messageOf(err) };
+    }
+    if (raw.trim() !== "") {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        return { ok: false, path: configPath, reason: "invalid-json", detail: messageOf(err) };
+      }
+      if (!isJsonObject(parsed)) {
+        return {
+          ok: false,
+          path: configPath,
+          reason: "invalid-json",
+          detail: "the file's top level is not a JSON object",
+        };
+      }
+      document = parsed;
+    }
+  }
+
+  const servers = document.mcpServers ?? {};
+  if (!isJsonObject(servers)) {
+    return {
+      ok: false,
+      path: configPath,
+      reason: "invalid-json",
+      detail: "the file's mcpServers value is not a JSON object",
+    };
+  }
+  // Assign into the existing object rather than rebuilding it: insertion order
+  // (and therefore the serialized bytes of every neighbour) is preserved.
+  servers.freshbooks = buildClaudeServerConfig(projectDir, commandPath);
+  document.mcpServers = servers;
+
+  try {
+    mkdirSync(dirname(configPath), { recursive: true });
+    writeFileSync(configPath, JSON.stringify(document, null, 2) + "\n");
+    return { ok: true, path: configPath, mtimeMs: statSync(configPath).mtimeMs };
+  } catch (err) {
+    return { ok: false, path: configPath, reason: "write-failed", detail: messageOf(err) };
+  }
+}
+
+/** `err.message` and nothing else — never the object itself. */
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Add the server to Claude Desktop's config, keeping every other entry. */
+export function installDesktop(paths: InstallPaths, commandPath?: string): InstallOutcome {
+  return upsertServerEntry(paths.desktopConfigPath, paths.rootDir, commandPath);
+}
+
+/** Add the server to the project-scoped `.mcp.json`, keeping every other entry. */
+export function installMcpJson(paths: InstallPaths, commandPath?: string): InstallOutcome {
+  return upsertServerEntry(paths.mcpJsonPath, paths.rootDir, commandPath);
+}
+
+/** True if the `claude` CLI (Claude Code) is installed and on PATH. */
+export function isClaudeCliAvailable(): boolean {
+  try {
+    execFileSync("claude", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Register the server with Claude Code at user scope (available in every
+ * project) via the `claude` CLI. Re-running is idempotent: any existing entry is
+ * removed first, and a remove that finds nothing is not an error.
+ *
+ * Throws when the add fails — the caller decides what that means (the wizard
+ * warns and falls back to the manual block; `--install code` exits 10 with the
+ * by-hand raw material). `stdio: "ignore"` keeps the CLI's own output off both
+ * of our channels, where it would break the one-JSON-object-per-line contract.
+ */
+export function claudeMcpAddJson(projectDir: string, commandPath?: string): void {
+  const serverJson = JSON.stringify(buildClaudeCodeServerJson(projectDir, commandPath));
+  try {
+    execFileSync("claude", ["mcp", "remove", "freshbooks", "--scope", "user"], {
+      stdio: "ignore",
+    });
+  } catch {
+    // Not previously installed — nothing to remove.
+  }
+  execFileSync("claude", ["mcp", "add-json", "freshbooks", serverJson, "--scope", "user"], {
+    stdio: "ignore",
+  });
 }
