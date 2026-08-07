@@ -511,7 +511,12 @@ function upsertServerEntry(
       try {
         parsed = JSON.parse(raw);
       } catch (err) {
-        return { ok: false, path: configPath, reason: "invalid-json", detail: messageOf(err) };
+        return {
+          ok: false,
+          path: configPath,
+          reason: "invalid-json",
+          detail: parseFailureDetail(err),
+        };
       }
       if (!isJsonObject(parsed)) {
         return {
@@ -551,6 +556,39 @@ function upsertServerEntry(
 /** `err.message` and nothing else — never the object itself. */
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * V8 appends the failure position to its positional parse errors, and only ever
+ * at the very END of the message: `… in JSON at position 95 (line 1 column 96)`
+ * (Node 18 omits the parenthetical). Anchoring at `$` is what makes reading it
+ * back safe — the snippet-carrying form always ends in `is not valid JSON`, so a
+ * document that happens to contain the words "at position 42" can never be
+ * mistaken for V8's own suffix.
+ */
+const PARSE_POSITION_RE = / JSON at position (\d+)(?: \(line (\d+) column (\d+)\))?$/;
+
+/**
+ * Why a `JSON.parse` failure is DESCRIBED here rather than quoted.
+ *
+ * On Node >= 19 the token-type parse errors embed a ~20-character window of the
+ * DOCUMENT around the failure position — `Unexpected token 'u',
+ * ..."INT-EVER",undefined]"... is not valid JSON`. This file is shared with
+ * every other MCP connector the user has installed, and several of those keep
+ * API keys in their `env` block (or on their `args`), so forwarding that message
+ * would print a NEIGHBOUR's secret into the `--install --json` envelope on
+ * stdout and the human block on stderr — with none of the disclosure the spec
+ * requires before a config's contents are shown, and in flat contradiction of
+ * this project's rule that an error handed to an emitter is dropped, not
+ * printed. Nothing but the DIGITS of the position is read back out and the
+ * sentence around them is written here, so no byte of the file can travel.
+ */
+function parseFailureDetail(err: unknown): string {
+  const base = "the file's contents could not be parsed as JSON";
+  const at = PARSE_POSITION_RE.exec(messageOf(err));
+  if (!at) return base;
+  const where = at[2] ? `position ${at[1]}, line ${at[2]} column ${at[3]}` : `position ${at[1]}`;
+  return `${base} (syntax error at ${where})`;
 }
 
 /** Add the server to Claude Desktop's config, keeping every other entry. */

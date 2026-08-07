@@ -115,6 +115,40 @@ function foreignConfig(): string {
   );
 }
 
+/**
+ * A hand-edited config whose syntax error sits two characters after a
+ * neighbouring connector's key.
+ *
+ * The shape is not arbitrary: on Node >= 19 the token-type `JSON.parse` failures
+ * embed a ~20-character window of the DOCUMENT around the error position in
+ * their message, so the only way a foreign secret reaches a parse error is by
+ * sitting inside that window. The test proves the window really does catch the
+ * key with a live `JSON.parse` rather than asserting it, so the fixture cannot
+ * silently stop exercising the leak when V8's wording changes.
+ */
+function brokenConfigNextToSecret(): string {
+  return (
+    '{"mcpServers":{"other":{"command":"/opt/other/bin/other-server",' +
+    `"args":["--serve","--api-key","${FOREIGN_CANARY}",undefined]}}}`
+  );
+}
+
+/** A hand-edit that breaks a KEY — V8 reports a position and quotes no window. */
+function brokenConfigWithPosition(): string {
+  return `{"mcpServers":{"other":{"env":{"OTHER_API_KEY":"${FOREIGN_CANARY}",disabled:false}}}}`;
+}
+
+/** The sanitized detail an unparseable config earns, with no position to report. */
+const PARSE_DETAIL = "the file's contents could not be parsed as JSON";
+
+/**
+ * The same sentence plus a position rebuilt from V8's digits alone. Built with
+ * `RegExp` only because a literal would run past the line width.
+ */
+const PARSE_DETAIL_WITH_POSITION = new RegExp(
+  `^${PARSE_DETAIL} \\(syntax error at position \\d+(?:, line \\d+ column \\d+)?\\)$`,
+);
+
 /** Every JSON object a `--json` run printed, one per stdout line. */
 function envelopes(): any[] {
   return logs.map((line) => JSON.parse(line));
@@ -383,6 +417,68 @@ describe("--install desktop", () => {
     ]);
     expect(typeof env.symptom).toBe("string");
     expect(typeof env.fix).toBe("string");
+  });
+
+  it("never forwards the parse error's window of the file into the envelope", async () => {
+    const paths = fixture();
+    const broken = brokenConfigNextToSecret();
+    writeFileSync(paths.desktopConfigPath, broken);
+
+    // The leak is real, not theoretical: prove this exact input makes V8 quote
+    // eight contiguous characters of the neighbour's key, then assert that our
+    // envelope quotes none of it.
+    let raw = "";
+    try {
+      JSON.parse(broken);
+    } catch (err) {
+      raw = (err as Error).message;
+    }
+    expect(raw).toContain(FOREIGN_CANARY.slice(-8));
+
+    const code = await runHeadless(["--headless", "--install", "desktop", "--json"], paths);
+
+    expect(code).toBe(EXIT.INSTALL_FAILED);
+    expect(readFileSync(paths.desktopConfigPath, "utf8")).toBe(broken);
+    expect(envelope().message).toBe(PARSE_DETAIL);
+    expectNoSecretMaterial(allOutput(), FOREIGN_CANARY);
+  });
+
+  it("keeps the human channel clean too — the detail line is the same sentence", async () => {
+    const paths = fixture();
+    writeFileSync(paths.desktopConfigPath, brokenConfigNextToSecret());
+
+    const code = await runHeadless(["--headless", "--install", "desktop"], paths);
+
+    expect(code).toBe(EXIT.INSTALL_FAILED);
+    expect(stderr()).toContain(`detail: ${PARSE_DETAIL}`);
+    expect(stderr()).not.toContain("Unexpected token");
+    expectNoSecretMaterial(allOutput(), FOREIGN_CANARY);
+  });
+
+  it("keeps the parse position — the one part of the message that is not content", async () => {
+    const paths = fixture();
+    writeFileSync(paths.desktopConfigPath, brokenConfigWithPosition());
+
+    const code = await runHeadless(["--headless", "--install", "desktop", "--json"], paths);
+
+    expect(code).toBe(EXIT.INSTALL_FAILED);
+    expect(envelope().message).toMatch(PARSE_DETAIL_WITH_POSITION);
+    expectNoSecretMaterial(allOutput(), FOREIGN_CANARY);
+  });
+
+  it("does not mistake a position printed INSIDE the file for V8's own", async () => {
+    const paths = fixture();
+    // The window V8 quotes would carry this text. Only a position V8 itself
+    // appended (message-final) may be echoed, so this one is dropped whole.
+    writeFileSync(
+      paths.desktopConfigPath,
+      '{"mcpServers":{"other":{"args":["at position 42 (line 9 column 9)",undefined]}}}',
+    );
+
+    const code = await runHeadless(["--headless", "--install", "desktop", "--json"], paths);
+
+    expect(code).toBe(EXIT.INSTALL_FAILED);
+    expect(envelope().message).toBe(PARSE_DETAIL);
   });
 
   it.skipIf(process.platform === "win32")(
