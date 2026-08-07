@@ -359,6 +359,7 @@ export const SETUP_FLOW: SetupStep[] = [
       },
     ],
   },
+  // Portal form observed live 2026-08-06 (see plan Appendix A).
   {
     id: "developer-app",
     title: "Create your FreshBooks app connection",
@@ -368,12 +369,11 @@ export const SETUP_FLOW: SetupStep[] = [
       "Create the FreshBooks developer app and collect its Client ID and Client Secret.",
     humanScript: [
       "Sign in at freshbooks.com with your normal FreshBooks email — if FreshBooks emails you a code, that's their sign-in check, not part of this setup.",
-      "Open the Developer Portal: my.freshbooks.com/#/developer, click Create an App.",
+      "Open the Developer Portal: my.freshbooks.com/#/developer, click Create New App.",
       "Application name: My Claude Connection — the name doesn't matter.",
-      // PROBE-PENDING(2026-08-06): replace with observed portal fields when a portal session is available
-      "If the form asks for a description, any short sentence works — try: Lets me manage my own FreshBooks from Claude.",
-      // PROBE-PENDING(2026-08-06): replace with observed portal fields when a portal session is available
-      "If the form shows permission checkboxes, tick them all — they only govern what your own connection can reach.",
+      'The form asks for an Application Type — choose Private App ("Not listed in the app store").',
+      "The Description box is optional (140 characters max) — any short sentence works, try: Lets me manage my own FreshBooks from Claude.",
+      "Scopes control what your connection can reach. The form starts with user:profile:read already added; click Add Scope and add every scope that starts with user: — one at a time, 46 more. It is a few minutes of clicking, one time, and it is what lets every FreshBooks feature work from chat.",
       "Set the Redirect URI to exactly: https://localhost/callback — then read it back to yourself character by character.",
       "Any field these steps don't mention: leave it as-is.",
       "After saving, the page shows your Client ID and Client Secret. The Client Secret is hidden behind a Reveal (eye) toggle — click it before copying.",

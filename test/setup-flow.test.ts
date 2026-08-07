@@ -131,3 +131,28 @@ describe("migrate-legacy appliesIf (the legacy-tokens predicate)", () => {
     expect(seen).toEqual([]);
   });
 });
+
+// ── Task P: the live Developer Portal probe (2026-08-06) ────────────────────
+// The developer-app step's portal beats are OBSERVED, not drafted — the record
+// lives in the plan's Appendix A (probe date included). These pins are what
+// stops the observed form from silently reverting to the guessed one; they are
+// deliberately separate from the transcribed persona-string manifest above.
+describe("portal probe (observed 2026-08-06)", () => {
+  const text = () => allText(step("developer-app"));
+
+  it.each([
+    ["Create New App", "the real button label on the apps list page"],
+    ["Private App", "Application Type is REQUIRED — 'leave it as-is' cannot cover it"],
+    ["140 characters", "the Description box's observed limit"],
+    ["Add Scope", "scopes are added one at a time, not ticked as checkboxes"],
+    ["user:profile:read", "the one scope the form pre-adds"],
+  ])("developer-app carries %j (%s)", (phrase) => {
+    expect(text()).toContain(phrase);
+  });
+
+  // Regression lock on the corrected string. "Create an App" is NOT a substring
+  // of "Create New App", so plain containment is a sound negative assertion.
+  it("no longer tells the user to click the guessed 'Create an App'", () => {
+    expect(text()).not.toContain("Create an App");
+  });
+});
