@@ -83,9 +83,33 @@ FreshBooks-MCP/
 ├── SETUP.md                    # Beginner setup walkthrough — also a script Claude can follow
 ├── CLAUDE.md                   # This file
 ├── docs/
-│   └── claude-project-system-prompt.md  # Optional system prompt for Claude Projects users
+│   ├── claude-project-system-prompt.md  # Optional system prompt for Claude Projects users
+│   └── superpowers/            # Design history and staged decisions (see below)
+│       ├── specs/              # Designs and decision memos (incl. go/no-go, exposure assessments)
+│       ├── plans/              # Implementation plans executed from specs
+│       └── reviews/            # Plan/code review rounds
 └── LICENSE
 ```
+
+### Design history and staged decisions — read before starting forward work
+
+`docs/superpowers/` is this repo's record of *why* things are the way they are, and of work
+that is **staged but deliberately not started**. It is not generated and no test guards it,
+so it is easy to miss — check it before proposing architectural work, and add to it rather
+than re-deriving a decision someone already made.
+
+**Currently staged (open):**
+
+- **MCP `2026-07-28` protocol release** —
+  `docs/superpowers/specs/2026-08-09-mcp-2026-07-28-exposure.md`. This server is
+  *legacy-era* and **blocked upstream**: the Claude Agent SDK declares a peer dependency on
+  `@modelcontextprotocol/sdk ^1.29.0`, and MCP v2 is a different set of packages
+  (`@modelcontextprotocol/server`), so no version bump reaches it while
+  `createSdkMcpServer` builds the server. No client in use negotiates the new revision and
+  no sunset date has been announced, so there is no deadline pressure — but the decision to
+  wait is a *watched* one. That document carries the trigger list and the open release
+  decisions (notably a **Node 20 floor**, which would be breaking for consumers). Do not
+  start a migration without reading it.
 
 ## Development Workflow
 
