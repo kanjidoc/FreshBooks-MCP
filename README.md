@@ -50,6 +50,19 @@ If Claude says it can't read the web: on the repository page click the file name
 
 **[SETUP.md](SETUP.md) is the complete, beginner-friendly walkthrough.** It takes about 15 minutes, assumes no coding experience, and covers both Claude Desktop and Claude Code. Every step names who does it — you or Claude — how to check it worked, and what to do when it didn't. All you need is Claude installed on your computer and a regular FreshBooks account.
 
+> **Claude Code users: register the server at user level, not with a project
+> `.mcp.json`.** A project-scoped `.mcp.json` only works inside this folder,
+> hardcodes one machine's absolute path, and shows up as a duplicate (or a
+> broken server plus an approval prompt) for anyone else who opens the repo.
+> Register once at user scope instead, and FreshBooks is available in every
+> project:
+>
+> ```bash
+> claude mcp add-json freshbooks '{"type":"stdio","command":"node","args":["<project folder>/dist/index.js"]}' --scope user
+> ```
+>
+> This repo's own `.mcp.json` is gitignored for exactly this reason.
+
 Already set up, or just want to understand how it works? Read on.
 
 ## How It Works
